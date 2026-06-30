@@ -1,0 +1,49 @@
+# ProtoVault
+
+ProtoVault is a Windows-first desktop workbench for managing C++ data protocol assets.
+
+## Prerequisites
+
+- Node.js 22 or newer
+- pnpm 11
+- CMake 3.25 or newer
+- Visual Studio Build Tools with the C++ workload
+- LLVM/Clang with libclang (required from parser phase P3 onward)
+
+## Development
+
+```powershell
+pnpm install
+pnpm dev
+```
+
+Run the TypeScript and C++ checks independently:
+
+```powershell
+pnpm typecheck
+pnpm test
+pnpm test:e2e
+pnpm core:configure
+pnpm core:build
+pnpm core:test
+```
+
+In the desktop app, choose **加载示例项目** to scan
+`examples` with Clang AST. The navigator can switch between
+Header source previews, structs, enums, field tables, and diagnostics.
+Each scan writes an atomic directory snapshot to `.protocol/workspace.json`
+inside the opened workspace.
+
+The top navigator actions currently support the first structured editing loop:
+create a Header, create a `struct`, and append a field to the selected `struct`.
+After each write, ProtoVault rescans the workspace and refreshes the tree.
+
+## Theme compatibility
+
+The renderer consumes common Obsidian CSS variables such as
+`--background-primary`, `--background-secondary`, `--text-normal`,
+`--text-muted`, and `--interactive-accent`. Paste a local Obsidian theme into
+`apps/desktop/src/renderer/src/themes/user-obsidian-theme.css` to reuse its
+color tokens where compatible.
+
+The product definition and phased delivery gates are documented in `doc/初版设计思路.md` and `doc/Agent开发计划.md`.
