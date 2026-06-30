@@ -1,0 +1,16 @@
+{
+  "name": "protovault",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "dev": "pnpm --filter @protovault/contracts build && pnpm --filter @protovault/desktop dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @protovault/desktop build && pnpm --filter @protovault/desktop test:e2e",
+    "typecheck": "pnpm -r typecheck",
+    "core:configure": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 configure",
+    "core:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 build",
+    "core:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 test"
+  }
+}
