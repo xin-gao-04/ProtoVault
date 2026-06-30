@@ -1,0 +1,8 @@
+/*
+  Paste an Obsidian theme CSS file here to reuse its CSS variables, or point
+  this import to an existing local Obsidian theme file.
+  ProtoVault marks <body> with theme-dark and consumes common Obsidian tokens
+  such as --background-primary, --background-secondary, --text-normal,
+  --text-muted, --interactive-accent and --background-modifier-border.
+*/
+@import url("file:///D:/my-documents/.obsidian/themes/Tokyo%20Night/theme.css");

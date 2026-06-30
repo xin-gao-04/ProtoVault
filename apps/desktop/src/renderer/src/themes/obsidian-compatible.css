@@ -1,0 +1,34 @@
+body.theme-dark,
+:root {
+  --font-interface: Inter, "Segoe UI", sans-serif;
+  --font-monospace: "Cascadia Code", monospace;
+
+  --background-primary: var(--bg, #15171c);
+  --background-primary-alt: var(--bg_dark, #111318);
+  --background-secondary: var(--bg_dark2, #191b21);
+  --background-secondary-alt: var(--bg_highlight_dark, #171a20);
+  --background-modifier-border: var(--bg_highlight, #292c34);
+  --background-modifier-hover: var(--bg_highlight_dark, #242832);
+  --background-modifier-active-hover: color-mix(in srgb, var(--red1, #6e2824) 55%, var(--background-primary));
+  --background-modifier-form-field: var(--bg_highlight_dark, #20242d);
+
+  --text-normal: var(--fg, #e9e7e1);
+  --text-muted: var(--fg_dark, #9298a7);
+  --text-faint: var(--comment, #737b8a);
+  --text-on-accent: #ffffff;
+  --text-accent: var(--cyan, #d4a64f);
+  --text-accent-hover: var(--blue, #f0c36a);
+
+  --interactive-normal: var(--bg_highlight_dark, #22252c);
+  --interactive-hover: var(--bg_highlight, #262a34);
+  --interactive-accent: var(--cyan, #d4a64f);
+  --interactive-accent-hover: var(--blue, #f0c36a);
+
+  --color-red: var(--red, #dd625d);
+  --color-green: var(--green, #6fbe8d);
+  --color-yellow: var(--yellow, #e4bc70);
+
+  --radius-s: 5px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+}
