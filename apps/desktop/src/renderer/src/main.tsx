@@ -1,6 +1,18 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import type { WorkspaceEnumValueView, WorkspaceFieldView, WorkspaceFileView, WorkspaceMemoryLayoutView, WorkspaceScanProgress, WorkspaceTypeView, WorkspaceView } from "../../shared/workspace";
+import type {
+  GeneratedDocumentReport,
+  ProtocolSnapshotSummary,
+  SemanticDiffReport,
+  WorkspaceEnumValueView,
+  WorkspaceFieldView,
+  WorkspaceFileView,
+  WorkspaceLintReport,
+  WorkspaceMemoryLayoutView,
+  WorkspaceScanProgress,
+  WorkspaceTypeView,
+  WorkspaceView
+} from "../../shared/workspace";
 import "./styles.css";
 
 type ProtocolTreeNode =
@@ -15,6 +27,11 @@ type FieldTypeOption = { group: "workspace" | "base"; value: string; label: stri
 type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; savedFieldName: string; savedFieldType: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
+type WorkspaceReportState =
+  | { kind: "lint"; report: WorkspaceLintReport }
+  | { kind: "document"; report: GeneratedDocumentReport }
+  | { kind: "snapshot"; report: ProtocolSnapshotSummary }
+  | { kind: "diff"; report: SemanticDiffReport };
 type ContextMenuState = {
   x: number;
   y: number;
@@ -77,6 +94,7 @@ function App(): React.JSX.Element {
   const [previewTab, setPreviewTab] = React.useState<WorkspaceTab | null>(null);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const [contextMenu, setContextMenu] = React.useState<ContextMenuState | null>(null);
+  const [workspaceReport, setWorkspaceReport] = React.useState<WorkspaceReportState | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const selectedField = selectedType?.fields.find((field) => field.id === selectedMemberId);
@@ -473,12 +491,51 @@ function App(): React.JSX.Element {
       const result = await window.protoVault.updateHeaderContent({
         workspaceRoot: workspace.rootPath,
         headerPath: file.path,
-        content
+        content,
+        expectedHash: file.contentHash
       });
       applyWorkspaceResult(result, { selectFileRelativePath: file.relativePath });
       setUiNotice(result.diagnostics.length > 0
         ? "Header 已保存，但仍存在解析问题；可继续在源码区修复"
         : "Header 源码已保存并重新扫描");
+    });
+  }
+
+  async function runLintReport(): Promise<void> {
+    if (!workspace) return;
+    await runWorkspaceAction(async () => {
+      const report = await window.protoVault.lint(workspace.rootPath);
+      setWorkspaceReport({ kind: "lint", report });
+      setUiNotice(`Lint 完成：${report.issueCount} 个问题`);
+    });
+  }
+
+  async function generateDocumentReport(): Promise<void> {
+    if (!workspace) return;
+    await runWorkspaceAction(async () => {
+      const report = await window.protoVault.generateDocument({ workspaceRoot: workspace.rootPath });
+      setWorkspaceReport({ kind: "document", report });
+      setUiNotice(`协议文档已生成：${report.relativePath}`);
+    });
+  }
+
+  async function createSnapshotReport(): Promise<void> {
+    if (!workspace) return;
+    await runWorkspaceAction(async () => {
+      const report = await window.protoVault.createSnapshot({ workspaceRoot: workspace.rootPath, label: "manual" });
+      setWorkspaceReport({ kind: "snapshot", report });
+      setUiNotice(`协议快照已创建：${report.relativePath}`);
+    });
+  }
+
+  async function diffSnapshotReport(): Promise<void> {
+    if (!workspace) return;
+    await runWorkspaceAction(async () => {
+      const report = await window.protoVault.diff({ workspaceRoot: workspace.rootPath });
+      setWorkspaceReport({ kind: "diff", report });
+      setUiNotice(report.baseSnapshot
+        ? `语义 Diff 完成：${report.changeCount} 个变化`
+        : "已创建首个当前快照；暂无历史快照可对比");
     });
   }
 
@@ -1203,6 +1260,12 @@ function App(): React.JSX.Element {
             <small>{workspace ? `${workspace.name} · ${workspace.files.length} Headers · ${workspace.types.length} Types` : "尚未打开协议工作区"}</small>
           </div>
           <div className="toolbar-actions">
+            {workspace && <>
+              <button className="inline-action" disabled={loading} onClick={() => void runLintReport()}>Lint</button>
+              <button className="inline-action" disabled={loading} onClick={() => void generateDocumentReport()}>文档</button>
+              <button className="inline-action" disabled={loading} onClick={() => void createSnapshotReport()}>快照</button>
+              <button className="inline-action" disabled={loading} onClick={() => void diffSnapshotReport()}>Diff</button>
+            </>}
             {uiNotice && <small className="notice" role="status">{uiNotice}</small>}
             <small className="health">{health}</small>
           </div>
@@ -1215,6 +1278,7 @@ function App(): React.JSX.Element {
           <div className="flow"><span>扫描</span><b>→</b><span>IR</span><b>→</b><span>布局</span><b>→</b><span>生成</span><b>→</b><span>检查</span></div>
         </article>}
         {workspace && <TabStrip tabs={tabs} previewTab={previewTab} activeTabId={activeTabId} dirtyTabIds={dirtyTabIds} onActivate={activateTab} onClose={closeTab} />}
+        {workspace && workspaceReport && <WorkspaceReportPanel report={workspaceReport} workspaceRoot={workspace.rootPath} onClose={() => setWorkspaceReport(null)} />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -2266,6 +2330,82 @@ function ProtocolEditor({
     </tbody></table>}
     </div>
   </div>;
+}
+
+function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
+  report: WorkspaceReportState;
+  workspaceRoot: string;
+  onClose(): void;
+}): React.JSX.Element {
+  return <section className="report-panel" aria-label="协议报告">
+    <div className="report-panel-title">
+      <div>
+        <p className="eyebrow">REPORT</p>
+        <h2>{report.kind === "lint" ? "协议 Lint"
+          : report.kind === "document" ? "协议文档"
+            : report.kind === "snapshot" ? "协议快照"
+              : "语义 Diff"}</h2>
+      </div>
+      <button className="inline-action" onClick={onClose}>关闭报告</button>
+    </div>
+
+    {report.kind === "lint" && <>
+      <div className="report-summary">
+        <span>总计 {report.report.issueCount}</span>
+        <span>错误 {report.report.errorCount}</span>
+        <span>警告 {report.report.warningCount}</span>
+        <span>建议 {report.report.suggestionCount}</span>
+      </div>
+      {report.report.issues.length === 0
+        ? <p className="report-empty">没有发现 Lint 问题。</p>
+        : <div className="report-list">
+            {report.report.issues.slice(0, 80).map((issue) => <article className={`report-item ${issue.severity}`} key={issue.id}>
+              <strong>{issue.severity.toUpperCase()} · {issue.ruleId}</strong>
+              <p>{issue.message}</p>
+              {issue.file && <small>{relativeDisplayPath(workspaceRoot, issue.file)}{issue.line ? `:${issue.line}` : ""}</small>}
+            </article>)}
+          </div>}
+    </>}
+
+    {report.kind === "document" && <>
+      <p>Markdown 协议文档已生成：</p>
+      <code>{report.report.relativePath}</code>
+      <pre className="report-preview">{report.report.content.slice(0, 4000)}</pre>
+    </>}
+
+    {report.kind === "snapshot" && <>
+      <div className="report-summary">
+        <span>{report.report.typeCount} Types</span>
+        <span>{report.report.fileCount} Headers</span>
+      </div>
+      <p>快照已写入：</p>
+      <code>{report.report.relativePath}</code>
+    </>}
+
+    {report.kind === "diff" && <>
+      <div className="report-summary">
+        <span>变化 {report.report.changeCount}</span>
+        <span>Breaking {report.report.breakingCount}</span>
+        <span>Compatible {report.report.compatibleCount}</span>
+        <span>Review {report.report.reviewCount}</span>
+      </div>
+      <p>{report.report.baseSnapshot ? `基线：${report.report.baseSnapshot.relativePath}` : "暂无历史基线；已创建当前快照。"}</p>
+      {report.report.changes.length === 0
+        ? <p className="report-empty">没有语义变化。</p>
+        : <div className="report-list">
+            {report.report.changes.map((change) => <article className={`report-item ${change.severity}`} key={change.id}>
+              <strong>{change.severity.toUpperCase()} · {change.kind}</strong>
+              <p>{change.message}</p>
+            </article>)}
+          </div>}
+    </>}
+  </section>;
+}
+
+function relativeDisplayPath(root: string, file: string): string {
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/, "");
+  const normalizedFile = file.replaceAll("\\", "/");
+  return normalizedFile.startsWith(`${normalizedRoot}/`) ? normalizedFile.slice(normalizedRoot.length + 1) : normalizedFile;
 }
 
 function SourceViewer({ file, loading, onSaveContent, onEditHeader, onOpenContextMenu }: {

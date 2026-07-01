@@ -5,16 +5,16 @@
 | 阶段 | 状态 | 交付物 | 验收门 |
 |---|---|---|---|
 | P0 工程初始化 | 已完成 | pnpm monorepo、Electron/React、CMake、CI | 桌面端与 C++ 核心可构建、测试可运行 |
-| P1 领域模型与契约 | 进行中：TS 契约完成 | IR Schema、版本、错误与 API 请求模型 | TS/C++ Schema 往返与校验测试通过 |
-| P2 工作区管理 | 基础纵切完成 | 任意目录打开、多级 Header/空目录发现、`.protocol/workspace.json` 目录记录 | `examples` 父目录可打开；监听和索引待实现 |
-| P3 Header 解析 | 基础纵切完成 | Clang AST 扫描、类型/字段/枚举、include 归属修正与诊断 | 示例 fixture 通过；完整支持边界待扩展 |
-| P4 ABI 布局 | 待开始 | size、offset、alignment、padding | 与编译器基准一致 |
+| P1 领域模型与契约 | 基础完成 | IR Schema、版本、错误与 API 请求模型 | TS 契约与桌面接口通过；C++ Schema 往返仍待服务深化 |
+| P2 工作区管理 | 基础完成 | 任意目录打开、多级 Header/空目录发现、`.protocol/workspace.json` 目录记录 | `examples` 父目录可打开；文件监听仍待深化 |
+| P3 Header 解析 | 基础完成 | Clang AST 扫描、类型/字段/枚举、include 归属修正与诊断 | 示例 fixture 通过；复杂宏/模板仍排除 |
+| P4 ABI 布局 | 已完成 MVP | size、offset、alignment、padding、pack、enum underlying type | 与编译器 `sizeof/offsetof` 基准一致 |
 | P5 工作台 UI | 基础纵切完成 | Obsidian 风格合并树、字段、源码、属性、问题面板、三栏拖拽和主题变量兼容 | 示例工作区浏览定位 E2E 已通过 |
 | P6 编辑与生成 | 第一纵切进行中 | 新建 Header、创建 struct、追加字段、写后重扫 | 基础写入测试通过；确定性生成器待实现 |
-| P7 双向同步 | 待开始 | 哈希基线、重解析、冲突面板 | 不静默覆盖修改 |
-| P8 元数据与文档 | 待开始 | 元数据持久化、Markdown 生成 | 重扫不丢元数据 |
-| P9 协议 Lint | 待开始 | 规则引擎和定位 | 正反 fixture 通过 |
-| P10 语义 Diff | 待开始 | 快照、变化与兼容性 | 变化分类准确 |
+| P7 双向同步 | MVP 纵切完成 | Header 内容 hash、保存前冲突保护、保存后重扫 | 源码编辑不会静默覆盖外部修改；冲突面板仍待完善 |
+| P8 元数据与文档 | MVP 纵切完成 | 元数据持久化、Header 注释同步、Markdown 文档生成 | 重扫不丢元数据；文档写入 `.protocol/reports/` |
+| P9 协议 Lint | MVP 纵切完成 | 规则引擎、严重等级、源码定位 | 指针/运行期类型、缺失语义、布局问题、枚举问题有测试 |
+| P10 语义 Diff | MVP 纵切完成 | 快照、字段/枚举/布局变化、兼容性分级 | fixture 可识别新增、类型变化、offset/size 等变化 |
 | P11 集成发布 | 待开始 | E2E、安装包和用户说明 | 核心闭环通过 |
 
 ## 当前技术约束

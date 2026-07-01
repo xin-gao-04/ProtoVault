@@ -8,6 +8,7 @@ import type { WorkspaceTypeView } from "../shared/workspace";
 import {
   addEnumValue,
   addField,
+  createProtocolSnapshot,
   createEnum,
   createHeader,
   createStruct,
@@ -16,6 +17,9 @@ import {
   deleteField,
   deleteHeader,
   deleteStruct,
+  diffProtocolSnapshot,
+  generateProtocolDocument,
+  lintWorkspace,
   renameEnum,
   renameHeader,
   renameStruct,
@@ -608,6 +612,101 @@ enum class PacketState : std::uint8_t {
         "源码字段注释",
         "源码枚举注释",
         "源码枚举项注释"
+      ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("protects source saves with content hash baselines", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-hash-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/hash.hpp" });
+      const workspace = await scanWorkspace(root);
+      const header = workspace.files.find((file) => file.relativePath === "headers/hash.hpp")!;
+      await writeFile(header.path, `${header.content}\n// external edit\n`, "utf8");
+
+      await expect(updateHeaderContent({
+        workspaceRoot: root,
+        headerPath: header.path,
+        content: `${header.content}\n// app edit\n`,
+        expectedHash: header.contentHash
+      })).rejects.toThrow("外部修改");
+      expect(await readFile(header.path, "utf8")).toContain("// external edit");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("generates lint issues and markdown protocol documentation", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-report-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "bad.hpp"), `#pragma once
+#include <cstdint>
+namespace demo {
+struct Packet {
+  int legacyId;
+  std::uint32_t* pointerField;
+};
+enum class PacketKind {
+  Unknown = 0,
+};
+}
+`, "utf8");
+
+      const lint = await lintWorkspace(root);
+      expect(lint.issueCount).toBeGreaterThan(0);
+      expect(lint.issues.map((item) => item.ruleId)).toEqual(expect.arrayContaining([
+        "type.unsupported-runtime",
+        "metadata.field-note-missing"
+      ]));
+
+      const document = await generateProtocolDocument({ workspaceRoot: root });
+      expect(document.relativePath).toBe(".protocol/reports/protocol-documentation.md");
+      expect(document.content).toContain("# ");
+      expect(document.content).toContain("demo::Packet");
+      expect(await readFile(document.path, "utf8")).toBe(document.content);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("creates snapshots and reports semantic diffs", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-diff-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/protocol.hpp" });
+      let workspace = await createStruct({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "protocol.hpp"),
+        structName: "Packet"
+      });
+      const snapshot = await createProtocolSnapshot({ workspaceRoot: root, label: "baseline" });
+      expect(snapshot.relativePath).toMatch(/^\.protocol\/snapshots\/.*baseline\.json$/);
+
+      let packet = workspace.types.find((type) => type.qualifiedName === "protovault::Packet")!;
+      workspace = await addField({
+        workspaceRoot: root,
+        typeId: packet.id,
+        fieldType: "std::uint16_t",
+        fieldName: "flags"
+      });
+      packet = workspace.types.find((type) => type.qualifiedName === "protovault::Packet")!;
+      await updateField({
+        workspaceRoot: root,
+        typeId: packet.id,
+        fieldId: packet.fields.find((field) => field.name === "id")!.id,
+        fieldType: "std::uint64_t",
+        fieldName: "id"
+      });
+
+      const diff = await diffProtocolSnapshot({ workspaceRoot: root, baseSnapshotPath: snapshot.path });
+      expect(diff.baseSnapshot?.id).toBe(snapshot.id);
+      expect(diff.changeCount).toBeGreaterThan(0);
+      expect(diff.breakingCount).toBeGreaterThan(0);
+      expect(diff.changes.map((change) => change.kind)).toEqual(expect.arrayContaining([
+        "field-added",
+        "field-type-changed"
       ]));
     } finally {
       await rm(root, { recursive: true, force: true });

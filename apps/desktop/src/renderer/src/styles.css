@@ -160,6 +160,21 @@ tr.dirty-row { background: color-mix(in srgb, var(--interactive-accent) 8%, tran
 .field-type-group button:hover { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
 .field-type-group button span { overflow: hidden; font: 12px var(--font-monospace); text-overflow: ellipsis; white-space: nowrap; }
 .field-type-group button small { overflow: hidden; color: var(--text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.report-panel { margin: 12px 28px 0; padding: 16px 18px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: color-mix(in srgb, var(--background-secondary) 84%, transparent); box-shadow: 0 12px 36px #0000002b; }
+.report-panel-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.report-panel-title h2 { margin: 2px 0 0; font: 500 24px Georgia, serif; }
+.report-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.report-summary span { padding: 5px 9px; border: 1px solid var(--background-modifier-border); border-radius: 999px; color: var(--text-muted); font-size: 11px; }
+.report-list { display: grid; max-height: 280px; overflow: auto; gap: 8px; padding-right: 4px; }
+.report-item { padding: 10px 12px; border: 1px solid var(--background-modifier-border); border-left-width: 3px; border-radius: var(--radius-m); background: color-mix(in srgb, var(--background-primary) 72%, transparent); }
+.report-item strong { color: var(--text-muted); font-size: 11px; letter-spacing: .08em; }
+.report-item p { margin: 5px 0; color: var(--text-normal); line-height: 1.5; }
+.report-item small { color: var(--text-faint); font-family: var(--font-monospace); }
+.report-item.error, .report-item.breaking { border-left-color: var(--color-red); }
+.report-item.warning, .report-item.review { border-left-color: var(--text-accent-hover); }
+.report-item.suggestion, .report-item.compatible { border-left-color: #73c590; }
+.report-empty { color: var(--text-muted); }
+.report-preview { max-height: 360px; overflow: auto; margin-top: 12px; padding: 14px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary); color: var(--text-muted); white-space: pre-wrap; }
 code { color: #e4bc70; font-family: "Cascadia Code", monospace; }
 .source-editor { width: 100%; min-height: 520px; resize: vertical; overflow: auto; margin: 0; padding: 24px; border: 1px solid #292c34; border-radius: 6px; background: #111319e6; color: #d9dce3; font: 12px/1.65 "Cascadia Code", Consolas, monospace; white-space: pre; tab-size: 2; outline: none; }
 .source-editor:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent); }

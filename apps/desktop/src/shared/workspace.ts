@@ -58,6 +58,7 @@ export interface WorkspaceFileView {
   relativePath: string;
   includes: string[];
   content: string;
+  contentHash: string;
 }
 
 export interface WorkspaceDirectoryView {
@@ -116,6 +117,7 @@ export interface UpdateHeaderContentInput {
   workspaceRoot: string;
   headerPath: string;
   content: string;
+  expectedHash?: string;
 }
 
 export interface RenameStructInput {
@@ -186,4 +188,88 @@ export interface UpdateNoteInput {
   workspaceRoot: string;
   targetId: string;
   note: string;
+}
+
+export interface WorkspaceLintIssue {
+  id: string;
+  ruleId: string;
+  severity: "error" | "warning" | "suggestion";
+  message: string;
+  targetId?: string;
+  file?: string;
+  line?: number;
+  column?: number;
+}
+
+export interface WorkspaceLintReport {
+  generatedAt: string;
+  issueCount: number;
+  errorCount: number;
+  warningCount: number;
+  suggestionCount: number;
+  issues: WorkspaceLintIssue[];
+}
+
+export interface GenerateDocumentInput {
+  workspaceRoot: string;
+}
+
+export interface GeneratedDocumentReport {
+  generatedAt: string;
+  path: string;
+  relativePath: string;
+  content: string;
+}
+
+export interface CreateSnapshotInput {
+  workspaceRoot: string;
+  label?: string;
+}
+
+export interface ProtocolSnapshotSummary {
+  id: string;
+  label?: string;
+  createdAt: string;
+  path: string;
+  relativePath: string;
+  typeCount: number;
+  fileCount: number;
+}
+
+export type SemanticChangeKind =
+  | "type-added"
+  | "type-removed"
+  | "field-added"
+  | "field-removed"
+  | "field-type-changed"
+  | "field-offset-changed"
+  | "enum-value-added"
+  | "enum-value-removed"
+  | "enum-value-number-changed"
+  | "type-size-changed";
+
+export interface SemanticChange {
+  id: string;
+  kind: SemanticChangeKind;
+  severity: "breaking" | "compatible" | "review";
+  message: string;
+  targetId?: string;
+  before?: string | number;
+  after?: string | number;
+}
+
+export interface DiffProtocolInput {
+  workspaceRoot: string;
+  baseSnapshotPath?: string;
+}
+
+export interface SemanticDiffReport {
+  generatedAt: string;
+  baseSnapshot?: ProtocolSnapshotSummary;
+  currentSnapshot: ProtocolSnapshotSummary;
+  changeCount: number;
+  breakingCount: number;
+  compatibleCount: number;
+  reviewCount: number;
+  changes: SemanticChange[];
 }

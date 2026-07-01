@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AddFieldInput,
   AddEnumValueInput,
+  CreateSnapshotInput,
   CreateEnumInput,
   CreateHeaderInput,
   CreateStructInput,
@@ -10,14 +11,20 @@ import type {
   DeleteFieldInput,
   DeleteHeaderInput,
   DeleteStructInput,
+  DiffProtocolInput,
+  GenerateDocumentInput,
+  GeneratedDocumentReport,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
+  ProtocolSnapshotSummary,
+  SemanticDiffReport,
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateHeaderContentInput,
   UpdateNoteInput,
   WorkspaceScanProgress,
+  WorkspaceLintReport,
   WorkspaceView
 } from "../shared/workspace";
 
@@ -44,6 +51,10 @@ export interface ProtoVaultDesktopApi {
   updateEnumValue(input: UpdateEnumValueInput): Promise<WorkspaceView>;
   deleteEnumValue(input: DeleteEnumValueInput): Promise<WorkspaceView>;
   updateNote(input: UpdateNoteInput): Promise<WorkspaceView>;
+  lint(workspaceRoot: string): Promise<WorkspaceLintReport>;
+  generateDocument(input: GenerateDocumentInput): Promise<GeneratedDocumentReport>;
+  createSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary>;
+  diff(input: DiffProtocolInput): Promise<SemanticDiffReport>;
 }
 
 contextBridge.exposeInMainWorld("protoVault", {
@@ -72,5 +83,9 @@ contextBridge.exposeInMainWorld("protoVault", {
   addEnumValue: (input) => ipcRenderer.invoke("protocol:add-enum-value", input),
   updateEnumValue: (input) => ipcRenderer.invoke("protocol:update-enum-value", input),
   deleteEnumValue: (input) => ipcRenderer.invoke("protocol:delete-enum-value", input),
-  updateNote: (input) => ipcRenderer.invoke("protocol:update-note", input)
+  updateNote: (input) => ipcRenderer.invoke("protocol:update-note", input),
+  lint: (workspaceRoot) => ipcRenderer.invoke("protocol:lint", workspaceRoot),
+  generateDocument: (input) => ipcRenderer.invoke("protocol:generate-document", input),
+  createSnapshot: (input) => ipcRenderer.invoke("protocol:create-snapshot", input),
+  diff: (input) => ipcRenderer.invoke("protocol:diff", input)
 } satisfies ProtoVaultDesktopApi);

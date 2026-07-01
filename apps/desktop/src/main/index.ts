@@ -5,6 +5,7 @@ import { createServiceHealth } from "../shared/service";
 import type {
   AddFieldInput,
   AddEnumValueInput,
+  CreateSnapshotInput,
   CreateEnumInput,
   CreateHeaderInput,
   CreateStructInput,
@@ -13,6 +14,8 @@ import type {
   DeleteFieldInput,
   DeleteHeaderInput,
   DeleteStructInput,
+  DiffProtocolInput,
+  GenerateDocumentInput,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
@@ -25,6 +28,7 @@ import type {
 import {
   addEnumValue,
   addField,
+  createProtocolSnapshot,
   createEnum,
   createHeader,
   createStruct,
@@ -33,6 +37,9 @@ import {
   deleteField,
   deleteHeader,
   deleteStruct,
+  diffProtocolSnapshot,
+  generateProtocolDocument,
+  lintWorkspace,
   renameEnum,
   renameHeader,
   renameStruct,
@@ -131,6 +138,10 @@ app.whenReady().then(() => {
   ipcMain.handle("protocol:update-enum-value", (_event, input: UpdateEnumValueInput) => updateEnumValue(input));
   ipcMain.handle("protocol:delete-enum-value", (_event, input: DeleteEnumValueInput) => deleteEnumValue(input));
   ipcMain.handle("protocol:update-note", (_event, input: UpdateNoteInput) => updateNote(input));
+  ipcMain.handle("protocol:lint", (_event, workspaceRoot: string) => lintWorkspace(workspaceRoot));
+  ipcMain.handle("protocol:generate-document", (_event, input: GenerateDocumentInput) => generateProtocolDocument(input));
+  ipcMain.handle("protocol:create-snapshot", (_event, input: CreateSnapshotInput) => createProtocolSnapshot(input));
+  ipcMain.handle("protocol:diff", (_event, input: DiffProtocolInput) => diffProtocolSnapshot(input));
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

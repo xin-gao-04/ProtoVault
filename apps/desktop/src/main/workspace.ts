@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { cpus } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type {
   AddFieldInput,
   AddEnumValueInput,
+  CreateSnapshotInput,
   CreateEnumInput,
   CreateHeaderInput,
   CreateStructInput,
@@ -14,9 +16,15 @@ import type {
   DeleteHeaderInput,
   DeleteFieldInput,
   DeleteStructInput,
+  DiffProtocolInput,
+  GenerateDocumentInput,
+  GeneratedDocumentReport,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
+  SemanticChange,
+  SemanticDiffReport,
+  ProtocolSnapshotSummary,
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateHeaderContentInput,
@@ -25,6 +33,8 @@ import type {
   WorkspaceEnumValueView,
   WorkspaceFieldLayoutView,
   WorkspaceFileView,
+  WorkspaceLintIssue,
+  WorkspaceLintReport,
   WorkspaceMemoryLayoutView,
   WorkspaceScanProgress,
   WorkspaceTypeView,
@@ -151,6 +161,10 @@ async function findClang(): Promise<string> {
 
 function stableId(kind: string, qualifiedName: string): string {
   return `${kind}:${createHash("sha1").update(qualifiedName).digest("hex").slice(0, 16)}`;
+}
+
+function contentHash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 function resolveSourcePath(file: string | undefined, workspaceRoot: string, fallback: string): string {
@@ -324,6 +338,26 @@ async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<Record<st
 
 function emitProgress(options: ScanWorkspaceOptions | undefined, progress: WorkspaceScanProgress): void {
   options?.onProgress?.(progress);
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }));
+  return results;
+}
+
+function clangParseConcurrency(): number {
+  const configured = Number(process.env.PROTOVAULT_SCAN_CONCURRENCY);
+  if (Number.isInteger(configured) && configured > 0) return Math.min(configured, 8);
+  return Math.max(1, Math.min(4, cpus().length));
 }
 
 function applyMemoryLayouts(types: WorkspaceTypeView[]): WorkspaceTypeView[] {
@@ -582,13 +616,12 @@ function detectEnumUnderlyingType(content: string, lineNumber: number, enumName:
   return match?.[1]?.trim();
 }
 
-async function scanHeader(clang: string, header: string, root: string, includeRoots: string[]): Promise<WorkspaceTypeView[]> {
+async function scanHeader(clang: string, header: string, root: string, includeRoots: string[], content: string): Promise<WorkspaceTypeView[]> {
   const includeArgs = includeRoots.flatMap((includeRoot) => ["-I", includeRoot]);
   const { stdout } = await execFileAsync(clang, [
     "-x", "c++-header", "-std=c++20", ...includeArgs,
     "-Xclang", "-ast-dump=json", "-fsyntax-only", header
   ], { cwd: root, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-  const content = await fs.readFile(header, "utf8");
   return applyHeaderLayoutHints(collectTypes(JSON.parse(stdout) as AstNode, root, header), content);
 }
 
@@ -614,7 +647,7 @@ async function validateHeaderContent(root: string, header: string, content: stri
 async function readFileView(path: string, root: string): Promise<WorkspaceFileView> {
   const content = await fs.readFile(path, "utf8");
   const includes = [...content.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm)].map((match) => match[1]);
-  return { path, relativePath: relative(root, path).replaceAll("\\", "/"), includes, content };
+  return { path, relativePath: relative(root, path).replaceAll("\\", "/"), includes, content, contentHash: contentHash(content) };
 }
 
 function readDirectoryView(path: string, root: string): WorkspaceDirectoryView {
@@ -643,6 +676,7 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
     })),
     headers: workspace.files.map((file) => ({
       path: file.relativePath,
+      contentHash: file.contentHash,
       includes: file.includes
     })),
     types: workspace.types.map((type) => ({
@@ -681,6 +715,7 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
       file: header
     });
   }
+  const contentByHeader = new Map(files.map((file) => [file.path, file.content]));
   const diagnostics: WorkspaceView["diagnostics"] = [];
   let scanner = "Clang AST";
   let types: WorkspaceTypeView[] = [];
@@ -692,25 +727,26 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
       const clang = await findClang();
       const includeRoots = [root, ...discovery.directories];
       scanner = `Clang AST · ${clang}`;
-      const batches: WorkspaceTypeView[][] = [];
       emitProgress(options, { phase: "parse", message: "正在启动 Clang AST 扫描…", current: 0, total: headers.length });
-      for (const [index, header] of headers.entries()) {
+      let parsedHeaders = 0;
+      const batches = await mapWithConcurrency(headers, clangParseConcurrency(), async (header) => {
         try {
-          batches.push(await scanHeader(clang, header, root, includeRoots));
+          return await scanHeader(clang, header, root, includeRoots, contentByHeader.get(header) ?? await fs.readFile(header, "utf8"));
         }
         catch (error) {
           diagnostics.push({ severity: "error", file: header, message: error instanceof Error ? error.message : String(error) });
-          batches.push([]);
+          return [];
         } finally {
+          parsedHeaders += 1;
           emitProgress(options, {
             phase: "parse",
             message: `解析 Header：${relative(root, header).replaceAll("\\", "/")}`,
-            current: index + 1,
+            current: parsedHeaders,
             total: headers.length,
             file: header
           });
         }
-      }
+      });
       const deduplicated = new Map(batches.flat().map((type) => [type.id, type]));
       types = applyMemoryLayouts([...deduplicated.values()].sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName)));
     } catch (error) {
@@ -739,6 +775,397 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
 
 export function sampleWorkspacePath(appPath: string): string {
   return resolve(appPath, "..", "..", "examples");
+}
+
+function reportRelativePath(root: string, target: string): string {
+  return relative(root, target).replaceAll("\\", "/");
+}
+
+function issue(
+  ruleId: string,
+  severity: WorkspaceLintIssue["severity"],
+  message: string,
+  target?: { id?: string; file?: string; location?: { file: string; line: number; column: number } }
+): WorkspaceLintIssue {
+  const file = target?.location?.file ?? target?.file;
+  return {
+    id: stableId("lint", `${ruleId}:${target?.id ?? file ?? message}:${message}`),
+    ruleId,
+    severity,
+    message,
+    targetId: target?.id,
+    file,
+    line: target?.location?.line,
+    column: target?.location?.column
+  };
+}
+
+export async function lintWorkspace(rootPath: string): Promise<WorkspaceLintReport> {
+  const workspace = await scanWorkspace(rootPath);
+  return lintWorkspaceView(workspace);
+}
+
+function lintWorkspaceView(workspace: WorkspaceView): WorkspaceLintReport {
+  const issues: WorkspaceLintIssue[] = [];
+  const normalizedBaseTypes = new Set(Object.keys(BASE_TYPE_SIZE));
+
+  for (const diagnostic of workspace.diagnostics) {
+    issues.push(issue("scan.diagnostic", diagnostic.severity, diagnostic.message, { file: diagnostic.file }));
+  }
+
+  for (const type of workspace.types) {
+    if (!type.note) {
+      issues.push(issue("metadata.type-note-missing", "suggestion", `${type.qualifiedName} 缺少类型语义注释。`, { id: type.id, file: type.file, location: type.location }));
+    }
+    if (type.kind === "enum") {
+      if (type.values.length === 0) {
+        issues.push(issue("enum.empty", "warning", `${type.qualifiedName} 没有枚举项。`, { id: type.id, file: type.file, location: type.location }));
+      }
+      if (!type.underlyingType || !normalizedBaseTypes.has(type.underlyingType)) {
+        issues.push(issue("enum.underlying-type", "warning", `${type.qualifiedName} 未声明 MVP 支持的定宽底层类型。`, { id: type.id, file: type.file, location: type.location }));
+      }
+      const seenValues = new Map<number, WorkspaceEnumValueView>();
+      for (const value of type.values) {
+        if (!value.note) {
+          issues.push(issue("metadata.enum-value-note-missing", "suggestion", `${type.qualifiedName}::${value.name} 缺少枚举项注释。`, { id: value.id, file: type.file, location: value.location }));
+        }
+        if (value.value !== undefined) {
+          const existing = seenValues.get(value.value);
+          if (existing) {
+            issues.push(issue("enum.duplicate-value", "warning", `${type.qualifiedName} 中 ${existing.name} 与 ${value.name} 使用相同枚举值 ${value.value}。`, { id: value.id, file: type.file, location: value.location }));
+          }
+          seenValues.set(value.value, value);
+        }
+      }
+      continue;
+    }
+
+    const layout = type.layout;
+    if (layout?.partial) {
+      issues.push(issue("layout.partial", "warning", `${type.qualifiedName} 的内存布局未完全解析。`, { id: type.id, file: type.file, location: type.location }));
+    }
+    if (layout?.size && layout.paddingBytes > 0 && layout.paddingBytes / layout.size >= 0.2) {
+      issues.push(issue("layout.padding-ratio", "suggestion", `${type.qualifiedName} padding 占比 ${Math.round(layout.paddingBytes / layout.size * 100)}%，建议检查字段顺序。`, { id: type.id, file: type.file, location: type.location }));
+    }
+    for (const field of type.fields) {
+      const normalized = normalizeFieldTypeValue(field.type);
+      if (!field.note) {
+        issues.push(issue("metadata.field-note-missing", "suggestion", `${type.qualifiedName}::${field.name} 缺少字段注释。`, { id: field.id, file: type.file, location: field.location }));
+      }
+      if (/[*&]/.test(field.type) || /\b(std::vector|std::string|std::map|std::array|QString)\b/.test(field.type)) {
+        issues.push(issue("type.unsupported-runtime", "error", `${type.qualifiedName}::${field.name} 使用了 MVP 不支持的运行期/指针/引用类型：${field.type}。`, { id: field.id, file: type.file, location: field.location }));
+      } else if (normalized && !BASE_TYPE_SIZE[normalized.coreType] && !resolveReferencedType(workspace.types, normalized.coreType)) {
+        issues.push(issue("type.unresolved", "warning", `${type.qualifiedName}::${field.name} 的类型未在工作区索引中解析：${field.type}。`, { id: field.id, file: type.file, location: field.location }));
+      }
+      const fieldLayout = layout?.fields.find((item) => item.fieldId === field.id);
+      if (fieldLayout && !fieldLayout.supported) {
+        issues.push(issue("layout.field-unsupported", "warning", `${type.qualifiedName}::${field.name} 无法参与布局分析：${fieldLayout.reason ?? field.type}。`, { id: field.id, file: type.file, location: field.location }));
+      }
+    }
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    issueCount: issues.length,
+    errorCount: issues.filter((item) => item.severity === "error").length,
+    warningCount: issues.filter((item) => item.severity === "warning").length,
+    suggestionCount: issues.filter((item) => item.severity === "suggestion").length,
+    issues
+  };
+}
+
+function markdownTable(rows: string[][]): string {
+  if (rows.length === 0) return "";
+  const [header, ...body] = rows;
+  return [
+    `| ${header.map(escapeMarkdownCell).join(" | ")} |`,
+    `| ${header.map(() => "---").join(" | ")} |`,
+    ...body.map((row) => `| ${row.map(escapeMarkdownCell).join(" | ")} |`)
+  ].join("\n");
+}
+
+function escapeMarkdownCell(value: string): string {
+  return value.replaceAll("|", "\\|").replace(/\r?\n/g, "<br>");
+}
+
+export async function generateProtocolDocument(input: GenerateDocumentInput): Promise<GeneratedDocumentReport> {
+  const workspace = await scanWorkspace(input.workspaceRoot);
+  const lint = lintWorkspaceView(workspace);
+  const generatedAt = new Date().toISOString();
+  const lines: string[] = [
+    `# ${workspace.name} 协议文档`,
+    "",
+    `生成时间：${generatedAt}`,
+    "",
+    "## 工作区摘要",
+    "",
+    markdownTable([
+      ["指标", "值"],
+      ["工作区", workspace.rootPath],
+      ["Header", String(workspace.files.length)],
+      ["协议类型", String(workspace.types.length)],
+      ["扫描器", workspace.scanner],
+      ["Lint 问题", `${lint.issueCount}（错误 ${lint.errorCount} / 警告 ${lint.warningCount} / 建议 ${lint.suggestionCount}）`]
+    ]),
+    "",
+    "## Header 清单",
+    "",
+    markdownTable([
+      ["Header", "Include 数"],
+      ...workspace.files.map((file) => [file.relativePath, String(file.includes.length)])
+    ]),
+    ""
+  ];
+
+  for (const type of workspace.types) {
+    lines.push(`## ${type.kind === "struct" ? "Struct" : "Enum"} ${type.qualifiedName}`, "");
+    lines.push(`文件：\`${reportRelativePath(workspace.rootPath, type.file)}${type.location ? `:${type.location.line}` : ""}\``);
+    if (type.note) lines.push("", `说明：${type.note}`);
+    if (type.kind === "struct") {
+      const layout = type.layout;
+      lines.push("", "### 布局", "");
+      lines.push(markdownTable([
+        ["大小", "对齐", "数据字节", "Padding", "Pack", "状态"],
+        [
+          layout?.size === undefined ? "未完全解析" : `${layout.size} B`,
+          layout?.alignment === undefined ? "—" : `${layout.alignment} B`,
+          `${layout?.dataSize ?? 0} B`,
+          `${layout?.paddingBytes ?? 0} B`,
+          layout?.pack ? String(layout.pack) : "默认 ABI",
+          layout?.partial ? "部分支持" : "已完成"
+        ]
+      ]));
+      lines.push("", "### 字段", "");
+      lines.push(markdownTable([
+        ["字段", "类型", "Offset", "大小", "注释"],
+        ...type.fields.map((field) => {
+          const fieldLayout = layout?.fields.find((item) => item.fieldId === field.id);
+          return [
+            field.name,
+            `\`${field.type}\``,
+            fieldLayout?.offset === undefined ? "—" : `${fieldLayout.offset} B`,
+            fieldLayout?.size === undefined ? "—" : `${fieldLayout.size} B`,
+            field.note ?? ""
+          ];
+        })
+      ]));
+    } else {
+      lines.push("", "### 枚举项", "");
+      lines.push(markdownTable([
+        ["枚举项", "值", "注释"],
+        ...type.values.map((value) => [value.name, value.value === undefined ? "自动" : String(value.value), value.note ?? ""])
+      ]));
+    }
+    lines.push("");
+  }
+
+  lines.push("## Lint 摘要", "");
+  if (lint.issues.length === 0) {
+    lines.push("未发现 Lint 问题。", "");
+  } else {
+    lines.push(markdownTable([
+      ["等级", "规则", "位置", "说明"],
+      ...lint.issues.map((item) => [
+        item.severity,
+        item.ruleId,
+        item.file ? `${reportRelativePath(workspace.rootPath, item.file)}${item.line ? `:${item.line}` : ""}` : "—",
+        item.message
+      ])
+    ]), "");
+  }
+
+  const content = `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  const target = join(workspace.rootPath, ".protocol", "reports", "protocol-documentation.md");
+  await atomicWriteFile(target, content);
+  return { generatedAt, path: target, relativePath: reportRelativePath(workspace.rootPath, target), content };
+}
+
+interface SnapshotFile {
+  schemaVersion: 1;
+  id: string;
+  label?: string;
+  createdAt: string;
+  workspace: {
+    name: string;
+    rootPath: string;
+    fileCount: number;
+    typeCount: number;
+  };
+  files: Array<{ path: string; contentHash: string }>;
+  types: Array<{
+    id: string;
+    kind: WorkspaceTypeView["kind"];
+    name: string;
+    qualifiedName: string;
+    file: string;
+    size?: number;
+    fields: Array<{ id: string; name: string; type: string; offset?: number; size?: number }>;
+    values: Array<{ id: string; name: string; value?: number }>;
+  }>;
+}
+
+function snapshotId(label?: string): string {
+  const safeLabel = label?.trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return safeLabel ? `${stamp}-${safeLabel}` : stamp;
+}
+
+function snapshotSummary(root: string, snapshot: SnapshotFile, path: string): ProtocolSnapshotSummary {
+  return {
+    id: snapshot.id,
+    label: snapshot.label,
+    createdAt: snapshot.createdAt,
+    path,
+    relativePath: reportRelativePath(root, path),
+    typeCount: snapshot.workspace.typeCount,
+    fileCount: snapshot.workspace.fileCount
+  };
+}
+
+function snapshotFromWorkspace(workspace: WorkspaceView, id: string, label?: string): SnapshotFile {
+  return {
+    schemaVersion: 1,
+    id,
+    label,
+    createdAt: new Date().toISOString(),
+    workspace: {
+      name: workspace.name,
+      rootPath: workspace.rootPath,
+      fileCount: workspace.files.length,
+      typeCount: workspace.types.length
+    },
+    files: workspace.files.map((file) => ({ path: file.relativePath, contentHash: file.contentHash })),
+    types: workspace.types.map((type) => ({
+      id: type.id,
+      kind: type.kind,
+      name: type.name,
+      qualifiedName: type.qualifiedName,
+      file: reportRelativePath(workspace.rootPath, type.file),
+      size: type.layout?.size,
+      fields: type.fields.map((field) => {
+        const layout = type.layout?.fields.find((item) => item.fieldId === field.id);
+        return { id: field.id, name: field.name, type: field.type, offset: layout?.offset, size: layout?.size };
+      }),
+      values: type.values.map((value) => ({ id: value.id, name: value.name, value: value.value }))
+    }))
+  };
+}
+
+async function writeSnapshot(root: string, snapshot: SnapshotFile): Promise<string> {
+  const target = join(root, ".protocol", "snapshots", `${snapshot.id}.json`);
+  await atomicWriteFile(target, `${JSON.stringify(snapshot, null, 2)}\n`);
+  return target;
+}
+
+async function readSnapshot(path: string): Promise<SnapshotFile> {
+  return JSON.parse(await fs.readFile(path, "utf8")) as SnapshotFile;
+}
+
+async function latestSnapshotPath(root: string): Promise<string | undefined> {
+  const directory = join(root, ".protocol", "snapshots");
+  try {
+    const entries = await fs.readdir(directory);
+    const snapshots = entries.filter((entry) => entry.endsWith(".json")).sort();
+    const latest = snapshots.at(-1);
+    return latest ? join(directory, latest) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function createProtocolSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary> {
+  const workspace = await scanWorkspace(input.workspaceRoot);
+  const snapshot = snapshotFromWorkspace(workspace, snapshotId(input.label), input.label?.trim() || undefined);
+  const path = await writeSnapshot(workspace.rootPath, snapshot);
+  return snapshotSummary(workspace.rootPath, snapshot, path);
+}
+
+function semanticChange(kind: SemanticChange["kind"], severity: SemanticChange["severity"], message: string, targetId?: string, before?: string | number, after?: string | number): SemanticChange {
+  return { id: stableId("change", `${kind}:${targetId ?? message}:${before ?? ""}:${after ?? ""}`), kind, severity, message, targetId, before, after };
+}
+
+function diffSnapshots(base: SnapshotFile, current: SnapshotFile): SemanticChange[] {
+  const changes: SemanticChange[] = [];
+  const baseTypes = new Map(base.types.map((type) => [type.id, type]));
+  const currentTypes = new Map(current.types.map((type) => [type.id, type]));
+
+  for (const [id, currentType] of currentTypes) {
+    const baseType = baseTypes.get(id);
+    if (!baseType) {
+      changes.push(semanticChange("type-added", "compatible", `新增类型 ${currentType.qualifiedName}。`, id));
+      continue;
+    }
+    if (baseType.size !== currentType.size) {
+      changes.push(semanticChange("type-size-changed", "review", `${currentType.qualifiedName} 大小从 ${baseType.size ?? "未知"} 变为 ${currentType.size ?? "未知"}。`, id, baseType.size, currentType.size));
+    }
+
+    const baseFields = new Map(baseType.fields.map((field) => [field.id, field]));
+    const currentFields = new Map(currentType.fields.map((field) => [field.id, field]));
+    for (const [fieldId, field] of currentFields) {
+      const before = baseFields.get(fieldId);
+      if (!before) {
+        changes.push(semanticChange("field-added", "compatible", `${currentType.qualifiedName} 新增字段 ${field.name}。`, fieldId));
+        continue;
+      }
+      if (before.type !== field.type) {
+        changes.push(semanticChange("field-type-changed", "breaking", `${currentType.qualifiedName}::${field.name} 类型从 ${before.type} 变为 ${field.type}。`, fieldId, before.type, field.type));
+      }
+      if (before.offset !== field.offset) {
+        changes.push(semanticChange("field-offset-changed", "breaking", `${currentType.qualifiedName}::${field.name} offset 从 ${before.offset ?? "未知"} 变为 ${field.offset ?? "未知"}。`, fieldId, before.offset, field.offset));
+      }
+    }
+    for (const [fieldId, field] of baseFields) {
+      if (!currentFields.has(fieldId)) {
+        changes.push(semanticChange("field-removed", "breaking", `${baseType.qualifiedName} 删除字段 ${field.name}。`, fieldId));
+      }
+    }
+
+    const baseValues = new Map(baseType.values.map((value) => [value.id, value]));
+    const currentValues = new Map(currentType.values.map((value) => [value.id, value]));
+    for (const [valueId, value] of currentValues) {
+      const before = baseValues.get(valueId);
+      if (!before) {
+        changes.push(semanticChange("enum-value-added", "compatible", `${currentType.qualifiedName} 新增枚举项 ${value.name}。`, valueId));
+        continue;
+      }
+      if (before.value !== value.value) {
+        changes.push(semanticChange("enum-value-number-changed", "breaking", `${currentType.qualifiedName}::${value.name} 值从 ${before.value ?? "自动"} 变为 ${value.value ?? "自动"}。`, valueId, before.value, value.value));
+      }
+    }
+    for (const [valueId, value] of baseValues) {
+      if (!currentValues.has(valueId)) {
+        changes.push(semanticChange("enum-value-removed", "breaking", `${baseType.qualifiedName} 删除枚举项 ${value.name}。`, valueId));
+      }
+    }
+  }
+
+  for (const [id, baseType] of baseTypes) {
+    if (!currentTypes.has(id)) {
+      changes.push(semanticChange("type-removed", "breaking", `删除类型 ${baseType.qualifiedName}。`, id));
+    }
+  }
+  return changes;
+}
+
+export async function diffProtocolSnapshot(input: DiffProtocolInput): Promise<SemanticDiffReport> {
+  const root = resolve(input.workspaceRoot);
+  const basePath = input.baseSnapshotPath ? assertWorkspaceFile(root, input.baseSnapshotPath) : await latestSnapshotPath(root);
+  const workspace = await scanWorkspace(root);
+  const current = snapshotFromWorkspace(workspace, snapshotId("current"), "current");
+  const currentPath = await writeSnapshot(root, current);
+  const base = basePath ? await readSnapshot(basePath) : undefined;
+  const changes = base ? diffSnapshots(base, current) : [];
+  const generatedAt = new Date().toISOString();
+  return {
+    generatedAt,
+    baseSnapshot: base && basePath ? snapshotSummary(root, base, basePath) : undefined,
+    currentSnapshot: snapshotSummary(root, current, currentPath),
+    changeCount: changes.length,
+    breakingCount: changes.filter((item) => item.severity === "breaking").length,
+    compatibleCount: changes.filter((item) => item.severity === "compatible").length,
+    reviewCount: changes.filter((item) => item.severity === "review").length,
+    changes
+  };
 }
 
 export async function createHeader(input: CreateHeaderInput): Promise<WorkspaceView> {
@@ -815,6 +1242,13 @@ export async function updateHeaderContent(input: UpdateHeaderContentInput): Prom
   const root = resolve(input.workspaceRoot);
   const header = assertWorkspaceFile(root, input.headerPath);
   if (!HEADER_EXTENSIONS.has(extname(header).toLowerCase())) throw new Error("只能编辑 Header 文件内容。");
+  if (input.expectedHash) {
+    const currentContent = await fs.readFile(header, "utf8");
+    const currentHash = contentHash(currentContent);
+    if (currentHash !== input.expectedHash) {
+      throw new Error("Header 已被外部修改，已取消保存以避免静默覆盖。请重新扫描后合并改动。");
+    }
+  }
   await atomicWriteFile(header, input.content);
   return scanWorkspace(root);
 }

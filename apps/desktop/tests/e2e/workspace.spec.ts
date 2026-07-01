@@ -20,6 +20,18 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "新增枚举" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "新建 Header 文件" })).toBeEnabled();
+    await page.getByRole("button", { name: "Lint" }).click();
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText("协议 Lint");
+    await page.getByRole("button", { name: "关闭报告" }).click();
+    await page.getByRole("button", { name: "文档" }).click();
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText(".protocol/reports/protocol-documentation.md");
+    await page.getByRole("button", { name: "关闭报告" }).click();
+    await page.getByRole("button", { name: "快照" }).click();
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText(".protocol/snapshots/");
+    await page.getByRole("button", { name: "关闭报告" }).click();
+    await page.getByRole("button", { name: "Diff" }).click();
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText("语义 Diff");
+    await page.getByRole("button", { name: "关闭报告" }).click();
     const treeBox = await page.locator(".tree").evaluate((element) => element.getBoundingClientRect());
     const dockBox = await page.locator(".workspace-dock").evaluate((element) => element.getBoundingClientRect());
     expect(treeBox.bottom).toBeLessThanOrEqual(dockBox.top + 1);
