@@ -2,8 +2,8 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { createServiceHealth } from "../shared/service";
-import type { AddFieldInput, CreateHeaderInput, CreateStructInput } from "../shared/workspace";
-import { addField, createHeader, createStruct, sampleWorkspacePath, scanWorkspace } from "./workspace";
+import type { AddFieldInput, CreateHeaderInput, CreateStructInput, DeleteFieldInput, UpdateFieldInput } from "../shared/workspace";
+import { addField, createHeader, createStruct, deleteField, sampleWorkspacePath, scanWorkspace, updateField } from "./workspace";
 
 interface AppPreferences {
   lastWorkspacePath?: string;
@@ -74,6 +74,8 @@ app.whenReady().then(() => {
   ipcMain.handle("protocol:create-header", (_event, input: CreateHeaderInput) => createHeader(input));
   ipcMain.handle("protocol:create-struct", (_event, input: CreateStructInput) => createStruct(input));
   ipcMain.handle("protocol:add-field", (_event, input: AddFieldInput) => addField(input));
+  ipcMain.handle("protocol:update-field", (_event, input: UpdateFieldInput) => updateField(input));
+  ipcMain.handle("protocol:delete-field", (_event, input: DeleteFieldInput) => deleteField(input));
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

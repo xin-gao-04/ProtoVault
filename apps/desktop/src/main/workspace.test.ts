@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { addField, createHeader, createStruct, scanWorkspace } from "./workspace";
+import { addField, createHeader, createStruct, deleteField, scanWorkspace, updateField } from "./workspace";
 
 const examplesWorkspace = resolve(import.meta.dirname, "../../../../examples");
 
@@ -94,7 +94,7 @@ describe("scanWorkspace", () => {
     }
   }, 30_000);
 
-  it("creates headers, structs, fields, and refreshes the workspace record", async () => {
+  it("creates, updates, deletes fields, and refreshes the workspace record", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "protovault-edit-"));
     try {
       const afterHeader = await createHeader({ workspaceRoot: root, relativePath: "headers/generated.hpp" });
@@ -122,8 +122,31 @@ describe("scanWorkspace", () => {
         ["std::uint16_t", "flags"]
       ]);
 
+      const afterUpdate = await updateField({
+        workspaceRoot: root,
+        typeId: updatedPacket!.id,
+        fieldId: updatedPacket!.fields.find((field) => field.name === "flags")!.id,
+        fieldType: "std::uint8_t",
+        fieldName: "status"
+      });
+      const packetAfterUpdate = afterUpdate.types.find((type) => type.qualifiedName === "protovault::PacketHeader");
+      expect(packetAfterUpdate?.fields.map((field) => [field.type, field.name])).toEqual([
+        ["std::uint32_t", "id"],
+        ["std::uint8_t", "status"]
+      ]);
+
+      const afterDelete = await deleteField({
+        workspaceRoot: root,
+        typeId: packetAfterUpdate!.id,
+        fieldId: packetAfterUpdate!.fields.find((field) => field.name === "status")!.id
+      });
+      const packetAfterDelete = afterDelete.types.find((type) => type.qualifiedName === "protovault::PacketHeader");
+      expect(packetAfterDelete?.fields.map((field) => [field.type, field.name])).toEqual([["std::uint32_t", "id"]]);
+
       const content = await readFile(resolve(root, "headers", "generated.hpp"), "utf8");
-      expect(content).toContain("std::uint16_t flags;");
+      expect(content).toContain("std::uint32_t id;");
+      expect(content).not.toContain("flags;");
+      expect(content).not.toContain("status;");
 
       const record = JSON.parse(await readFile(resolve(root, ".protocol", "workspace.json"), "utf8")) as {
         counts: { headers: number; types: number };

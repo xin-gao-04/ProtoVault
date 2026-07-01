@@ -7,6 +7,8 @@ import type {
   AddFieldInput,
   CreateHeaderInput,
   CreateStructInput,
+  DeleteFieldInput,
+  UpdateFieldInput,
   WorkspaceDirectoryView,
   WorkspaceFileView,
   WorkspaceTypeView,
@@ -143,6 +145,12 @@ function sanitizeCppType(type: string): string {
   const trimmed = type.trim();
   if (!trimmed || /[;{}]/.test(trimmed)) throw new Error("字段类型不能为空，且不能包含 ;、{ 或 }。");
   return trimmed;
+}
+
+function fieldDeclaration(fieldType: string, fieldName: string): string {
+  const arrayMatch = fieldType.match(/^(.*?)(\[[0-9]+\])$/);
+  if (arrayMatch) return `${arrayMatch[1].trim()} ${fieldName}${arrayMatch[2]};`;
+  return `${fieldType} ${fieldName};`;
 }
 
 async function atomicWriteFile(targetPath: string, content: string): Promise<void> {
@@ -363,8 +371,57 @@ export async function addField(input: AddFieldInput): Promise<WorkspaceView> {
   const match = pattern.exec(content);
   if (!match) throw new Error(`无法在 Header 中定位 struct ${targetType.name} 的受控编辑区域。`);
   const body = match[2].trimEnd();
-  const nextBody = `${body}\n  ${fieldType} ${fieldName};`;
+  const nextBody = `${body}\n  ${fieldDeclaration(fieldType, fieldName)}`;
   const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
   await atomicWriteFile(header, nextContent);
+  return scanWorkspace(root);
+}
+
+async function findEditableField(root: string, typeId: string, fieldId: string): Promise<{
+  workspace: WorkspaceView;
+  targetType: WorkspaceTypeView;
+  targetField: WorkspaceTypeView["fields"][number];
+  header: string;
+  lines: string[];
+  lineIndex: number;
+}> {
+  const workspace = await scanWorkspace(root);
+  const targetType = workspace.types.find((type) => type.id === typeId);
+  if (!targetType) throw new Error("未找到要编辑的数据结构。");
+  if (targetType.kind !== "struct") throw new Error("只能编辑 struct 字段。");
+  const targetField = targetType.fields.find((field) => field.id === fieldId);
+  if (!targetField) throw new Error("未找到要编辑的字段。");
+  if (!targetField.location?.line) throw new Error("该字段缺少源码位置，暂不能受控编辑。");
+  const header = assertWorkspaceFile(root, targetType.file);
+  const content = await fs.readFile(header, "utf8");
+  const lines = content.split(/\r?\n/);
+  const lineIndex = targetField.location.line - 1;
+  const line = lines[lineIndex] ?? "";
+  if (!new RegExp(`\\b${targetField.name}\\b`).test(line) || !line.includes(";")) {
+    throw new Error(`无法在 Header 中定位字段声明行：${targetField.name}`);
+  }
+  return { workspace, targetType, targetField, header, lines, lineIndex };
+}
+
+export async function updateField(input: UpdateFieldInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const { workspace, targetType, targetField, header, lines, lineIndex } = await findEditableField(root, input.typeId, input.fieldId);
+  const fieldType = sanitizeCppType(input.fieldType);
+  const fieldName = sanitizeCppIdentifier(input.fieldName, "字段名称");
+  if (fieldName !== targetField.name && targetType.fields.some((field) => field.name === fieldName)) {
+    throw new Error(`字段已存在：${fieldName}`);
+  }
+  void workspace;
+  const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "  ";
+  lines[lineIndex] = `${indent}${fieldDeclaration(fieldType, fieldName)}`;
+  await atomicWriteFile(header, lines.join("\n"));
+  return scanWorkspace(root);
+}
+
+export async function deleteField(input: DeleteFieldInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const { header, lines, lineIndex } = await findEditableField(root, input.typeId, input.fieldId);
+  lines.splice(lineIndex, 1);
+  await atomicWriteFile(header, lines.join("\n"));
   return scanWorkspace(root);
 }

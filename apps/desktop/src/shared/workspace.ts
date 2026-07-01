@@ -55,3 +55,17 @@ export interface AddFieldInput {
   fieldType: string;
   fieldName: string;
 }
+
+export interface UpdateFieldInput {
+  workspaceRoot: string;
+  typeId: string;
+  fieldId: string;
+  fieldType: string;
+  fieldName: string;
+}
+
+export interface DeleteFieldInput {
+  workspaceRoot: string;
+  typeId: string;
+  fieldId: string;
+}

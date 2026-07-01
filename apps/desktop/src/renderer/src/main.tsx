@@ -9,7 +9,8 @@ type ProtocolTreeNode =
   | { id: string; kind: "type"; name: string; type: WorkspaceTypeView; children: ProtocolTreeNode[] }
   | { id: string; kind: "field"; name: string; parent: WorkspaceTypeView; field?: WorkspaceFieldView; enumValue?: WorkspaceTypeView["values"][number] };
 
-type WorkspaceAction = "create-header" | "create-struct" | "add-field";
+type WorkspaceAction = "create-header" | "create-struct" | "add-field" | "edit-field";
+type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
 
 function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
@@ -28,6 +29,9 @@ function App(): React.JSX.Element {
   const [structHeaderPath, setStructHeaderPath] = React.useState("");
   const [fieldType, setFieldType] = React.useState("std::uint32_t");
   const [fieldName, setFieldName] = React.useState("value");
+  const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
+  const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
+  const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const selectedMemberName = selectedType?.fields.find((field) => field.id === selectedMemberId)?.name
@@ -55,6 +59,9 @@ function App(): React.JSX.Element {
     setSelectedFilePath(nextFile?.path ?? null);
     setSelectedMemberId(nextMemberId);
     setExpandedNodeIds(initialExpandedNodeIds(nextTree, nextType?.id ?? null));
+    const nextActiveTab = nextFile ? tabForFile(nextFile) : nextType ? tabForType(nextType) : null;
+    setTabs((current) => reconcileTabs(current, result, nextActiveTab));
+    setActiveTabId(nextActiveTab?.id ?? null);
   }, []);
 
   React.useEffect(() => {
@@ -178,6 +185,101 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function updateFieldFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "struct" || !editingFieldId) return;
+    const nextFieldType = fieldType.trim();
+    const nextFieldName = fieldName.trim();
+    if (!nextFieldType || !nextFieldName) {
+      setUiNotice("字段类型和字段名称不能为空");
+      return;
+    }
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldId: editingFieldId, fieldType: nextFieldType, fieldName: nextFieldName });
+      applyWorkspaceResult(result, { selectTypeName: selectedType.name, selectFieldName: nextFieldName });
+      setUiNotice(`已更新字段：${nextFieldName}`);
+      setActiveAction(null);
+      setEditingFieldId(null);
+    });
+  }
+
+  async function deleteFieldFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "struct" || !editingFieldId) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.deleteField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldId: editingFieldId });
+      applyWorkspaceResult(result, { selectTypeName: selectedType.name });
+      setUiNotice("字段已删除");
+      setActiveAction(null);
+      setEditingFieldId(null);
+    });
+  }
+
+  function openFileTab(file: WorkspaceFileView): void {
+    const tab = tabForFile(file);
+    setTabs((current) => upsertTab(current, tab));
+    setActiveTabId(tab.id);
+    setSelectedFilePath(file.path);
+    setSelectedTypeId(null);
+    setSelectedMemberId(null);
+  }
+
+  function openTypeTab(type: WorkspaceTypeView, memberId: string | null = null): void {
+    const tab = tabForType(type);
+    setTabs((current) => upsertTab(current, tab));
+    setActiveTabId(tab.id);
+    setSelectedTypeId(type.id);
+    setSelectedFilePath(null);
+    setSelectedMemberId(memberId);
+    setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
+  }
+
+  function activateTab(tab: WorkspaceTab): void {
+    setActiveTabId(tab.id);
+    setActiveAction(null);
+    if (tab.kind === "file") {
+      setSelectedFilePath(tab.filePath);
+      setSelectedTypeId(null);
+      setSelectedMemberId(null);
+    } else {
+      setSelectedTypeId(tab.typeId);
+      setSelectedFilePath(null);
+      setSelectedMemberId(null);
+    }
+  }
+
+  function closeTab(tabId: string): void {
+    setTabs((current) => {
+      const index = current.findIndex((tab) => tab.id === tabId);
+      const next = current.filter((tab) => tab.id !== tabId);
+      if (activeTabId === tabId) {
+        const fallback = next[Math.max(0, index - 1)] ?? next[0] ?? null;
+        setActiveTabId(fallback?.id ?? null);
+        if (!fallback) {
+          setSelectedFilePath(null);
+          setSelectedTypeId(null);
+          setSelectedMemberId(null);
+          setActiveAction(null);
+        } else if (fallback.kind === "file") {
+          setSelectedFilePath(fallback.filePath);
+          setSelectedTypeId(null);
+          setSelectedMemberId(null);
+        } else {
+          setSelectedTypeId(fallback.typeId);
+          setSelectedFilePath(null);
+          setSelectedMemberId(null);
+        }
+      }
+      return next;
+    });
+  }
+
+  function openEditFieldAction(type: WorkspaceTypeView, field: WorkspaceFieldView): void {
+    openTypeTab(type, field.id);
+    setFieldType(field.type);
+    setFieldName(field.name);
+    setEditingFieldId(field.id);
+    setActiveAction("edit-field");
+  }
+
   function toggleNode(nodeId: string): void {
     setExpandedNodeIds((current) => {
       const next = new Set(current);
@@ -251,20 +353,13 @@ function App(): React.JSX.Element {
                 expandedNodeIds={expandedNodeIds}
                 onToggleNode={toggleNode}
                 onSelectFile={(file) => {
-                  setSelectedFilePath(file.path);
-                  setSelectedTypeId(null);
-                  setSelectedMemberId(null);
+                  openFileTab(file);
                 }}
                 onSelectType={(type) => {
-                  setSelectedTypeId(type.id);
-                  setSelectedFilePath(null);
-                  setSelectedMemberId(null);
-                  setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
+                  openTypeTab(type);
                 }}
                 onSelectMember={(parent, memberId) => {
-                  setSelectedTypeId(parent.id);
-                  setSelectedFilePath(null);
-                  setSelectedMemberId(memberId);
+                  openTypeTab(parent, memberId);
                 }}
               />
             </nav>
@@ -299,6 +394,7 @@ function App(): React.JSX.Element {
           <p className="lede">扫描 C++ 数据结构，理解字段布局，维护语义元数据，并用受控生成与语义差异守住协议演进。</p>
           <div className="flow"><span>扫描</span><b>→</b><span>IR</span><b>→</b><span>布局</span><b>→</b><span>生成</span><b>→</b><span>检查</span></div>
         </article>}
+        {workspace && <TabStrip tabs={tabs} activeTabId={activeTabId} onActivate={activateTab} onClose={closeTab} />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -318,8 +414,10 @@ function App(): React.JSX.Element {
           onCreateHeader={() => void createHeaderFromForm()}
           onCreateStruct={() => void createStructFromForm()}
           onAddField={() => void addFieldFromForm()}
+          onUpdateField={() => void updateFieldFromForm()}
+          onDeleteField={() => void deleteFieldFromForm()}
         />}
-        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} />}
+        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditField={openEditFieldAction} />}
         {workspace && selectedFile && <SourceViewer file={selectedFile} />}
         {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
       </section>
@@ -427,6 +525,50 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function tabForFile(file: WorkspaceFileView): WorkspaceTab {
+  return { id: `file:${file.path}`, kind: "file", title: file.relativePath.split("/").at(-1) ?? file.relativePath, filePath: file.path };
+}
+
+function tabForType(type: WorkspaceTypeView): WorkspaceTab {
+  return { id: `type:${type.id}`, kind: "type", title: type.name, typeId: type.id };
+}
+
+function upsertTab(tabs: WorkspaceTab[], tab: WorkspaceTab): WorkspaceTab[] {
+  return tabs.some((item) => item.id === tab.id) ? tabs : [...tabs, tab];
+}
+
+function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView, activeTab: WorkspaceTab | null): WorkspaceTab[] {
+  const files = new Map(workspace.files.map((file) => [file.path, file]));
+  const types = new Map(workspace.types.map((type) => [type.id, type]));
+  const next = tabs.flatMap((tab): WorkspaceTab[] => {
+    if (tab.kind === "file") {
+      const file = files.get(tab.filePath);
+      return file ? [tabForFile(file)] : [];
+    }
+    const type = types.get(tab.typeId);
+    return type ? [tabForType(type)] : [];
+  });
+  return activeTab ? upsertTab(next, activeTab) : next;
+}
+
+function TabStrip({ tabs, activeTabId, onActivate, onClose }: {
+  tabs: WorkspaceTab[];
+  activeTabId: string | null;
+  onActivate(tab: WorkspaceTab): void;
+  onClose(tabId: string): void;
+}): React.JSX.Element | null {
+  if (tabs.length === 0) return null;
+  return <nav className="tab-strip" aria-label="工作区标签页">
+    {tabs.map((tab) => <div className={tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"} key={tab.id}>
+      <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}`} onClick={() => onActivate(tab)}>
+        <span className={tab.kind === "file" ? "tab-kind file" : "tab-kind type"}>{tab.kind === "file" ? "H" : "S"}</span>
+        <span>{tab.title}</span>
+      </button>
+      <button className="workspace-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => onClose(tab.id)}>×</button>
+    </div>)}
+  </nav>;
+}
+
 function TreeNodes({
   nodes,
   selectedFilePath,
@@ -509,7 +651,9 @@ function StructuredActionPanel({
   onCancel,
   onCreateHeader,
   onCreateStruct,
-  onAddField
+  onAddField,
+  onUpdateField,
+  onDeleteField
 }: {
   action: WorkspaceAction;
   workspace: WorkspaceView;
@@ -529,13 +673,17 @@ function StructuredActionPanel({
   onCreateHeader(): void;
   onCreateStruct(): void;
   onAddField(): void;
+  onUpdateField(): void;
+  onDeleteField(): void;
 }): React.JSX.Element {
-  const title = action === "create-header" ? "新建 Header" : action === "create-struct" ? "新增数据结构" : "添加字段";
+  const title = action === "create-header" ? "新建 Header" : action === "create-struct" ? "新增数据结构" : action === "add-field" ? "添加字段" : "编辑字段";
   const description = action === "create-header"
     ? "在当前工作区内创建一个受控 Header 文件。"
     : action === "create-struct"
       ? "选择目标 Header，并插入一个最小 struct。"
-      : `向当前 struct ${selectedType?.name ?? ""} 追加字段。`;
+      : action === "add-field"
+        ? `向当前 struct ${selectedType?.name ?? ""} 追加字段。`
+        : `修改或删除当前 struct ${selectedType?.name ?? ""} 中的字段。`;
 
   return <section className="action-panel" aria-label="结构化编辑">
     <div className="action-panel-title">
@@ -578,13 +726,32 @@ function StructuredActionPanel({
       <small>当前目标：{selectedType?.qualifiedName ?? "未选择 struct"}</small>
       <button type="submit" disabled={loading || selectedType?.kind !== "struct"}>添加字段</button>
     </form>}
+
+    {action === "edit-field" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onUpdateField(); }}>
+      <label>
+        <span>字段类型</span>
+        <input value={fieldType} onChange={(event) => onFieldTypeChange(event.target.value)} placeholder="std::uint32_t" autoFocus />
+      </label>
+      <label>
+        <span>字段名称</span>
+        <input value={fieldName} onChange={(event) => onFieldNameChange(event.target.value)} placeholder="value" />
+      </label>
+      <div className="form-actions">
+        <button type="submit" disabled={loading || selectedType?.kind !== "struct"}>保存修改</button>
+        <button type="button" className="danger" disabled={loading || selectedType?.kind !== "struct"} onClick={onDeleteField}>删除字段</button>
+      </div>
+    </form>}
   </section>;
 }
 
-function ProtocolEditor({ type, selectedMemberId }: { type: WorkspaceTypeView; selectedMemberId: string | null }): React.JSX.Element {
+function ProtocolEditor({ type, selectedMemberId, onEditField }: {
+  type: WorkspaceTypeView;
+  selectedMemberId: string | null;
+  onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
+}): React.JSX.Element {
   return <div className="editor">
     <div className="editor-title"><div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p></div><span className="status">AST 已同步</span></div>
-    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>位置</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th></tr></thead><tbody>{type.values.map((value) => <tr className={`enum-value:${type.id}:${value.name}` === selectedMemberId ? "selected-row" : undefined} key={value.name}><td>{value.name}</td><td>{value.value ?? "自动"}</td></tr>)}</tbody></table>}
+    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditField(type, field)}>编辑</button></td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th></tr></thead><tbody>{type.values.map((value) => <tr className={`enum-value:${type.id}:${value.name}` === selectedMemberId ? "selected-row" : undefined} key={value.name}><td>{value.name}</td><td>{value.value ?? "自动"}</td></tr>)}</tbody></table>}
   </div>;
 }
 
