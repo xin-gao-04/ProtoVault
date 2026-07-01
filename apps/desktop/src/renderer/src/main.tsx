@@ -84,8 +84,6 @@ function App(): React.JSX.Element {
       : selectedType
         ? { id: selectedType.id, label: `${selectedType.kind === "struct" ? "Struct" : "Enum"} ${selectedType.qualifiedName}`, note: selectedType.note ?? "" }
         : null;
-  const activeNoteText = selectedNoteTarget ? dirtyNotes[selectedNoteTarget.id] ?? selectedNoteTarget.note : "";
-  const activeNoteDirty = selectedNoteTarget ? dirtyNotes[selectedNoteTarget.id] !== undefined : false;
   const dirtyTabIds = React.useMemo(
     () => workspace ? buildDirtyTabIds(workspace, dirtyNotes) : new Set<string>(),
     [workspace, dirtyNotes]
@@ -652,6 +650,30 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function addEnumValueInline(type: WorkspaceTypeView, nextValueName: string, nextValueNumber: string): Promise<boolean> {
+    if (!workspace || type.kind !== "enum") return false;
+    const trimmedName = nextValueName.trim();
+    if (!trimmedName) {
+      setUiNotice("枚举项名称不能为空");
+      return false;
+    }
+    return runWorkspaceAction(async () => {
+      const result = await window.protoVault.addEnumValue({
+        workspaceRoot: workspace.rootPath,
+        typeId: type.id,
+        valueName: trimmedName,
+        value: parseOptionalEnumNumber(nextValueNumber)
+      });
+      setWorkspace(result);
+      const nextType = result.types.find((item) => item.name === type.name);
+      const nextValue = nextType?.values.find((value) => value.name === trimmedName);
+      setSelectedTypeId(nextType?.id ?? type.id);
+      setSelectedFilePath(null);
+      setSelectedMemberId(nextValue?.id ?? null);
+      setUiNotice(`已添加枚举项：${trimmedName}`);
+    });
+  }
+
   async function updateEnumValueFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "enum" || !editingEnumValueId) return;
     const nextValueName = enumValueName.trim();
@@ -678,6 +700,31 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function updateEnumValueInline(type: WorkspaceTypeView, value: WorkspaceEnumValueView, nextValueName: string, nextValueNumber: string): Promise<boolean> {
+    if (!workspace || type.kind !== "enum") return false;
+    const trimmedName = nextValueName.trim();
+    if (!trimmedName) {
+      setUiNotice("枚举项名称不能为空");
+      return false;
+    }
+    return runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateEnumValue({
+        workspaceRoot: workspace.rootPath,
+        typeId: type.id,
+        valueId: value.id,
+        valueName: trimmedName,
+        value: parseOptionalEnumNumber(nextValueNumber)
+      });
+      setWorkspace(result);
+      const nextType = result.types.find((item) => item.name === type.name);
+      const nextValue = nextType?.values.find((item) => item.name === trimmedName);
+      setSelectedTypeId(nextType?.id ?? type.id);
+      setSelectedFilePath(null);
+      setSelectedMemberId(nextValue?.id ?? null);
+      setUiNotice(`已更新枚举项：${trimmedName}`);
+    });
+  }
+
   async function deleteEnumValueFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "enum" || !editingEnumValueId) return;
     await runWorkspaceAction(async () => {
@@ -686,6 +733,15 @@ function App(): React.JSX.Element {
       setUiNotice("枚举项已删除");
       setActiveAction(null);
       setEditingEnumValueId(null);
+    });
+  }
+
+  async function deleteEnumValueInline(type: WorkspaceTypeView, value: WorkspaceEnumValueView): Promise<boolean> {
+    if (!workspace || type.kind !== "enum") return false;
+    return runWorkspaceAction(async () => {
+      const result = await window.protoVault.deleteEnumValue({ workspaceRoot: workspace.rootPath, typeId: type.id, valueId: value.id });
+      applyWorkspaceResult(result, { selectTypeName: type.name });
+      setUiNotice(`已删除枚举项：${value.name}`);
     });
   }
 
@@ -700,13 +756,17 @@ function App(): React.JSX.Element {
 
   async function saveNote(): Promise<void> {
     if (!workspace || !selectedNoteTarget) return;
-    if (!activeNoteDirty) {
+    await saveNoteTarget(selectedNoteTarget.id);
+  }
+
+  async function saveNoteTarget(targetId: string): Promise<boolean> {
+    if (!workspace) return false;
+    if (dirtyNotes[targetId] === undefined) {
       setUiNotice("没有需要保存的注释改动");
-      return;
+      return false;
     }
-    const targetId = selectedNoteTarget.id;
-    const noteToSave = activeNoteText;
-    await runWorkspaceAction(async () => {
+    const noteToSave = dirtyNotes[targetId];
+    return runWorkspaceAction(async () => {
       const result = await window.protoVault.updateNote({ workspaceRoot: workspace.rootPath, targetId, note: noteToSave });
       setWorkspace(result);
       setDirtyNotes((current) => {
@@ -1040,12 +1100,18 @@ function App(): React.JSX.Element {
           selectedMemberId={selectedMemberId}
           loading={loading}
           fieldTypeOptions={selectedFieldTypeOptions}
+          dirtyNotes={dirtyNotes}
           onEditType={() => openStructuredAction(selectedType.kind === "struct" ? "edit-struct" : "edit-enum")}
           onEditField={openEditFieldAction}
           onAddFieldInline={addFieldInline}
           onUpdateFieldInline={updateFieldInline}
           onDeleteFieldInline={deleteFieldInline}
+          onAddEnumValueInline={addEnumValueInline}
+          onUpdateEnumValueInline={updateEnumValueInline}
+          onDeleteEnumValueInline={deleteEnumValueInline}
           onEditEnumValue={openEditEnumValueAction}
+          onNoteChange={updateNoteDraft}
+          onSaveNote={saveNoteTarget}
           onOpenContextMenu={openContextMenu}
         />}
         {workspace && selectedFile && <SourceViewer file={selectedFile} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
@@ -1092,12 +1158,6 @@ function App(): React.JSX.Element {
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
         {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
-        {workspace && selectedNoteTarget && <section className="metadata-editor" aria-label="注释编辑">
-          <h2>注释</h2>
-          <p>{selectedNoteTarget.label}</p>
-          <textarea value={activeNoteText} onChange={(event) => updateNoteDraft(selectedNoteTarget.id, event.target.value, selectedNoteTarget.note)} placeholder="记录语义说明、单位、范围、兼容性约束…" />
-          <button type="button" disabled={loading || !activeNoteDirty} onClick={() => void saveNote()}>{activeNoteDirty ? "保存注释 Ctrl+S" : "注释已保存"}</button>
-        </section>}
       </aside>
     </main>
   );
@@ -1796,36 +1856,56 @@ function ProtocolEditor({
   selectedMemberId,
   loading,
   fieldTypeOptions,
+  dirtyNotes,
   onEditType,
   onEditField,
   onAddFieldInline,
   onUpdateFieldInline,
   onDeleteFieldInline,
+  onAddEnumValueInline,
+  onUpdateEnumValueInline,
+  onDeleteEnumValueInline,
   onEditEnumValue,
+  onNoteChange,
+  onSaveNote,
   onOpenContextMenu
 }: {
   type: WorkspaceTypeView;
   selectedMemberId: string | null;
   loading: boolean;
   fieldTypeOptions: FieldTypeOption[];
+  dirtyNotes: Record<string, string>;
   onEditType(): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
   onAddFieldInline(type: WorkspaceTypeView, fieldType: string, fieldName: string): Promise<boolean>;
   onUpdateFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView, fieldType: string, fieldName: string): Promise<boolean>;
   onDeleteFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<boolean>;
+  onAddEnumValueInline(type: WorkspaceTypeView, valueName: string, valueNumber: string): Promise<boolean>;
+  onUpdateEnumValueInline(type: WorkspaceTypeView, value: WorkspaceEnumValueView, valueName: string, valueNumber: string): Promise<boolean>;
+  onDeleteEnumValueInline(type: WorkspaceTypeView, value: WorkspaceEnumValueView): Promise<boolean>;
   onEditEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
+  onNoteChange(targetId: string, value: string, savedValue: string): void;
+  onSaveNote(targetId: string): Promise<boolean>;
   onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
 }): React.JSX.Element {
   const [addingField, setAddingField] = React.useState(false);
   const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
   const [draftFieldType, setDraftFieldType] = React.useState("std::uint32_t");
   const [draftFieldName, setDraftFieldName] = React.useState("value");
+  const [addingEnumValue, setAddingEnumValue] = React.useState(false);
+  const [editingEnumValueId, setEditingEnumValueId] = React.useState<string | null>(null);
+  const [draftEnumValueName, setDraftEnumValueName] = React.useState("NewValue");
+  const [draftEnumValueNumber, setDraftEnumValueNumber] = React.useState("");
 
   React.useEffect(() => {
     setAddingField(false);
     setEditingFieldId(null);
     setDraftFieldType("std::uint32_t");
     setDraftFieldName("value");
+    setAddingEnumValue(false);
+    setEditingEnumValueId(null);
+    setDraftEnumValueName("NewValue");
+    setDraftEnumValueNumber("");
   }, [type.id]);
 
   function beginAddField(): void {
@@ -1840,6 +1920,20 @@ function ProtocolEditor({
     setEditingFieldId(field.id);
     setDraftFieldType(field.type);
     setDraftFieldName(field.name);
+  }
+
+  function beginAddEnumValue(): void {
+    setAddingEnumValue(true);
+    setEditingEnumValueId(null);
+    setDraftEnumValueName(`Value${type.values.length + 1}`);
+    setDraftEnumValueNumber("");
+  }
+
+  function beginEditEnumValue(value: WorkspaceEnumValueView): void {
+    setAddingEnumValue(false);
+    setEditingEnumValueId(value.id);
+    setDraftEnumValueName(value.name);
+    setDraftEnumValueNumber(value.value === undefined ? "" : String(value.value));
   }
 
   async function saveAddedField(): Promise<void> {
@@ -1857,15 +1951,59 @@ function ProtocolEditor({
     if (ok) setEditingFieldId(null);
   }
 
+  async function saveAddedEnumValue(): Promise<void> {
+    const ok = await onAddEnumValueInline(type, draftEnumValueName, draftEnumValueNumber);
+    if (ok) setAddingEnumValue(false);
+  }
+
+  async function saveEditedEnumValue(value: WorkspaceEnumValueView): Promise<void> {
+    const ok = await onUpdateEnumValueInline(type, value, draftEnumValueName, draftEnumValueNumber);
+    if (ok) setEditingEnumValueId(null);
+  }
+
+  async function deleteEditedEnumValue(value: WorkspaceEnumValueView): Promise<void> {
+    const ok = await onDeleteEnumValueInline(type, value);
+    if (ok) setEditingEnumValueId(null);
+  }
+
+  function noteValue(target: { id: string; note?: string }): string {
+    return dirtyNotes[target.id] ?? target.note ?? "";
+  }
+
+  function noteDirty(target: { id: string }): boolean {
+    return dirtyNotes[target.id] !== undefined;
+  }
+
+  function noteEditor(target: { id: string; note?: string }, label: string, compact = false): React.JSX.Element {
+    const dirty = noteDirty(target);
+    return <div className={compact ? "inline-note-editor compact" : "inline-note-editor"}>
+      <textarea
+        aria-label={label}
+        value={noteValue(target)}
+        placeholder="记录语义说明、单位、范围、兼容性约束…"
+        onChange={(event) => onNoteChange(target.id, event.target.value, target.note ?? "")}
+      />
+      <button className="inline-action" disabled={loading || !dirty} onClick={() => void onSaveNote(target.id)}>{dirty ? "保存注释" : "已保存"}</button>
+    </div>;
+  }
+
   return <div className="editor" onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type })}>
     <div className="editor-title">
-      <div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p>{type.note && <p className="note-preview">{type.note}</p>}</div>
+      <div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p></div>
       <div className="editor-actions">
         <span className="status">AST 已同步</span>
         {type.kind === "struct" && <button className="inline-action" disabled={loading} onClick={beginAddField}>添加字段</button>}
+        {type.kind === "enum" && <button className="inline-action" disabled={loading} onClick={beginAddEnumValue}>添加枚举项</button>}
         <button className="inline-action" onClick={onEditType}>{type.kind === "struct" ? "编辑 Struct" : "编辑 Enum"}</button>
       </div>
     </div>
+    <section className="editor-note-card" aria-label={`${type.name} 注释编辑`}>
+      <div>
+        <h3>类型注释</h3>
+        <p>注释会同步到 Header 上方的 <code>/// @protovault-note:</code>，并保留到 .protocol 元数据。</p>
+      </div>
+      {noteEditor(type, `${type.name} 类型注释`)}
+    </section>
     <div className="table-scroll">
     {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>
       {type.fields.map((field) => {
@@ -1875,14 +2013,14 @@ function ProtocolEditor({
             ? <>
                 <td><input className="table-input" aria-label="字段名称" value={draftFieldName} onChange={(event) => setDraftFieldName(event.target.value)} autoFocus /></td>
                 <td><FieldTypeInput compact label="字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={setDraftFieldType} /></td>
-                <td>{field.note || "—"}</td>
+                <td>{noteEditor(field, `${field.name} 字段注释`, true)}</td>
                 <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
                 <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveEditedField(field)}>保存</button><button className="inline-action" disabled={loading} onClick={() => setEditingFieldId(null)}>取消</button><button className="inline-action danger" disabled={loading} onClick={() => void deleteEditedField(field)}>删除</button></div></td>
               </>
             : <>
                 <td>{field.name}</td>
                 <td><code>{field.type}</code></td>
-                <td>{field.note || "—"}</td>
+                <td>{noteEditor(field, `${field.name} 字段注释`, true)}</td>
                 <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
                 <td><div className="row-actions"><button className="inline-action" onClick={() => beginEditField(field)}>编辑</button><button className="inline-action ghost" onClick={() => onEditField(type, field)}>面板</button></div></td>
               </>}
@@ -1895,7 +2033,35 @@ function ProtocolEditor({
         <td>新增</td>
         <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveAddedField()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingField(false)}>取消</button></div></td>
       </tr>}
-    </tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.values.map((value) => <tr className={value.id === selectedMemberId ? "selected-row" : undefined} key={value.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "enum-value", type, value })}><td>{value.name}</td><td>{value.value ?? "自动"}</td><td>{value.note || "—"}</td><td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditEnumValue(type, value)}>编辑</button></td></tr>)}</tbody></table>}
+    </tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>
+      {type.values.map((value) => {
+        const editing = editingEnumValueId === value.id;
+        return <tr className={value.id === selectedMemberId ? "selected-row" : undefined} key={value.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "enum-value", type, value })}>
+          {editing
+            ? <>
+                <td><input className="table-input" aria-label="枚举项名称" value={draftEnumValueName} onChange={(event) => setDraftEnumValueName(event.target.value)} autoFocus /></td>
+                <td><input className="table-input mono" aria-label="枚举值" value={draftEnumValueNumber} onChange={(event) => setDraftEnumValueNumber(event.target.value)} placeholder="自动" /></td>
+                <td>{noteEditor(value, `${value.name} 枚举项注释`, true)}</td>
+                <td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td>
+                <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveEditedEnumValue(value)}>保存</button><button className="inline-action" disabled={loading} onClick={() => setEditingEnumValueId(null)}>取消</button><button className="inline-action danger" disabled={loading} onClick={() => void deleteEditedEnumValue(value)}>删除</button></div></td>
+              </>
+            : <>
+                <td>{value.name}</td>
+                <td>{value.value ?? "自动"}</td>
+                <td>{noteEditor(value, `${value.name} 枚举项注释`, true)}</td>
+                <td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td>
+                <td><div className="row-actions"><button className="inline-action" onClick={() => beginEditEnumValue(value)}>编辑</button><button className="inline-action ghost" onClick={() => onEditEnumValue(type, value)}>面板</button></div></td>
+              </>}
+        </tr>;
+      })}
+      {addingEnumValue && <tr className="draft-row">
+        <td><input className="table-input" aria-label="新增枚举项名称" value={draftEnumValueName} onChange={(event) => setDraftEnumValueName(event.target.value)} autoFocus /></td>
+        <td><input className="table-input mono" aria-label="新增枚举值" value={draftEnumValueNumber} onChange={(event) => setDraftEnumValueNumber(event.target.value)} placeholder="自动" /></td>
+        <td>—</td>
+        <td>新增</td>
+        <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveAddedEnumValue()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingEnumValue(false)}>取消</button></div></td>
+      </tr>}
+    </tbody></table>}
     </div>
   </div>;
 }
@@ -1981,6 +2147,12 @@ function ProtocolInspector({ type, layout, selectedField, selectedEnumValue }: {
   const selectedFieldLayout = selectedField && type.kind === "struct" && layout
     ? layout.fields.find((field) => field.fieldId === selectedField.id)
     : undefined;
+  const readonlyNote = selectedField?.note ?? selectedEnumValue?.note ?? type.note;
+  const readonlyNoteLabel = selectedField
+    ? "当前字段注释"
+    : selectedEnumValue
+      ? "当前枚举项注释"
+      : "类型注释";
 
   return <div className="inspector-stack">
     <dl>
@@ -1988,6 +2160,11 @@ function ProtocolInspector({ type, layout, selectedField, selectedEnumValue }: {
       <dt>名称</dt><dd>{type.name}</dd>
       <dt>限定名</dt><dd className="break">{type.qualifiedName}</dd>
     </dl>
+
+    <section className="property-card">
+      <h3>{readonlyNoteLabel}</h3>
+      <p className="readonly-note">{readonlyNote || "暂无注释；请在中间 Editor 中编辑。"}</p>
+    </section>
 
     {layout && <section className="property-card">
       <h3>内存布局</h3>
