@@ -106,13 +106,14 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(editor.getByLabel("新增字段名称")).toHaveCount(0);
 
     const trackIdRow = page.getByRole("row", { name: /trackId/ });
-    await trackIdRow.getByRole("button", { name: "编辑" }).click();
+    await trackIdRow.dblclick();
     await expect(trackIdRow.getByLabel("字段名称")).toHaveValue("trackId");
     await expect(trackIdRow.getByRole("textbox", { name: "字段类型", exact: true })).toHaveValue("std::uint32_t");
-    await trackIdRow.getByRole("button", { name: "取消" }).click();
-    await expect(trackIdRow.getByRole("button", { name: "编辑" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(trackIdRow.getByRole("textbox", { name: "字段类型", exact: true })).toHaveCount(0);
 
-    await trackIdRow.getByRole("button", { name: "面板" }).click();
+    await trackIdRow.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "编辑字段" }).click();
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑字段");
     await expect(page.getByLabel("字段名称")).toHaveValue("trackId");
@@ -149,6 +150,11 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "打开 Header radar-workspace/headers/common/geometry.hpp" })).toHaveCount(0);
     await page.getByRole("button", { name: "展开目录 common" }).click();
     await expect(page.getByRole("button", { name: "打开 Header radar-workspace/headers/common/geometry.hpp" })).toBeVisible();
+
+    await page.getByRole("button", { name: "demo::radar::RadarTrack", exact: true }).click();
+    await editor.getByRole("button", { name: "demo::common::Timestamp" }).click();
+    await expect(page.getByRole("heading", { name: "Timestamp" })).toBeVisible();
+    await page.getByRole("button", { name: "demo::radar::RadarTrack", exact: true }).click();
 
     const navigatorWidthBefore = await page.locator(".navigator").evaluate((element) => element.getBoundingClientRect().width);
     const leftResizer = page.getByRole("separator", { name: "调整左侧树栏宽度" });
@@ -210,16 +216,25 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await editor.locator("tr.draft-row").getByRole("button", { name: "取消" }).click();
 
     const ecefRow = page.getByRole("row", { name: /ECEF/ });
-    await ecefRow.getByRole("button", { name: "编辑" }).click();
+    const tabStrip = page.getByRole("navigation", { name: "工作区标签页" });
+    await ecefRow.dblclick();
     await expect(ecefRow.getByLabel("枚举项名称")).toHaveValue("ECEF");
     await expect(ecefRow.getByLabel("枚举值")).toHaveValue("2");
-    await ecefRow.getByRole("button", { name: "取消" }).click();
+    await ecefRow.getByLabel("枚举值").fill("bad");
+    await page.keyboard.press("Control+S");
+    await expect(page.getByText("枚举值必须是整数，或留空使用自动编号")).toBeVisible();
+    await expect(ecefRow.getByLabel("枚举值")).toHaveValue("bad");
+    await ecefRow.getByLabel("枚举值").fill("22");
+    await expect(tabStrip.getByRole("button", { name: /CoordinateFrame 未保存/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(ecefRow.getByLabel("枚举值")).toHaveCount(0);
 
     const noteText = `测试坐标系枚举项注释 CtrlS ${Date.now()}`;
     await ecefRow.getByRole("textbox", { name: "ECEF 枚举项注释" }).fill(noteText);
-    const tabStrip = page.getByRole("navigation", { name: "工作区标签页" });
     await expect(tabStrip.getByRole("button", { name: /CoordinateFrame 未保存/ })).toBeVisible();
-    await ecefRow.getByRole("button", { name: "保存注释" }).click();
+    await page.keyboard.press("Control+S");
+    await expect(page.getByText("已保存枚举项：ECEF")).toBeVisible();
+    await page.keyboard.press("Control+S");
     await expect(page.getByText("注释已同步到 Header 和 .protocol/meta/metadata.json")).toBeVisible();
     await expect(tabStrip.getByRole("button", { name: /^(预览|切换到) CoordinateFrame$/ })).toBeVisible();
     await expect.poll(async () => readFile(geometryHeader, "utf8")).toContain(noteText);
