@@ -22,7 +22,9 @@ import type {
   UpdateNoteInput,
   WorkspaceDirectoryView,
   WorkspaceEnumValueView,
+  WorkspaceFieldLayoutView,
   WorkspaceFileView,
+  WorkspaceMemoryLayoutView,
   WorkspaceTypeView,
   WorkspaceView
 } from "../shared/workspace";
@@ -39,6 +41,32 @@ const IGNORED_DIRECTORY_NAMES = new Set([
   "playwright-report",
   "test-results"
 ]);
+
+const BASE_TYPE_SIZE: Record<string, { size: number; alignment: number }> = {
+  "std::int8_t": { size: 1, alignment: 1 },
+  "std::uint8_t": { size: 1, alignment: 1 },
+  "std::int16_t": { size: 2, alignment: 2 },
+  "std::uint16_t": { size: 2, alignment: 2 },
+  "std::int32_t": { size: 4, alignment: 4 },
+  "std::uint32_t": { size: 4, alignment: 4 },
+  "std::int64_t": { size: 8, alignment: 8 },
+  "std::uint64_t": { size: 8, alignment: 8 },
+  int8_t: { size: 1, alignment: 1 },
+  uint8_t: { size: 1, alignment: 1 },
+  int16_t: { size: 2, alignment: 2 },
+  uint16_t: { size: 2, alignment: 2 },
+  int32_t: { size: 4, alignment: 4 },
+  uint32_t: { size: 4, alignment: 4 },
+  int64_t: { size: 8, alignment: 8 },
+  uint64_t: { size: 8, alignment: 8 },
+  float: { size: 4, alignment: 4 },
+  double: { size: 8, alignment: 8 },
+  bool: { size: 1, alignment: 1 },
+  char: { size: 1, alignment: 1 },
+  "std::byte": { size: 1, alignment: 1 }
+};
+
+type SizeInfo = { size: number; alignment: number; supported: true } | { supported: false; reason: string };
 
 interface AstNode {
   id?: string;
@@ -224,6 +252,157 @@ function applyMetadata(workspace: WorkspaceView, metadata: WorkspaceMetadata): W
   };
 }
 
+function applyMemoryLayouts(types: WorkspaceTypeView[]): WorkspaceTypeView[] {
+  return types.map((type) => ({
+    ...type,
+    layout: estimateTypeLayout(types, type)
+  }));
+}
+
+function estimateTypeLayout(types: WorkspaceTypeView[], type: WorkspaceTypeView): WorkspaceMemoryLayoutView {
+  if (type.kind === "enum") {
+    const enumSize = estimateEnumSize(type);
+    if (!enumSize.supported) {
+      return {
+        dataSize: 0,
+        paddingBytes: 0,
+        partial: true,
+        source: "estimated",
+        fields: []
+      };
+    }
+    return {
+      size: enumSize.size,
+      alignment: enumSize.alignment,
+      dataSize: enumSize.size,
+      paddingBytes: 0,
+      partial: !enumSize.supported,
+      source: "estimated",
+      fields: []
+    };
+  }
+  return estimateStructLayout(types, type, new Set([type.id]));
+}
+
+function estimateStructLayout(types: WorkspaceTypeView[], type: WorkspaceTypeView, visited: Set<string>): WorkspaceMemoryLayoutView {
+  let offset = 0;
+  let maxAlignment = 1;
+  let dataSize = 0;
+  let paddingBytes = 0;
+  let partial = false;
+  const fields: WorkspaceFieldLayoutView[] = [];
+
+  for (const field of type.fields) {
+    const info = estimateFieldTypeSize(types, field.type, visited);
+    if (!info.supported) {
+      partial = true;
+      fields.push({
+        fieldId: field.id,
+        name: field.name,
+        type: field.type,
+        paddingBefore: 0,
+        paddingAfter: 0,
+        supported: false,
+        reason: info.reason
+      });
+      continue;
+    }
+
+    const effectiveAlignment = applyPackAlignment(info.alignment, type.pack);
+    const paddingBefore = alignUp(offset, effectiveAlignment) - offset;
+    paddingBytes += paddingBefore;
+    offset += paddingBefore;
+    fields.push({
+      fieldId: field.id,
+      name: field.name,
+      type: field.type,
+      offset,
+      size: info.size,
+      alignment: effectiveAlignment,
+      paddingBefore,
+      paddingAfter: 0,
+      supported: true
+    });
+    offset += info.size;
+    dataSize += info.size;
+    maxAlignment = Math.max(maxAlignment, effectiveAlignment);
+  }
+
+  const size = partial ? undefined : alignUp(offset, maxAlignment);
+  if (!partial && size !== undefined) paddingBytes += size - offset;
+  for (let index = 0; index < fields.length; index += 1) {
+    const current = fields[index];
+    if (!current.supported || current.offset === undefined || current.size === undefined) continue;
+    const next = fields.slice(index + 1).find((field) => field.supported && field.offset !== undefined);
+    const end = current.offset + current.size;
+    current.paddingAfter = next?.offset === undefined ? (size ?? end) - end : next.offset - end;
+  }
+
+  return {
+    size,
+    alignment: partial ? undefined : maxAlignment,
+    dataSize,
+    paddingBytes,
+    partial,
+    pack: type.pack,
+    source: "estimated",
+    fields
+  };
+}
+
+function estimateFieldTypeSize(types: WorkspaceTypeView[], rawType: string, visited: Set<string>): SizeInfo {
+  const normalized = normalizeFieldTypeValue(rawType);
+  if (!normalized) return { supported: false, reason: "字段类型格式暂不支持。" };
+  const scalar = estimateScalarTypeSize(types, normalized.coreType, visited);
+  if (!scalar.supported) return scalar;
+  return { supported: true, size: scalar.size * normalized.arrayLength, alignment: scalar.alignment };
+}
+
+function estimateScalarTypeSize(types: WorkspaceTypeView[], typeName: string, visited: Set<string>): SizeInfo {
+  const base = BASE_TYPE_SIZE[typeName];
+  if (base) return { supported: true, ...base };
+
+  const referencedType = resolveReferencedType(types, typeName);
+  if (!referencedType) return { supported: false, reason: `未在当前工作区类型索引中找到 ${typeName}。` };
+  if (referencedType.kind === "enum") return estimateEnumSize(referencedType);
+  if (visited.has(referencedType.id)) return { supported: false, reason: "递归结构体引用暂不参与布局估算。" };
+
+  const nested = estimateStructLayout(types, referencedType, new Set(visited).add(referencedType.id));
+  if (nested.size === undefined || nested.alignment === undefined || nested.partial) {
+    return { supported: false, reason: `${referencedType.name} 的布局未完全解析。` };
+  }
+  return { supported: true, size: nested.size, alignment: nested.alignment };
+}
+
+function estimateEnumSize(type: WorkspaceTypeView): SizeInfo {
+  const underlying = type.underlyingType ?? "int32_t";
+  const base = BASE_TYPE_SIZE[underlying];
+  if (!base) return { supported: false, reason: `${type.name} 的枚举底层类型 ${underlying} 暂不支持。` };
+  return { supported: true, ...base };
+}
+
+function resolveReferencedType(types: WorkspaceTypeView[], typeName: string): WorkspaceTypeView | undefined {
+  return types.find((type) => type.qualifiedName === typeName)
+    ?? types.find((type) => type.name === typeName);
+}
+
+function normalizeFieldTypeValue(value: string): { coreType: string; arrayLength: number } | null {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(.*?)(?:\s*\[\s*([1-9][0-9]*)\s*\])?$/);
+  if (!match) return null;
+  const coreType = match[1].trim();
+  if (!coreType) return null;
+  return { coreType, arrayLength: match[2] ? Number(match[2]) : 1 };
+}
+
+function applyPackAlignment(alignment: number, pack: number | undefined): number {
+  return pack ? Math.min(alignment, pack) : alignment;
+}
+
+function alignUp(value: number, alignment: number): number {
+  return Math.ceil(value / alignment) * alignment;
+}
+
 function enumValue(node: AstNode): number | undefined {
   const raw = node.value ?? node.inner?.find((child) => child.value !== undefined)?.value;
   if (typeof raw === "boolean") return raw ? 1 : 0;
@@ -262,6 +441,7 @@ function collectTypes(root: AstNode, workspaceRoot: string, defaultFile: string)
           name: node.name,
           qualifiedName,
           file: sourceFile,
+          location: node.loc?.line ? { file: sourceFile, line: node.loc.line, column: node.loc.col ?? 1 } : undefined,
           fields: (node.inner ?? []).filter((child) => child.kind === "FieldDecl" && child.name).map((child) => ({
             id: stableId("field", `${qualifiedName}::${child.name}`),
             name: child.name!,
@@ -284,13 +464,58 @@ function collectTypes(root: AstNode, workspaceRoot: string, defaultFile: string)
   return types;
 }
 
+function applyHeaderLayoutHints(types: WorkspaceTypeView[], content: string): WorkspaceTypeView[] {
+  return types.map((type) => {
+    const line = type.location?.line;
+    const pack = line ? detectPackAtLine(content, line) : undefined;
+    const underlyingType = type.kind === "enum" && line ? detectEnumUnderlyingType(content, line, type.name) : undefined;
+    return {
+      ...type,
+      pack,
+      underlyingType: underlyingType ?? type.underlyingType
+    };
+  });
+}
+
+function detectPackAtLine(content: string, lineNumber: number): number | undefined {
+  const lines = content.split(/\r?\n/).slice(0, Math.max(0, lineNumber - 1));
+  const stack: Array<number | undefined> = [];
+  let current: number | undefined;
+  for (const line of lines) {
+    const push = line.match(/^\s*#\s*pragma\s+pack\s*\(\s*push\s*(?:,\s*([0-9]+))?\s*\)/);
+    if (push) {
+      stack.push(current);
+      if (push[1]) current = Number(push[1]);
+      continue;
+    }
+    const set = line.match(/^\s*#\s*pragma\s+pack\s*\(\s*([0-9]+)\s*\)/);
+    if (set) {
+      current = Number(set[1]);
+      continue;
+    }
+    if (/^\s*#\s*pragma\s+pack\s*\(\s*pop\s*\)/.test(line)) {
+      current = stack.pop();
+    }
+  }
+  return current;
+}
+
+function detectEnumUnderlyingType(content: string, lineNumber: number, enumName: string): string | undefined {
+  const lines = content.split(/\r?\n/);
+  const escapedName = escapeRegExp(enumName);
+  const window = lines.slice(Math.max(0, lineNumber - 1), Math.min(lines.length, lineNumber + 4)).join(" ");
+  const match = window.match(new RegExp(`\\benum\\s+(?:class\\s+)?${escapedName}\\s*:\\s*([^\\s\\{]+)`));
+  return match?.[1]?.trim();
+}
+
 async function scanHeader(clang: string, header: string, root: string, includeRoots: string[]): Promise<WorkspaceTypeView[]> {
   const includeArgs = includeRoots.flatMap((includeRoot) => ["-I", includeRoot]);
   const { stdout } = await execFileAsync(clang, [
     "-x", "c++-header", "-std=c++20", ...includeArgs,
     "-Xclang", "-ast-dump=json", "-fsyntax-only", header
   ], { cwd: root, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-  return collectTypes(JSON.parse(stdout) as AstNode, root, header);
+  const content = await fs.readFile(header, "utf8");
+  return applyHeaderLayoutHints(collectTypes(JSON.parse(stdout) as AstNode, root, header), content);
 }
 
 async function readFileView(path: string, root: string): Promise<WorkspaceFileView> {
@@ -370,7 +595,7 @@ export async function scanWorkspace(rootPath: string): Promise<WorkspaceView> {
         }
       }));
       const deduplicated = new Map(batches.flat().map((type) => [type.id, type]));
-      types = [...deduplicated.values()].sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName));
+      types = applyMemoryLayouts([...deduplicated.values()].sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName)));
     } catch (error) {
       diagnostics.push({ severity: "error", message: error instanceof Error ? error.message : String(error) });
     }

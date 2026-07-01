@@ -14,6 +14,30 @@ export interface WorkspaceEnumValueView {
   location?: { file: string; line: number; column: number };
 }
 
+export interface WorkspaceFieldLayoutView {
+  fieldId: string;
+  name: string;
+  type: string;
+  offset?: number;
+  size?: number;
+  alignment?: number;
+  paddingBefore: number;
+  paddingAfter: number;
+  supported: boolean;
+  reason?: string;
+}
+
+export interface WorkspaceMemoryLayoutView {
+  size?: number;
+  alignment?: number;
+  dataSize: number;
+  paddingBytes: number;
+  partial: boolean;
+  pack?: number;
+  source: "estimated";
+  fields: WorkspaceFieldLayoutView[];
+}
+
 export interface WorkspaceTypeView {
   id: string;
   kind: "struct" | "enum";
@@ -21,6 +45,10 @@ export interface WorkspaceTypeView {
   qualifiedName: string;
   file: string;
   note?: string;
+  pack?: number;
+  underlyingType?: string;
+  location?: { file: string; line: number; column: number };
+  layout?: WorkspaceMemoryLayoutView;
   fields: WorkspaceFieldView[];
   values: WorkspaceEnumValueView[];
 }

@@ -1,7 +1,10 @@
 import { resolve } from "node:path";
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import type { WorkspaceTypeView } from "../shared/workspace";
 import {
   addEnumValue,
   addField,
@@ -22,7 +25,133 @@ import {
   updateNote
 } from "./workspace";
 
+const execFileAsync = promisify(execFile);
 const examplesWorkspace = resolve(import.meta.dirname, "../../../../examples");
+
+type ProbeMetrics = Record<string, number>;
+
+async function findTestClang(): Promise<string> {
+  const candidates = [
+    process.env.PROTOVAULT_CLANGXX,
+    "clang++",
+    "C:/Program Files/LLVM/bin/clang++.exe"
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    try {
+      await execFileAsync(candidate, ["--version"], { windowsHide: true });
+      return candidate;
+    } catch {
+      // try next candidate
+    }
+  }
+  throw new Error("未找到 clang++，无法执行布局交叉验证测试。");
+}
+
+async function runLayoutProbe(): Promise<ProbeMetrics> {
+  const clang = await findTestClang();
+  const root = await mkdtemp(resolve(tmpdir(), "protovault-layout-"));
+  try {
+    const sourcePath = resolve(root, "layout_probe.cpp");
+    const outputPath = resolve(root, process.platform === "win32" ? "layout_probe.exe" : "layout_probe");
+    await writeFile(sourcePath, `
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include "radar-workspace/headers/common/geometry.hpp"
+#include "radar-workspace/headers/common/time.hpp"
+#include "radar-workspace/headers/radar/track.hpp"
+
+#define TYPE_METRIC(ALIAS, TYPE) \\
+  std::cout << ALIAS ".size=" << sizeof(TYPE) << "\\n"; \\
+  std::cout << ALIAS ".align=" << alignof(TYPE) << "\\n";
+
+#define FIELD_METRIC(ALIAS, TYPE, FIELD) \\
+  std::cout << ALIAS "." #FIELD ".offset=" << offsetof(TYPE, FIELD) << "\\n"; \\
+  std::cout << ALIAS "." #FIELD ".size=" << sizeof(((TYPE*)0)->FIELD) << "\\n";
+
+int main() {
+  using demo::common::CoordinateFrame;
+  using demo::common::Pose3D;
+  using demo::common::QualityLevel;
+  using demo::common::Quaternion;
+  using demo::common::SequenceId;
+  using demo::common::Timestamp;
+  using demo::common::Vec3;
+  using demo::radar::RadarTrack;
+  using demo::radar::TrackCluster;
+  using demo::radar::TrackState;
+
+  TYPE_METRIC("Vec3", Vec3)
+  FIELD_METRIC("Vec3", Vec3, x)
+  FIELD_METRIC("Vec3", Vec3, y)
+  FIELD_METRIC("Vec3", Vec3, z)
+
+  TYPE_METRIC("Quaternion", Quaternion)
+  FIELD_METRIC("Quaternion", Quaternion, w)
+  FIELD_METRIC("Quaternion", Quaternion, x)
+  FIELD_METRIC("Quaternion", Quaternion, y)
+  FIELD_METRIC("Quaternion", Quaternion, z)
+
+  TYPE_METRIC("Pose3D", Pose3D)
+  FIELD_METRIC("Pose3D", Pose3D, position)
+  FIELD_METRIC("Pose3D", Pose3D, orientation)
+
+  TYPE_METRIC("Timestamp", Timestamp)
+  FIELD_METRIC("Timestamp", Timestamp, seconds)
+  FIELD_METRIC("Timestamp", Timestamp, nanoseconds)
+
+  TYPE_METRIC("SequenceId", SequenceId)
+  FIELD_METRIC("SequenceId", SequenceId, source)
+  FIELD_METRIC("SequenceId", SequenceId, counter)
+
+  TYPE_METRIC("RadarTrack", RadarTrack)
+  FIELD_METRIC("RadarTrack", RadarTrack, trackId)
+  FIELD_METRIC("RadarTrack", RadarTrack, timestamp)
+  FIELD_METRIC("RadarTrack", RadarTrack, position)
+  FIELD_METRIC("RadarTrack", RadarTrack, velocity)
+  FIELD_METRIC("RadarTrack", RadarTrack, frame)
+  FIELD_METRIC("RadarTrack", RadarTrack, state)
+  FIELD_METRIC("RadarTrack", RadarTrack, confidence)
+  FIELD_METRIC("RadarTrack", RadarTrack, history)
+
+  TYPE_METRIC("TrackCluster", TrackCluster)
+  FIELD_METRIC("TrackCluster", TrackCluster, clusterId)
+  FIELD_METRIC("TrackCluster", TrackCluster, trackCount)
+  FIELD_METRIC("TrackCluster", TrackCluster, trackIds)
+  FIELD_METRIC("TrackCluster", TrackCluster, quality)
+
+  TYPE_METRIC("CoordinateFrame", CoordinateFrame)
+  TYPE_METRIC("QualityLevel", QualityLevel)
+  TYPE_METRIC("TrackState", TrackState)
+}
+`, "utf8");
+    await execFileAsync(clang, ["-std=c++20", sourcePath, "-I", examplesWorkspace, "-o", outputPath], {
+      cwd: root,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024
+    });
+    const { stdout } = await execFileAsync(outputPath, [], { cwd: root, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    return Object.fromEntries(stdout.trim().split(/\r?\n/).map((line) => {
+      const [key, value] = line.split("=");
+      return [key, Number(value)];
+    }));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+function expectLayoutMatchesCompiler(type: WorkspaceTypeView, alias: string, probe: ProbeMetrics): void {
+  expect(type.layout?.partial).toBe(false);
+  expect(type.layout?.size).toBe(probe[`${alias}.size`]);
+  expect(type.layout?.alignment).toBe(probe[`${alias}.align`]);
+  for (const field of type.fields) {
+    const layout = type.layout?.fields.find((item) => item.fieldId === field.id);
+    expect(layout?.supported).toBe(true);
+    expect(layout?.offset).toBe(probe[`${alias}.${field.name}.offset`]);
+    expect(layout?.size).toBe(probe[`${alias}.${field.name}.size`]);
+  }
+}
 
 describe("scanWorkspace", () => {
   it("loads headers when opening the examples parent folder", async () => {
@@ -79,6 +208,34 @@ describe("scanWorkspace", () => {
       { name: "ECEF", value: 2 },
       { name: "SensorBody", value: 3 }
     ]);
+  }, 30_000);
+
+  it("matches compiler sizeof/offsetof for supported layout fixtures", async () => {
+    const workspace = await scanWorkspace(examplesWorkspace);
+    const probe = await runLayoutProbe();
+    const byName = new Map(workspace.types.map((type) => [type.qualifiedName, type]));
+
+    const vec3 = byName.get("demo::common::Vec3")!;
+    const quaternion = byName.get("demo::common::Quaternion")!;
+    const pose = byName.get("demo::common::Pose3D")!;
+    const timestamp = byName.get("demo::common::Timestamp")!;
+    const sequence = byName.get("demo::common::SequenceId")!;
+    const radarTrack = byName.get("demo::radar::RadarTrack")!;
+    const trackCluster = byName.get("demo::radar::TrackCluster")!;
+
+    expectLayoutMatchesCompiler(vec3, "Vec3", probe);
+    expectLayoutMatchesCompiler(quaternion, "Quaternion", probe);
+    expectLayoutMatchesCompiler(pose, "Pose3D", probe);
+    expectLayoutMatchesCompiler(timestamp, "Timestamp", probe);
+    expectLayoutMatchesCompiler(sequence, "SequenceId", probe);
+    expectLayoutMatchesCompiler(radarTrack, "RadarTrack", probe);
+    expectLayoutMatchesCompiler(trackCluster, "TrackCluster", probe);
+
+    expect(radarTrack.pack).toBe(4);
+    expect(trackCluster.pack).toBe(4);
+    expect(byName.get("demo::common::CoordinateFrame")?.layout?.size).toBe(probe["CoordinateFrame.size"]);
+    expect(byName.get("demo::common::QualityLevel")?.layout?.size).toBe(probe["QualityLevel.size"]);
+    expect(byName.get("demo::radar::TrackState")?.layout?.size).toBe(probe["TrackState.size"]);
   }, 30_000);
 
   it("keeps empty folders in the workspace tree", async () => {
