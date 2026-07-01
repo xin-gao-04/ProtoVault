@@ -12,6 +12,9 @@ type ProtocolTreeNode =
 type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit-header" | "edit-struct" | "edit-enum" | "add-field" | "edit-field" | "add-enum-value" | "edit-enum-value";
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
 type FieldTypeOption = { group: "workspace" | "base"; value: string; label: string; detail?: string };
+type SizeInfo = { size: number; align: number; supported: true } | { supported: false; reason: string };
+type StructFieldLayout = { fieldId: string; name: string; type: string; offset?: number; size?: number; align?: number; paddingBefore?: number; supported: boolean; reason?: string };
+type TypeLayoutSummary = { kind: "struct"; size?: number; align?: number; dataSize: number; padding: number; partial: boolean; fields: StructFieldLayout[] } | { kind: "enum"; size: number; align: number; partial: boolean };
 type ContextMenuState = {
   x: number;
   y: number;
@@ -38,6 +41,22 @@ const SUPPORTED_BASE_FIELD_TYPES = [
   "char",
   "std::byte"
 ];
+
+const BASE_TYPE_SIZE: Record<string, { size: number; align: number }> = {
+  "std::int8_t": { size: 1, align: 1 },
+  "std::uint8_t": { size: 1, align: 1 },
+  "std::int16_t": { size: 2, align: 2 },
+  "std::uint16_t": { size: 2, align: 2 },
+  "std::int32_t": { size: 4, align: 4 },
+  "std::uint32_t": { size: 4, align: 4 },
+  "std::int64_t": { size: 8, align: 8 },
+  "std::uint64_t": { size: 8, align: 8 },
+  float: { size: 4, align: 4 },
+  double: { size: 8, align: 8 },
+  bool: { size: 1, align: 1 },
+  char: { size: 1, align: 1 },
+  "std::byte": { size: 1, align: 1 }
+};
 
 function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
@@ -74,7 +93,6 @@ function App(): React.JSX.Element {
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const selectedField = selectedType?.fields.find((field) => field.id === selectedMemberId);
   const selectedEnumValue = selectedType?.values.find((value) => value.id === selectedMemberId);
-  const selectedMemberName = selectedField?.name ?? selectedEnumValue?.name;
   const selectedNoteTarget = selectedField
     ? { id: selectedField.id, label: `字段 ${selectedType?.name}.${selectedField.name}`, note: selectedField.note ?? "" }
     : selectedEnumValue
@@ -84,6 +102,10 @@ function App(): React.JSX.Element {
         : null;
   const selectedFieldTypeOptions = React.useMemo(
     () => workspace && selectedType ? buildFieldTypeOptions(workspace, selectedType) : buildBaseFieldTypeOptions(),
+    [workspace, selectedType]
+  );
+  const selectedLayout = React.useMemo(
+    () => workspace && selectedType ? estimateTypeLayout(workspace, selectedType) : null,
     [workspace, selectedType]
   );
   const tree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
@@ -1027,7 +1049,7 @@ function App(): React.JSX.Element {
       <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
       <aside className="inspector">
         <h2>属性</h2>
-        {selectedType ? <dl><dt>类型</dt><dd>{selectedType.kind}</dd><dt>名称</dt><dd>{selectedType.name}</dd>{selectedMemberName && <><dt>当前项</dt><dd>{selectedMemberName}</dd></>}<dt>成员</dt><dd>{selectedType.kind === "struct" ? selectedType.fields.length : selectedType.values.length}</dd><dt>来源</dt><dd className="break">{selectedType.file}</dd></dl>
+        {selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
         {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
@@ -1148,6 +1170,82 @@ function validateFieldTypeValue(value: string, options: FieldTypeOption[]): stri
     return "字段类型不在支持范围内；请从类型索引选择，或输入索引中的类型/定长数组。";
   }
   return null;
+}
+
+function estimateTypeLayout(workspace: WorkspaceView, type: WorkspaceTypeView): TypeLayoutSummary {
+  if (type.kind === "enum") return { kind: "enum", size: 4, align: 4, partial: false };
+  return estimateStructLayout(workspace, type, new Set([type.id]));
+}
+
+function estimateStructLayout(workspace: WorkspaceView, type: WorkspaceTypeView, visited: Set<string>): Extract<TypeLayoutSummary, { kind: "struct" }> {
+  let offset = 0;
+  let maxAlign = 1;
+  let dataSize = 0;
+  let padding = 0;
+  let partial = false;
+  const fields: StructFieldLayout[] = [];
+
+  for (const field of type.fields) {
+    const info = estimateFieldTypeSize(workspace, field.type, visited);
+    if (!info.supported) {
+      partial = true;
+      fields.push({ fieldId: field.id, name: field.name, type: field.type, supported: false, reason: info.reason });
+      continue;
+    }
+
+    const paddingBefore = alignUp(offset, info.align) - offset;
+    padding += paddingBefore;
+    offset += paddingBefore;
+    fields.push({
+      fieldId: field.id,
+      name: field.name,
+      type: field.type,
+      offset,
+      size: info.size,
+      align: info.align,
+      paddingBefore,
+      supported: true
+    });
+    offset += info.size;
+    dataSize += info.size;
+    maxAlign = Math.max(maxAlign, info.align);
+  }
+
+  const finalSize = partial ? undefined : alignUp(offset, maxAlign);
+  if (!partial && finalSize !== undefined) padding += finalSize - offset;
+  return { kind: "struct", size: finalSize, align: partial ? undefined : maxAlign, dataSize, padding, partial, fields };
+}
+
+function estimateFieldTypeSize(workspace: WorkspaceView, rawType: string, visited: Set<string>): SizeInfo {
+  const normalized = normalizeFieldTypeValue(rawType);
+  if (!normalized) return { supported: false, reason: "字段类型格式暂不支持。" };
+
+  const arrayMatch = normalized.arraySuffix.match(/^\[([1-9][0-9]*)\]$/);
+  const arrayLength = arrayMatch ? Number(arrayMatch[1]) : 1;
+  const scalar = estimateScalarTypeSize(workspace, normalized.coreType, visited);
+  if (!scalar.supported) return scalar;
+  return { supported: true, size: scalar.size * arrayLength, align: scalar.align };
+}
+
+function estimateScalarTypeSize(workspace: WorkspaceView, typeName: string, visited: Set<string>): SizeInfo {
+  const base = BASE_TYPE_SIZE[typeName];
+  if (base) return { supported: true, ...base };
+
+  const referencedType = workspace.types.find((type) => type.qualifiedName === typeName || type.name === typeName);
+  if (!referencedType) return { supported: false, reason: `未在当前工作区类型索引中找到 ${typeName}。` };
+  if (referencedType.kind === "enum") return { supported: true, size: 4, align: 4 };
+  if (visited.has(referencedType.id)) return { supported: false, reason: "递归结构体引用暂不参与布局估算。" };
+
+  const nextVisited = new Set(visited).add(referencedType.id);
+  const nested = estimateStructLayout(workspace, referencedType, nextVisited);
+  if (nested.size === undefined || nested.align === undefined) {
+    return { supported: false, reason: `${referencedType.name} 的布局未完全解析。` };
+  }
+  return { supported: true, size: nested.size, align: nested.align };
+}
+
+function alignUp(value: number, alignment: number): number {
+  return Math.ceil(value / alignment) * alignment;
 }
 
 function initialExpandedNodeIds(nodes: ProtocolTreeNode[], selectedTypeId: string | null): Set<string> {
@@ -1812,6 +1910,78 @@ function ContextMenu({
   return <div className="context-menu" role="menu" aria-label="上下文菜单" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
     {items.map((item) => <button key={item.label} role="menuitem" disabled={item.disabled} onClick={() => { item.action(); onClose(); }}>{item.label}</button>)}
   </div>;
+}
+
+function ProtocolInspector({ type, layout, selectedField, selectedEnumValue }: {
+  type: WorkspaceTypeView;
+  layout: TypeLayoutSummary | null;
+  selectedField?: WorkspaceFieldView;
+  selectedEnumValue?: WorkspaceEnumValueView;
+}): React.JSX.Element {
+  const selectedFieldLayout = selectedField && layout?.kind === "struct"
+    ? layout.fields.find((field) => field.fieldId === selectedField.id)
+    : undefined;
+
+  return <div className="inspector-stack">
+    <dl>
+      <dt>对象</dt><dd>{type.kind === "struct" ? "Struct" : "Enum"}</dd>
+      <dt>名称</dt><dd>{type.name}</dd>
+      <dt>限定名</dt><dd className="break">{type.qualifiedName}</dd>
+    </dl>
+
+    {layout && <section className="property-card">
+      <h3>内存布局</h3>
+      {layout.kind === "struct"
+        ? <dl>
+            <dt>大小</dt><dd>{layout.size === undefined ? "未完全解析" : formatBytes(layout.size)}</dd>
+            <dt>对齐</dt><dd>{layout.align === undefined ? "—" : `${layout.align} B`}</dd>
+            <dt>数据</dt><dd>{formatBytes(layout.dataSize)}</dd>
+            <dt>Padding</dt><dd>{formatBytes(layout.padding)}</dd>
+            <dt>状态</dt><dd>{layout.partial ? "估算 / 部分类型未支持" : "估算完成"}</dd>
+          </dl>
+        : <dl>
+            <dt>大小</dt><dd>{formatBytes(layout.size)}</dd>
+            <dt>对齐</dt><dd>{layout.align} B</dd>
+            <dt>状态</dt><dd>{layout.partial ? "估算" : "估算完成"}</dd>
+          </dl>}
+      <small>当前为前端估算值；P4 会接入编译器 sizeof/offsetof 基准。</small>
+    </section>}
+
+    {selectedField && <section className="property-card">
+      <h3>当前字段</h3>
+      <dl>
+        <dt>名称</dt><dd>{selectedField.name}</dd>
+        <dt>类型</dt><dd><code>{selectedField.type}</code></dd>
+        <dt>Offset</dt><dd>{selectedFieldLayout?.offset === undefined ? "—" : `${selectedFieldLayout.offset} B`}</dd>
+        <dt>大小</dt><dd>{selectedFieldLayout?.size === undefined ? "未解析" : formatBytes(selectedFieldLayout.size)}</dd>
+        <dt>对齐</dt><dd>{selectedFieldLayout?.align === undefined ? "—" : `${selectedFieldLayout.align} B`}</dd>
+        <dt>前置空隙</dt><dd>{formatBytes(selectedFieldLayout?.paddingBefore ?? 0)}</dd>
+      </dl>
+      {selectedFieldLayout && !selectedFieldLayout.supported && <p className="property-warning">{selectedFieldLayout.reason}</p>}
+    </section>}
+
+    {selectedEnumValue && <section className="property-card">
+      <h3>当前枚举项</h3>
+      <dl>
+        <dt>名称</dt><dd>{selectedEnumValue.name}</dd>
+        <dt>值</dt><dd>{selectedEnumValue.value ?? "自动"}</dd>
+      </dl>
+    </section>}
+
+    {layout?.kind === "struct" && layout.fields.length > 0 && <section className="property-card">
+      <h3>字段布局</h3>
+      <div className="field-layout-list">
+        {layout.fields.map((field) => <div className={field.fieldId === selectedField?.id ? "field-layout-row active" : "field-layout-row"} key={field.fieldId}>
+          <span>{field.name}</span>
+          <small>{field.offset === undefined ? "?" : `${field.offset} B`} · {field.size === undefined ? "?" : `${field.size} B`}</small>
+        </div>)}
+      </div>
+    </section>}
+  </div>;
+}
+
+function formatBytes(value: number): string {
+  return `${value} B`;
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);

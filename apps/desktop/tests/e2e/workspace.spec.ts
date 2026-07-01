@@ -32,6 +32,9 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await radarTrack.dblclick();
     await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();
     await expect(page.getByRole("button", { name: "预览 RadarTrack", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "内存布局" })).toBeVisible();
+    await expect(page.getByText("Padding")).toBeVisible();
+    await expect(page.getByText("字段布局")).toBeVisible();
     await page.keyboard.press("F2");
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑数据结构");
@@ -113,6 +116,8 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑字段");
     await expect(page.getByLabel("字段名称")).toHaveValue("velocity");
+    await expect(page.getByRole("heading", { name: "当前字段" })).toBeVisible();
+    await expect(page.getByText("Offset", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "RadarTrack confidence" }).click();
     await expect(page.getByLabel("字段名称")).toHaveValue("confidence");
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
