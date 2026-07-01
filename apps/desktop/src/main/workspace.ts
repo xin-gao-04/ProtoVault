@@ -25,6 +25,7 @@ import type {
   WorkspaceFieldLayoutView,
   WorkspaceFileView,
   WorkspaceMemoryLayoutView,
+  WorkspaceScanProgress,
   WorkspaceTypeView,
   WorkspaceView
 } from "../shared/workspace";
@@ -67,6 +68,10 @@ const BASE_TYPE_SIZE: Record<string, { size: number; alignment: number }> = {
 };
 
 type SizeInfo = { size: number; alignment: number; supported: true } | { supported: false; reason: string };
+
+interface ScanWorkspaceOptions {
+  onProgress?: (progress: WorkspaceScanProgress) => void;
+}
 
 interface AstNode {
   id?: string;
@@ -240,6 +245,14 @@ async function writeMetadata(root: string, metadata: WorkspaceMetadata): Promise
   await atomicWriteFile(metadataPath(root), `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
+function mergeMetadataWithSourceNotes(metadata: WorkspaceMetadata, sourceNotes: Record<string, string>): WorkspaceMetadata {
+  return { schemaVersion: 1, notes: { ...metadata.notes, ...sourceNotes } };
+}
+
+function metadataEquals(left: WorkspaceMetadata, right: WorkspaceMetadata): boolean {
+  return JSON.stringify(left.notes) === JSON.stringify(right.notes);
+}
+
 function applyMetadata(workspace: WorkspaceView, metadata: WorkspaceMetadata): WorkspaceView {
   return {
     ...workspace,
@@ -250,6 +263,53 @@ function applyMetadata(workspace: WorkspaceView, metadata: WorkspaceMetadata): W
       values: type.values.map((value) => ({ ...value, note: metadata.notes[value.id] }))
     }))
   };
+}
+
+async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<Record<string, string>> {
+  const notes: Record<string, string> = {};
+  const contentByFile = new Map<string, string[]>();
+
+  async function linesFor(file: string): Promise<string[]> {
+    const cached = contentByFile.get(file);
+    if (cached) return cached;
+    const lines = (await fs.readFile(file, "utf8")).split(/\r?\n/);
+    contentByFile.set(file, lines);
+    return lines;
+  }
+
+  async function noteBefore(file: string, line?: number): Promise<string | undefined> {
+    if (!line) return undefined;
+    const lines = await linesFor(file);
+    const lineIndex = line - 1;
+    if (lineIndex <= 0 || lineIndex > lines.length) return undefined;
+    const noteLines: string[] = [];
+    for (let index = lineIndex - 1; index >= 0; index -= 1) {
+      const match = lines[index]?.match(NOTE_COMMENT_PATTERN);
+      if (!match) break;
+      noteLines.unshift(match[1] ?? "");
+    }
+    const note = noteLines.join("\n").trim();
+    return note || undefined;
+  }
+
+  for (const type of types) {
+    const typeNote = await noteBefore(type.file, type.location?.line);
+    if (typeNote) notes[type.id] = typeNote;
+    for (const field of type.fields) {
+      const fieldNote = await noteBefore(type.file, field.location?.line);
+      if (fieldNote) notes[field.id] = fieldNote;
+    }
+    for (const value of type.values) {
+      const valueNote = await noteBefore(type.file, value.location?.line);
+      if (valueNote) notes[value.id] = valueNote;
+    }
+  }
+
+  return notes;
+}
+
+function emitProgress(options: ScanWorkspaceOptions | undefined, progress: WorkspaceScanProgress): void {
+  options?.onProgress?.(progress);
 }
 
 function applyMemoryLayouts(types: WorkspaceTypeView[]): WorkspaceTypeView[] {
@@ -567,15 +627,27 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
   return recordPath;
 }
 
-export async function scanWorkspace(rootPath: string): Promise<WorkspaceView> {
+export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOptions): Promise<WorkspaceView> {
   const root = resolve(rootPath);
+  emitProgress(options, { phase: "discover", message: "正在检查工作区目录…", current: 0, total: 1 });
   const stat = await fs.stat(root);
   if (!stat.isDirectory()) throw new Error("请选择工作区文件夹，而不是单个文件。");
 
   const discovery = await discoverWorkspace(root);
   const headers = discovery.headers;
   const directories = discovery.directories.map((directory) => readDirectoryView(directory, root));
-  const files = await Promise.all(headers.map((header) => readFileView(header, root)));
+  emitProgress(options, { phase: "read", message: `发现 ${headers.length} 个 Header，正在读取文件…`, current: 0, total: Math.max(headers.length, 1) });
+  const files: WorkspaceFileView[] = [];
+  for (const [index, header] of headers.entries()) {
+    files.push(await readFileView(header, root));
+    emitProgress(options, {
+      phase: "read",
+      message: `读取 Header：${relative(root, header).replaceAll("\\", "/")}`,
+      current: index + 1,
+      total: Math.max(headers.length, 1),
+      file: header
+    });
+  }
   const diagnostics: WorkspaceView["diagnostics"] = [];
   let scanner = "Clang AST";
   let types: WorkspaceTypeView[] = [];
@@ -587,13 +659,25 @@ export async function scanWorkspace(rootPath: string): Promise<WorkspaceView> {
       const clang = await findClang();
       const includeRoots = [root, ...discovery.directories];
       scanner = `Clang AST · ${clang}`;
-      const batches = await Promise.all(headers.map(async (header) => {
-        try { return await scanHeader(clang, header, root, includeRoots); }
+      const batches: WorkspaceTypeView[][] = [];
+      emitProgress(options, { phase: "parse", message: "正在启动 Clang AST 扫描…", current: 0, total: headers.length });
+      for (const [index, header] of headers.entries()) {
+        try {
+          batches.push(await scanHeader(clang, header, root, includeRoots));
+        }
         catch (error) {
           diagnostics.push({ severity: "error", file: header, message: error instanceof Error ? error.message : String(error) });
-          return [];
+          batches.push([]);
+        } finally {
+          emitProgress(options, {
+            phase: "parse",
+            message: `解析 Header：${relative(root, header).replaceAll("\\", "/")}`,
+            current: index + 1,
+            total: headers.length,
+            file: header
+          });
         }
-      }));
+      }
       const deduplicated = new Map(batches.flat().map((type) => [type.id, type]));
       types = applyMemoryLayouts([...deduplicated.values()].sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName)));
     } catch (error) {
@@ -602,13 +686,21 @@ export async function scanWorkspace(rootPath: string): Promise<WorkspaceView> {
   }
 
   let workspace: WorkspaceView = { name: basename(root), rootPath: root, directories, files, types, diagnostics, scanner };
-  workspace = applyMetadata(workspace, await readMetadata(root));
+  emitProgress(options, { phase: "metadata", message: "正在合并 Header 注释与协议元数据…", current: 0, total: 1 });
+  const diskMetadata = await readMetadata(root);
+  const sourceNotes = await collectSourceNotes(types);
+  const metadata = mergeMetadataWithSourceNotes(diskMetadata, sourceNotes);
+  if (!metadataEquals(diskMetadata, metadata)) {
+    await writeMetadata(root, metadata);
+  }
+  workspace = applyMetadata(workspace, metadata);
   try {
     workspace.metadataPath = await writeWorkspaceRecord(workspace);
   } catch (error) {
     diagnostics.push({ severity: "warning", message: `目录记录写入失败：${error instanceof Error ? error.message : String(error)}` });
   }
 
+  emitProgress(options, { phase: "done", message: `扫描完成：${files.length} Headers · ${types.length} Types`, current: 1, total: 1 });
   return workspace;
 }
 

@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import type { WorkspaceEnumValueView, WorkspaceFieldView, WorkspaceFileView, WorkspaceMemoryLayoutView, WorkspaceTypeView, WorkspaceView } from "../../shared/workspace";
+import type { WorkspaceEnumValueView, WorkspaceFieldView, WorkspaceFileView, WorkspaceMemoryLayoutView, WorkspaceScanProgress, WorkspaceTypeView, WorkspaceView } from "../../shared/workspace";
 import "./styles.css";
 
 type ProtocolTreeNode =
@@ -50,6 +50,7 @@ function App(): React.JSX.Element {
   const [inspectorWidth, setInspectorWidth] = React.useState(260);
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [scanProgress, setScanProgress] = React.useState<WorkspaceScanProgress | null>(null);
   const [activeAction, setActiveAction] = React.useState<WorkspaceAction | null>(null);
   const [headerRelativePath, setHeaderRelativePath] = React.useState("");
   const [structName, setStructName] = React.useState("NewProtocol");
@@ -127,9 +128,14 @@ function App(): React.JSX.Element {
       .catch(() => setHealth("本地协议服务不可用"));
   }, []);
 
+  React.useEffect(() => window.protoVault.onScanProgress((progress) => {
+    setScanProgress(progress);
+  }), []);
+
   React.useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setScanProgress({ phase: "discover", message: "正在尝试恢复上次工作区…", current: 0, total: 1 });
     window.protoVault.restoreLastWorkspace()
       .then((result) => {
         if (cancelled || !result) return;
@@ -177,6 +183,7 @@ function App(): React.JSX.Element {
 
   async function openWorkspace(sample: boolean): Promise<void> {
     setLoading(true);
+    setScanProgress({ phase: "discover", message: sample ? "正在加载示例工作区…" : "正在打开本地工作区…", current: 0, total: 1 });
     try {
       const result = sample ? await window.protoVault.openSampleWorkspace() : await window.protoVault.openWorkspace();
       if (result) {
@@ -947,6 +954,7 @@ function App(): React.JSX.Element {
             <small className="health">{health}</small>
           </div>
         </header>
+        {(loading || scanProgress?.phase === "done") && scanProgress && <ScanProgressBar progress={scanProgress} active={loading} />}
         {!workspace && <article>
           <p className="eyebrow">PROTO VAULT · MVP</p>
           <h2>让散落在 Header 中的协议<br />成为可管理的工程资产。</h2>
@@ -1235,6 +1243,19 @@ function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView): Workspac
     const type = types.get(tab.typeId);
     return type ? [tabForType(type)] : [];
   });
+}
+
+function ScanProgressBar({ progress, active }: { progress: WorkspaceScanProgress; active: boolean }): React.JSX.Element {
+  const percent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+  return <div className={active ? "scan-progress active" : "scan-progress"} role="status" aria-label="扫描进度">
+    <div className="scan-progress-copy">
+      <span>{progress.message}</span>
+      <small>{progress.phase === "done" ? "完成" : `${Math.min(percent, 100)}%`}</small>
+    </div>
+    <div className="scan-progress-track" aria-hidden="true">
+      <div style={{ width: `${Math.min(percent, 100)}%` }} />
+    </div>
+  </div>;
 }
 
 function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onClose }: {
@@ -1760,6 +1781,7 @@ function ProtocolEditor({
         <button className="inline-action" onClick={onEditType}>{type.kind === "struct" ? "编辑 Struct" : "编辑 Enum"}</button>
       </div>
     </div>
+    <div className="table-scroll">
     {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>
       {type.fields.map((field) => {
         const editing = editingFieldId === field.id;
@@ -1789,6 +1811,7 @@ function ProtocolEditor({
         <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveAddedField()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingField(false)}>取消</button></div></td>
       </tr>}
     </tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.values.map((value) => <tr className={value.id === selectedMemberId ? "selected-row" : undefined} key={value.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "enum-value", type, value })}><td>{value.name}</td><td>{value.value ?? "自动"}</td><td>{value.note || "—"}</td><td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditEnumValue(type, value)}>编辑</button></td></tr>)}</tbody></table>}
+    </div>
   </div>;
 }
 

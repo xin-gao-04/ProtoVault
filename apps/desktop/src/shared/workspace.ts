@@ -76,6 +76,14 @@ export interface WorkspaceView {
   scanner: string;
 }
 
+export interface WorkspaceScanProgress {
+  phase: "discover" | "read" | "parse" | "metadata" | "done";
+  message: string;
+  current: number;
+  total: number;
+  file?: string;
+}
+
 export interface CreateHeaderInput {
   workspaceRoot: string;
   relativePath: string;

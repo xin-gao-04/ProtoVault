@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AddFieldInput,
   AddEnumValueInput,
@@ -16,6 +16,7 @@ import type {
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateNoteInput,
+  WorkspaceScanProgress,
   WorkspaceView
 } from "../shared/workspace";
 
@@ -24,6 +25,7 @@ export interface ProtoVaultDesktopApi {
   openSampleWorkspace(): Promise<WorkspaceView>;
   openWorkspace(): Promise<WorkspaceView | null>;
   restoreLastWorkspace(): Promise<WorkspaceView | null>;
+  onScanProgress(listener: (progress: WorkspaceScanProgress) => void): () => void;
   createHeader(input: CreateHeaderInput): Promise<WorkspaceView>;
   createStruct(input: CreateStructInput): Promise<WorkspaceView>;
   createEnum(input: CreateEnumInput): Promise<WorkspaceView>;
@@ -47,6 +49,11 @@ contextBridge.exposeInMainWorld("protoVault", {
   openSampleWorkspace: () => ipcRenderer.invoke("workspace:open-sample"),
   openWorkspace: () => ipcRenderer.invoke("workspace:open"),
   restoreLastWorkspace: () => ipcRenderer.invoke("workspace:restore-last"),
+  onScanProgress: (listener) => {
+    const wrapped = (_event: IpcRendererEvent, progress: WorkspaceScanProgress): void => listener(progress);
+    ipcRenderer.on("workspace:scan-progress", wrapped);
+    return () => ipcRenderer.removeListener("workspace:scan-progress", wrapped);
+  },
   createHeader: (input) => ipcRenderer.invoke("protocol:create-header", input),
   createStruct: (input) => ipcRenderer.invoke("protocol:create-struct", input),
   createEnum: (input) => ipcRenderer.invoke("protocol:create-enum", input),

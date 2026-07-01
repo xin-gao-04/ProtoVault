@@ -213,6 +213,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.keyboard.press("Control+S");
     await expect(page.getByText("注释已同步到 Header 和 .protocol/meta/metadata.json")).toBeVisible();
     await expect(page.getByRole("button", { name: "切换到 CoordinateFrame", exact: true })).toBeVisible();
+    await expect.poll(async () => readFile(geometryHeader, "utf8")).toContain(noteText);
   } finally {
     await application.close();
     await writeFile(geometryHeader, originalGeometryHeader, "utf8");

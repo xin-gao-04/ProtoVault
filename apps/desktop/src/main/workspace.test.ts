@@ -167,8 +167,11 @@ describe("scanWorkspace", () => {
     expect(workspace.files.map((file) => file.relativePath)).toEqual([
       "radar-workspace/headers/common/geometry.hpp",
       "radar-workspace/headers/common/time.hpp",
+      "radar-workspace/headers/control/commands.hpp",
+      "radar-workspace/headers/diagnostics/faults.hpp",
       "radar-workspace/headers/radar/detection.hpp",
-      "radar-workspace/headers/radar/track.hpp"
+      "radar-workspace/headers/radar/track.hpp",
+      "radar-workspace/headers/telemetry/status.hpp"
     ]);
     expect(workspace.files.find((file) => file.relativePath.endsWith("track.hpp"))?.content).toContain("struct RadarTrack");
     expect(workspace.types.map((type) => type.qualifiedName)).toEqual(expect.arrayContaining([
@@ -177,9 +180,12 @@ describe("scanWorkspace", () => {
       "demo::common::QualityLevel",
       "demo::common::Timestamp",
       "demo::common::Vec3",
+      "demo::control::TrackRegionCommand",
+      "demo::diagnostics::FaultEvent",
       "demo::radar::DetectionFrame",
       "demo::radar::RadarDetection",
-      "demo::radar::RadarTrack"
+      "demo::radar::RadarTrack",
+      "demo::telemetry::NodeStatus"
     ]));
     expect(workspace.types.map((type) => type.qualifiedName)).not.toContain("__vcrt_va_list_is_reference");
 
@@ -208,6 +214,20 @@ describe("scanWorkspace", () => {
       { name: "ECEF", value: 2 },
       { name: "SensorBody", value: 3 }
     ]);
+  }, 30_000);
+
+  it("emits scan progress for large workspace feedback", async () => {
+    const events: string[] = [];
+    const workspace = await scanWorkspace(examplesWorkspace, {
+      onProgress: (progress) => events.push(`${progress.phase}:${progress.current}/${progress.total}`)
+    });
+
+    expect(workspace.files.length).toBeGreaterThanOrEqual(7);
+    expect(events.some((event) => event.startsWith("discover:"))).toBe(true);
+    expect(events.some((event) => event.startsWith("read:"))).toBe(true);
+    expect(events.some((event) => event.startsWith("parse:"))).toBe(true);
+    expect(events.some((event) => event.startsWith("metadata:"))).toBe(true);
+    expect(events.at(-1)).toBe("done:1/1");
   }, 30_000);
 
   it("matches compiler sizeof/offsetof for supported layout fixtures", async () => {
@@ -469,6 +489,51 @@ describe("scanWorkspace", () => {
       expect(headerContent).toContain("/// @protovault-note: 业务侧稳定 ID");
       expect(headerContent).toContain("/// @protovault-note: 消息类型枚举");
       expect(headerContent).toContain("/// @protovault-note: 缺省值");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("imports controlled notes from header comments during scan", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-source-notes-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "annotated.hpp"), `#pragma once
+#include <cstdint>
+
+namespace demo {
+
+/// @protovault-note: 源码结构注释
+struct Packet {
+  /// @protovault-note: 源码字段注释
+  std::uint32_t id;
+};
+
+/// @protovault-note: 源码枚举注释
+enum class PacketState : std::uint8_t {
+  /// @protovault-note: 源码枚举项注释
+  Ready = 1,
+};
+
+}  // namespace demo
+`, "utf8");
+
+      const workspace = await scanWorkspace(root);
+      const packet = workspace.types.find((type) => type.qualifiedName === "demo::Packet")!;
+      const state = workspace.types.find((type) => type.qualifiedName === "demo::PacketState")!;
+
+      expect(packet.note).toBe("源码结构注释");
+      expect(packet.fields.find((field) => field.name === "id")?.note).toBe("源码字段注释");
+      expect(state.note).toBe("源码枚举注释");
+      expect(state.values.find((value) => value.name === "Ready")?.note).toBe("源码枚举项注释");
+
+      const metadata = JSON.parse(await readFile(resolve(root, ".protocol", "meta", "metadata.json"), "utf8")) as { notes: Record<string, string> };
+      expect(Object.values(metadata.notes)).toEqual(expect.arrayContaining([
+        "源码结构注释",
+        "源码字段注释",
+        "源码枚举注释",
+        "源码枚举项注释"
+      ]));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
