@@ -3,16 +3,23 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
+  addEnumValue,
   addField,
+  createEnum,
   createHeader,
   createStruct,
+  deleteEnum,
+  deleteEnumValue,
   deleteField,
   deleteHeader,
   deleteStruct,
+  renameEnum,
   renameHeader,
   renameStruct,
   scanWorkspace,
-  updateField
+  updateEnumValue,
+  updateField,
+  updateNote
 } from "./workspace";
 
 const examplesWorkspace = resolve(import.meta.dirname, "../../../../examples");
@@ -66,7 +73,7 @@ describe("scanWorkspace", () => {
       ["history", "std::uint16_t[8]"]
     ]);
 
-    expect(coordinateFrame?.values).toEqual([
+    expect(coordinateFrame?.values.map((value) => ({ name: value.name, value: value.value }))).toEqual([
       { name: "Unknown", value: 0 },
       { name: "ENU", value: 1 },
       { name: "ECEF", value: 2 },
@@ -207,6 +214,98 @@ describe("scanWorkspace", () => {
         headerPath: resolve(root, "headers", "renamed.hpp")
       });
       expect(workspace.files).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("creates, updates, deletes enums and enum values", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-enum-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/enums.hpp" });
+      let workspace = await createEnum({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "enums.hpp"),
+        enumName: "PacketKind"
+      });
+      let packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::PacketKind");
+      expect(packetKind?.kind).toBe("enum");
+      expect(packetKind?.values.map((value) => [value.name, value.value])).toEqual([["Unknown", 0]]);
+
+      workspace = await addEnumValue({
+        workspaceRoot: root,
+        typeId: packetKind!.id,
+        valueName: "Telemetry",
+        value: 7
+      });
+      packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::PacketKind");
+      expect(packetKind?.values.map((value) => [value.name, value.value])).toEqual([["Unknown", 0], ["Telemetry", 7]]);
+
+      workspace = await updateEnumValue({
+        workspaceRoot: root,
+        typeId: packetKind!.id,
+        valueId: packetKind!.values.find((value) => value.name === "Telemetry")!.id,
+        valueName: "Track",
+        value: 8
+      });
+      packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::PacketKind");
+      expect(packetKind?.values.map((value) => [value.name, value.value])).toEqual([["Unknown", 0], ["Track", 8]]);
+
+      workspace = await deleteEnumValue({
+        workspaceRoot: root,
+        typeId: packetKind!.id,
+        valueId: packetKind!.values.find((value) => value.name === "Track")!.id
+      });
+      packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::PacketKind");
+      expect(packetKind?.values.map((value) => value.name)).toEqual(["Unknown"]);
+
+      workspace = await renameEnum({ workspaceRoot: root, typeId: packetKind!.id, enumName: "MessageKind" });
+      packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::MessageKind");
+      expect(packetKind).toBeTruthy();
+      expect(await readFile(resolve(root, "headers", "enums.hpp"), "utf8")).toContain("enum class MessageKind");
+
+      workspace = await deleteEnum({ workspaceRoot: root, typeId: packetKind!.id });
+      expect(workspace.types.map((type) => type.qualifiedName)).not.toContain("protovault::MessageKind");
+      expect(await readFile(resolve(root, "headers", "enums.hpp"), "utf8")).not.toContain("enum class MessageKind");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("persists semantic notes for structs, fields, enums, and enum values across rescans", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-meta-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/meta.hpp" });
+      let workspace = await createStruct({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "meta.hpp"),
+        structName: "AnnotatedPacket"
+      });
+      workspace = await createEnum({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "meta.hpp"),
+        enumName: "AnnotatedKind"
+      });
+      const packet = workspace.types.find((type) => type.qualifiedName === "protovault::AnnotatedPacket")!;
+      const field = packet.fields.find((item) => item.name === "id")!;
+      const kind = workspace.types.find((type) => type.qualifiedName === "protovault::AnnotatedKind")!;
+      const unknown = kind.values.find((item) => item.name === "Unknown")!;
+
+      await updateNote({ workspaceRoot: root, targetId: packet.id, note: "协议包头结构" });
+      await updateNote({ workspaceRoot: root, targetId: field.id, note: "业务侧稳定 ID" });
+      await updateNote({ workspaceRoot: root, targetId: kind.id, note: "消息类型枚举" });
+      workspace = await updateNote({ workspaceRoot: root, targetId: unknown.id, note: "缺省值" });
+
+      const rescanned = await scanWorkspace(root);
+      const rescannedPacket = rescanned.types.find((type) => type.qualifiedName === "protovault::AnnotatedPacket")!;
+      const rescannedKind = rescanned.types.find((type) => type.qualifiedName === "protovault::AnnotatedKind")!;
+      expect(rescannedPacket.note).toBe("协议包头结构");
+      expect(rescannedPacket.fields.find((item) => item.name === "id")?.note).toBe("业务侧稳定 ID");
+      expect(rescannedKind.note).toBe("消息类型枚举");
+      expect(rescannedKind.values.find((item) => item.name === "Unknown")?.note).toBe("缺省值");
+
+      const metadata = JSON.parse(await readFile(resolve(root, ".protocol", "meta", "metadata.json"), "utf8")) as { notes: Record<string, string> };
+      expect(Object.values(metadata.notes)).toEqual(expect.arrayContaining(["协议包头结构", "业务侧稳定 ID", "消息类型枚举", "缺省值"]));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

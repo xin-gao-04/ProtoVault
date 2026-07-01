@@ -5,15 +5,23 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { promisify } from "node:util";
 import type {
   AddFieldInput,
+  AddEnumValueInput,
+  CreateEnumInput,
   CreateHeaderInput,
   CreateStructInput,
+  DeleteEnumInput,
+  DeleteEnumValueInput,
   DeleteHeaderInput,
   DeleteFieldInput,
   DeleteStructInput,
+  RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
+  UpdateEnumValueInput,
   UpdateFieldInput,
+  UpdateNoteInput,
   WorkspaceDirectoryView,
+  WorkspaceEnumValueView,
   WorkspaceFileView,
   WorkspaceTypeView,
   WorkspaceView
@@ -161,11 +169,57 @@ function structPattern(structName: string): RegExp {
   return new RegExp(`(struct\\s+)${structName}(\\s*\\{[\\s\\S]*?\\n\\s*\\};)`);
 }
 
+function enumPattern(enumName: string): RegExp {
+  return new RegExp(`(enum\\s+(?:class\\s+)?)${enumName}([^\\{]*\\{[\\s\\S]*?\\n\\s*\\};)`);
+}
+
+function enumBlockPattern(enumName: string): RegExp {
+  return new RegExp(`(enum\\s+(?:class\\s+)?${enumName}[^\\{]*\\{)([\\s\\S]*?)(\\n\\s*\\};)`);
+}
+
+function enumValueDeclaration(valueName: string, value?: number): string {
+  return `${valueName}${value === undefined ? "" : ` = ${value}`},`;
+}
+
 async function atomicWriteFile(targetPath: string, content: string): Promise<void> {
   await fs.mkdir(dirname(targetPath), { recursive: true });
   const tempPath = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${Date.now()}.tmp`);
   await fs.writeFile(tempPath, content, "utf8");
   await fs.rename(tempPath, targetPath);
+}
+
+interface WorkspaceMetadata {
+  schemaVersion: 1;
+  notes: Record<string, string>;
+}
+
+function metadataPath(root: string): string {
+  return join(root, ".protocol", "meta", "metadata.json");
+}
+
+async function readMetadata(root: string): Promise<WorkspaceMetadata> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(metadataPath(root), "utf8")) as Partial<WorkspaceMetadata>;
+    return { schemaVersion: 1, notes: parsed.notes ?? {} };
+  } catch {
+    return { schemaVersion: 1, notes: {} };
+  }
+}
+
+async function writeMetadata(root: string, metadata: WorkspaceMetadata): Promise<void> {
+  await atomicWriteFile(metadataPath(root), `${JSON.stringify(metadata, null, 2)}\n`);
+}
+
+function applyMetadata(workspace: WorkspaceView, metadata: WorkspaceMetadata): WorkspaceView {
+  return {
+    ...workspace,
+    types: workspace.types.map((type) => ({
+      ...type,
+      note: metadata.notes[type.id],
+      fields: type.fields.map((field) => ({ ...field, note: metadata.notes[field.id] })),
+      values: type.values.map((value) => ({ ...value, note: metadata.notes[value.id] }))
+    }))
+  };
 }
 
 function enumValue(node: AstNode): number | undefined {
@@ -213,8 +267,10 @@ function collectTypes(root: AstNode, workspaceRoot: string, defaultFile: string)
             location: child.loc?.line ? { file: sourceFile, line: child.loc.line, column: child.loc.col ?? 1 } : undefined
           })),
           values: (node.inner ?? []).filter((child) => child.kind === "EnumConstantDecl" && child.name).map((child) => ({
+            id: stableId("enum-value", `${qualifiedName}::${child.name}`),
             name: child.name!,
-            value: enumValue(child)
+            value: enumValue(child),
+            location: child.loc?.line ? { file: sourceFile, line: child.loc.line, column: child.loc.col ?? 1 } : undefined
           }))
         });
       }
@@ -318,7 +374,8 @@ export async function scanWorkspace(rootPath: string): Promise<WorkspaceView> {
     }
   }
 
-  const workspace: WorkspaceView = { name: basename(root), rootPath: root, directories, files, types, diagnostics, scanner };
+  let workspace: WorkspaceView = { name: basename(root), rootPath: root, directories, files, types, diagnostics, scanner };
+  workspace = applyMetadata(workspace, await readMetadata(root));
   try {
     workspace.metadataPath = await writeWorkspaceRecord(workspace);
   } catch (error) {
@@ -355,6 +412,21 @@ export async function createStruct(input: CreateStructInput): Promise<WorkspaceV
   const content = await fs.readFile(header, "utf8");
   if (new RegExp(`\\bstruct\\s+${structName}\\b`).test(content)) throw new Error(`结构体已存在：${structName}`);
   const insertion = `\nstruct ${structName} {\n  std::uint32_t id;\n};\n`;
+  const namespaceMarker = content.match(/\n}\s*\/\/\s*namespace\s+[A-Za-z0-9_:]+\s*(?=\n|$)/);
+  const nextContent = namespaceMarker?.index !== undefined
+    ? `${content.slice(0, namespaceMarker.index)}${insertion}${content.slice(namespaceMarker.index)}`
+    : `${content.trimEnd()}\n${insertion}\n`;
+  await atomicWriteFile(header, nextContent);
+  return scanWorkspace(root);
+}
+
+export async function createEnum(input: CreateEnumInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const header = assertWorkspaceFile(root, input.headerPath);
+  const enumName = sanitizeCppIdentifier(input.enumName, "枚举名称");
+  const content = await fs.readFile(header, "utf8");
+  if (new RegExp(`\\benum\\s+(?:class\\s+)?${enumName}\\b`).test(content)) throw new Error(`枚举已存在：${enumName}`);
+  const insertion = `\nenum class ${enumName} : std::uint8_t {\n  Unknown = 0,\n};\n`;
   const namespaceMarker = content.match(/\n}\s*\/\/\s*namespace\s+[A-Za-z0-9_:]+\s*(?=\n|$)/);
   const nextContent = namespaceMarker?.index !== undefined
     ? `${content.slice(0, namespaceMarker.index)}${insertion}${content.slice(namespaceMarker.index)}`
@@ -418,6 +490,42 @@ export async function deleteStruct(input: DeleteStructInput): Promise<WorkspaceV
   const pattern = new RegExp(`\\n?struct\\s+${targetType.name}\\s*\\{[\\s\\S]*?\\n\\s*\\};\\n?`);
   const match = pattern.exec(content);
   if (!match) throw new Error(`无法在 Header 中定位 struct ${targetType.name} 的受控编辑区域。`);
+  const nextContent = `${content.slice(0, match.index)}\n${content.slice(match.index + match[0].length)}`.replace(/\n{3,}/g, "\n\n");
+  await atomicWriteFile(header, nextContent);
+  return scanWorkspace(root);
+}
+
+export async function renameEnum(input: RenameEnumInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const targetType = workspace.types.find((type) => type.id === input.typeId);
+  if (!targetType) throw new Error("未找到要重命名的枚举。");
+  if (targetType.kind !== "enum") throw new Error("当前操作只支持 enum。");
+  const enumName = sanitizeCppIdentifier(input.enumName, "枚举名称");
+  if (enumName !== targetType.name && workspace.types.some((type) => type.file === targetType.file && type.name === enumName)) {
+    throw new Error(`类型已存在：${enumName}`);
+  }
+  const header = assertWorkspaceFile(root, targetType.file);
+  const content = await fs.readFile(header, "utf8");
+  const pattern = enumPattern(targetType.name);
+  const match = pattern.exec(content);
+  if (!match) throw new Error(`无法在 Header 中定位 enum ${targetType.name} 的受控编辑区域。`);
+  const nextContent = `${content.slice(0, match.index)}${match[1]}${enumName}${match[2]}${content.slice(match.index + match[0].length)}`;
+  await atomicWriteFile(header, nextContent);
+  return scanWorkspace(root);
+}
+
+export async function deleteEnum(input: DeleteEnumInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const targetType = workspace.types.find((type) => type.id === input.typeId);
+  if (!targetType) throw new Error("未找到要删除的枚举。");
+  if (targetType.kind !== "enum") throw new Error("当前操作只支持 enum。");
+  const header = assertWorkspaceFile(root, targetType.file);
+  const content = await fs.readFile(header, "utf8");
+  const pattern = new RegExp(`\\n?enum\\s+(?:class\\s+)?${targetType.name}[^\\{]*\\{[\\s\\S]*?\\n\\s*\\};\\n?`);
+  const match = pattern.exec(content);
+  if (!match) throw new Error(`无法在 Header 中定位 enum ${targetType.name} 的受控编辑区域。`);
   const nextContent = `${content.slice(0, match.index)}\n${content.slice(match.index + match[0].length)}`.replace(/\n{3,}/g, "\n\n");
   await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
@@ -491,5 +599,89 @@ export async function deleteField(input: DeleteFieldInput): Promise<WorkspaceVie
   const { header, lines, lineIndex } = await findEditableField(root, input.typeId, input.fieldId);
   lines.splice(lineIndex, 1);
   await atomicWriteFile(header, lines.join("\n"));
+  return scanWorkspace(root);
+}
+
+async function findEditableEnumValue(root: string, typeId: string, valueId: string): Promise<{
+  targetType: WorkspaceTypeView;
+  targetValue: WorkspaceEnumValueView;
+  header: string;
+  lines: string[];
+  lineIndex: number;
+}> {
+  const workspace = await scanWorkspace(root);
+  const targetType = workspace.types.find((type) => type.id === typeId);
+  if (!targetType) throw new Error("未找到要编辑的枚举。");
+  if (targetType.kind !== "enum") throw new Error("只能编辑 enum 枚举项。");
+  const targetValue = targetType.values.find((value) => value.id === valueId);
+  if (!targetValue) throw new Error("未找到要编辑的枚举项。");
+  if (!targetValue.location?.line) throw new Error("该枚举项缺少源码位置，暂不能受控编辑。");
+  const header = assertWorkspaceFile(root, targetType.file);
+  const content = await fs.readFile(header, "utf8");
+  const lines = content.split(/\r?\n/);
+  const lineIndex = targetValue.location.line - 1;
+  const line = lines[lineIndex] ?? "";
+  if (!new RegExp(`\\b${targetValue.name}\\b`).test(line)) {
+    throw new Error(`无法在 Header 中定位枚举项声明行：${targetValue.name}`);
+  }
+  return { targetType, targetValue, header, lines, lineIndex };
+}
+
+export async function addEnumValue(input: AddEnumValueInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const targetType = workspace.types.find((type) => type.id === input.typeId);
+  if (!targetType) throw new Error("未找到要编辑的枚举。");
+  if (targetType.kind !== "enum") throw new Error("只能向 enum 添加枚举项。");
+  const valueName = sanitizeCppIdentifier(input.valueName, "枚举项名称");
+  if (targetType.values.some((value) => value.name === valueName)) throw new Error(`枚举项已存在：${valueName}`);
+  const header = assertWorkspaceFile(root, targetType.file);
+  const content = await fs.readFile(header, "utf8");
+  const pattern = enumBlockPattern(targetType.name);
+  const match = pattern.exec(content);
+  if (!match) throw new Error(`无法在 Header 中定位 enum ${targetType.name} 的受控编辑区域。`);
+  const body = match[2].trimEnd();
+  const nextBody = `${body}\n  ${enumValueDeclaration(valueName, input.value)}`;
+  const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
+  await atomicWriteFile(header, nextContent);
+  return scanWorkspace(root);
+}
+
+export async function updateEnumValue(input: UpdateEnumValueInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const { targetType, targetValue, header, lines, lineIndex } = await findEditableEnumValue(root, input.typeId, input.valueId);
+  const valueName = sanitizeCppIdentifier(input.valueName, "枚举项名称");
+  if (valueName !== targetValue.name && targetType.values.some((value) => value.name === valueName)) {
+    throw new Error(`枚举项已存在：${valueName}`);
+  }
+  const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "  ";
+  lines[lineIndex] = `${indent}${enumValueDeclaration(valueName, input.value)}`;
+  await atomicWriteFile(header, lines.join("\n"));
+  return scanWorkspace(root);
+}
+
+export async function deleteEnumValue(input: DeleteEnumValueInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const { header, lines, lineIndex } = await findEditableEnumValue(root, input.typeId, input.valueId);
+  lines.splice(lineIndex, 1);
+  await atomicWriteFile(header, lines.join("\n"));
+  return scanWorkspace(root);
+}
+
+export async function updateNote(input: UpdateNoteInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const validIds = new Set<string>();
+  for (const type of workspace.types) {
+    validIds.add(type.id);
+    type.fields.forEach((field) => validIds.add(field.id));
+    type.values.forEach((value) => validIds.add(value.id));
+  }
+  if (!validIds.has(input.targetId)) throw new Error("未找到要记录注释的协议对象。");
+  const metadata = await readMetadata(root);
+  const note = input.note.trim();
+  if (note) metadata.notes[input.targetId] = note;
+  else delete metadata.notes[input.targetId];
+  await writeMetadata(root, metadata);
   return scanWorkspace(root);
 }

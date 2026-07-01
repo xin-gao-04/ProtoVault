@@ -1,15 +1,15 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import type { WorkspaceFieldView, WorkspaceFileView, WorkspaceTypeView, WorkspaceView } from "../../shared/workspace";
+import type { WorkspaceEnumValueView, WorkspaceFieldView, WorkspaceFileView, WorkspaceTypeView, WorkspaceView } from "../../shared/workspace";
 import "./styles.css";
 
 type ProtocolTreeNode =
   | { id: string; kind: "folder"; name: string; children: ProtocolTreeNode[] }
   | { id: string; kind: "file"; name: string; file: WorkspaceFileView; children: ProtocolTreeNode[] }
   | { id: string; kind: "type"; name: string; type: WorkspaceTypeView; children: ProtocolTreeNode[] }
-  | { id: string; kind: "field"; name: string; parent: WorkspaceTypeView; field?: WorkspaceFieldView; enumValue?: WorkspaceTypeView["values"][number] };
+  | { id: string; kind: "field"; name: string; parent: WorkspaceTypeView; field?: WorkspaceFieldView; enumValue?: WorkspaceEnumValueView };
 
-type WorkspaceAction = "create-header" | "create-struct" | "edit-header" | "edit-struct" | "add-field" | "edit-field";
+type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit-header" | "edit-struct" | "edit-enum" | "add-field" | "edit-field" | "add-enum-value" | "edit-enum-value";
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
 type ContextMenuState = {
   x: number;
@@ -18,7 +18,8 @@ type ContextMenuState = {
     | { kind: "workspace" }
     | { kind: "file"; file: WorkspaceFileView }
     | { kind: "type"; type: WorkspaceTypeView }
-    | { kind: "field"; type: WorkspaceTypeView; field: WorkspaceFieldView };
+    | { kind: "field"; type: WorkspaceTypeView; field: WorkspaceFieldView }
+    | { kind: "enum-value"; type: WorkspaceTypeView; value: WorkspaceEnumValueView };
 };
 
 function App(): React.JSX.Element {
@@ -36,18 +37,33 @@ function App(): React.JSX.Element {
   const [headerRelativePath, setHeaderRelativePath] = React.useState("");
   const [structName, setStructName] = React.useState("NewProtocol");
   const [structHeaderPath, setStructHeaderPath] = React.useState("");
+  const [enumName, setEnumName] = React.useState("NewEnum");
+  const [enumHeaderPath, setEnumHeaderPath] = React.useState("");
   const [headerEditRelativePath, setHeaderEditRelativePath] = React.useState("");
   const [structEditName, setStructEditName] = React.useState("");
+  const [enumEditName, setEnumEditName] = React.useState("");
   const [fieldType, setFieldType] = React.useState("std::uint32_t");
   const [fieldName, setFieldName] = React.useState("value");
   const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
+  const [enumValueName, setEnumValueName] = React.useState("Unknown");
+  const [enumValueNumber, setEnumValueNumber] = React.useState("0");
+  const [editingEnumValueId, setEditingEnumValueId] = React.useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = React.useState("");
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const [contextMenu, setContextMenu] = React.useState<ContextMenuState | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
-  const selectedMemberName = selectedType?.fields.find((field) => field.id === selectedMemberId)?.name
-    ?? selectedType?.values.find((value) => `enum-value:${selectedType.id}:${value.name}` === selectedMemberId)?.name;
+  const selectedField = selectedType?.fields.find((field) => field.id === selectedMemberId);
+  const selectedEnumValue = selectedType?.values.find((value) => value.id === selectedMemberId);
+  const selectedMemberName = selectedField?.name ?? selectedEnumValue?.name;
+  const selectedNoteTarget = selectedField
+    ? { id: selectedField.id, label: `字段 ${selectedType?.name}.${selectedField.name}`, note: selectedField.note ?? "" }
+    : selectedEnumValue
+      ? { id: selectedEnumValue.id, label: `枚举项 ${selectedType?.name}.${selectedEnumValue.name}`, note: selectedEnumValue.note ?? "" }
+      : selectedType
+        ? { id: selectedType.id, label: `${selectedType.kind === "struct" ? "Struct" : "Enum"} ${selectedType.qualifiedName}`, note: selectedType.note ?? "" }
+        : null;
   const tree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
 
   const applyWorkspaceResult = React.useCallback((result: WorkspaceView, options?: {
@@ -107,6 +123,10 @@ function App(): React.JSX.Element {
   }, [uiNotice]);
 
   React.useEffect(() => {
+    setNoteDraft(selectedNoteTarget?.note ?? "");
+  }, [selectedNoteTarget?.id, selectedNoteTarget?.note]);
+
+  React.useEffect(() => {
     function closeMenu(): void {
       setContextMenu(null);
     }
@@ -158,6 +178,10 @@ function App(): React.JSX.Element {
       setStructName("NewProtocol");
       setStructHeaderPath(selectedFilePath ?? selectedType?.file ?? workspace.files[0]?.path ?? "");
     }
+    if (action === "create-enum") {
+      setEnumName("NewEnum");
+      setEnumHeaderPath(selectedFilePath ?? selectedType?.file ?? workspace.files[0]?.path ?? "");
+    }
     if (action === "edit-header") {
       const file = selectedFile ?? workspace.files.find((item) => item.path === selectedType?.file) ?? workspace.files[0];
       if (!file) return;
@@ -170,9 +194,18 @@ function App(): React.JSX.Element {
       if (!selectedType || selectedType.kind !== "struct") return;
       setStructEditName(selectedType.name);
     }
+    if (action === "edit-enum") {
+      if (!selectedType || selectedType.kind !== "enum") return;
+      setEnumEditName(selectedType.name);
+    }
     if (action === "add-field") {
       setFieldType("std::uint32_t");
       setFieldName("value");
+    }
+    if (action === "add-enum-value") {
+      setEnumValueName("Unknown");
+      setEnumValueNumber("");
+      setEditingEnumValueId(null);
     }
     setActiveAction(action);
   }
@@ -185,8 +218,19 @@ function App(): React.JSX.Element {
         return;
       }
     }
+    if (selectedMemberId && selectedType?.kind === "enum") {
+      const value = selectedType.values.find((item) => item.id === selectedMemberId);
+      if (value) {
+        openEditEnumValueAction(selectedType, value);
+        return;
+      }
+    }
     if (selectedType?.kind === "struct") {
       openStructuredAction("edit-struct");
+      return;
+    }
+    if (selectedType?.kind === "enum") {
+      openStructuredAction("edit-enum");
       return;
     }
     if (selectedFile) {
@@ -215,12 +259,13 @@ function App(): React.JSX.Element {
 
   function editType(type: WorkspaceTypeView): void {
     openTypeTab(type);
-    if (type.kind !== "struct") {
-      setUiNotice("当前仅支持编辑 struct");
-      return;
+    if (type.kind === "struct") {
+      setStructEditName(type.name);
+      setActiveAction("edit-struct");
+    } else {
+      setEnumEditName(type.name);
+      setActiveAction("edit-enum");
     }
-    setStructEditName(type.name);
-    setActiveAction("edit-struct");
   }
 
   function syncActionForFileSelection(file: WorkspaceFileView): void {
@@ -230,8 +275,13 @@ function App(): React.JSX.Element {
       setStructHeaderPath(file.path);
       return;
     }
+    if (activeAction === "create-enum") {
+      setEnumHeaderPath(file.path);
+      return;
+    }
     setHeaderEditRelativePath(file.relativePath);
     setEditingFieldId(null);
+    setEditingEnumValueId(null);
     setActiveAction("edit-header");
   }
 
@@ -242,10 +292,29 @@ function App(): React.JSX.Element {
       setStructHeaderPath(type.file);
       return;
     }
-    if (type.kind !== "struct") {
-      setActiveAction(null);
+    if (activeAction === "create-enum") {
+      setEnumHeaderPath(type.file);
+      return;
+    }
+    if (type.kind === "enum") {
+      const value = memberId ? type.values.find((item) => item.id === memberId) : undefined;
       setEditingFieldId(null);
-      setUiNotice("当前 enum 暂不支持结构化编辑");
+      if (value) {
+        setEnumValueName(value.name);
+        setEnumValueNumber(value.value === undefined ? "" : String(value.value));
+        setEditingEnumValueId(value.id);
+        setActiveAction("edit-enum-value");
+        return;
+      }
+      if (activeAction === "add-enum-value") {
+        setEnumValueName("Unknown");
+        setEnumValueNumber("");
+        setEditingEnumValueId(null);
+        return;
+      }
+      setEnumEditName(type.name);
+      setEditingEnumValueId(null);
+      setActiveAction("edit-enum");
       return;
     }
     const field = memberId ? type.fields.find((item) => item.id === memberId) : undefined;
@@ -264,6 +333,7 @@ function App(): React.JSX.Element {
     }
     setStructEditName(type.name);
     setEditingFieldId(null);
+    setEditingEnumValueId(null);
     setActiveAction("edit-struct");
   }
 
@@ -298,6 +368,26 @@ function App(): React.JSX.Element {
       const result = await window.protoVault.createStruct({ workspaceRoot: workspace.rootPath, headerPath, structName: nextStructName });
       applyWorkspaceResult(result, { selectTypeName: nextStructName });
       setUiNotice(`已创建数据结构：${nextStructName}`);
+      setActiveAction(null);
+    });
+  }
+
+  async function createEnumFromForm(): Promise<void> {
+    if (!workspace) return;
+    const headerPath = enumHeaderPath || selectedFilePath || selectedType?.file || workspace.files[0]?.path;
+    if (!headerPath) {
+      setUiNotice("当前工作区还没有 Header，请先新建 Header 文件");
+      return;
+    }
+    const nextEnumName = enumName.trim();
+    if (!nextEnumName) {
+      setUiNotice("枚举名称不能为空");
+      return;
+    }
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.createEnum({ workspaceRoot: workspace.rootPath, headerPath, enumName: nextEnumName });
+      applyWorkspaceResult(result, { selectTypeName: nextEnumName });
+      setUiNotice(`已创建枚举：${nextEnumName}`);
       setActiveAction(null);
     });
   }
@@ -354,6 +444,32 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function renameEnumFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "enum") return;
+    const nextName = enumEditName.trim();
+    if (!nextName) {
+      setUiNotice("枚举名称不能为空");
+      return;
+    }
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.renameEnum({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, enumName: nextName });
+      applyWorkspaceResult(result, { selectTypeName: nextName });
+      setUiNotice(`已重命名枚举：${nextName}`);
+      setActiveAction(null);
+    });
+  }
+
+  async function deleteEnumFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "enum") return;
+    if (!window.confirm(`确认删除 enum？\n${selectedType.qualifiedName}`)) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.deleteEnum({ workspaceRoot: workspace.rootPath, typeId: selectedType.id });
+      applyWorkspaceResult(result);
+      setUiNotice(`已删除枚举：${selectedType.name}`);
+      setActiveAction(null);
+    });
+  }
+
   async function addFieldFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "struct") return;
     const nextFieldType = fieldType.trim();
@@ -395,6 +511,84 @@ function App(): React.JSX.Element {
       setUiNotice("字段已删除");
       setActiveAction(null);
       setEditingFieldId(null);
+    });
+  }
+
+  function parseOptionalEnumNumber(value: string): number | undefined {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed)) throw new Error("枚举值必须是整数，或留空使用自动编号");
+    return parsed;
+  }
+
+  async function addEnumValueFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "enum") return;
+    const nextValueName = enumValueName.trim();
+    if (!nextValueName) {
+      setUiNotice("枚举项名称不能为空");
+      return;
+    }
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.addEnumValue({
+        workspaceRoot: workspace.rootPath,
+        typeId: selectedType.id,
+        valueName: nextValueName,
+        value: parseOptionalEnumNumber(enumValueNumber)
+      });
+      setWorkspace(result);
+      const nextType = result.types.find((type) => type.name === selectedType.name);
+      const nextValue = nextType?.values.find((value) => value.name === nextValueName);
+      setSelectedTypeId(nextType?.id ?? selectedType.id);
+      setSelectedMemberId(nextValue?.id ?? null);
+      setUiNotice(`已添加枚举项：${nextValueName}`);
+      setActiveAction(null);
+    });
+  }
+
+  async function updateEnumValueFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "enum" || !editingEnumValueId) return;
+    const nextValueName = enumValueName.trim();
+    if (!nextValueName) {
+      setUiNotice("枚举项名称不能为空");
+      return;
+    }
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateEnumValue({
+        workspaceRoot: workspace.rootPath,
+        typeId: selectedType.id,
+        valueId: editingEnumValueId,
+        valueName: nextValueName,
+        value: parseOptionalEnumNumber(enumValueNumber)
+      });
+      setWorkspace(result);
+      const nextType = result.types.find((type) => type.name === selectedType.name);
+      const nextValue = nextType?.values.find((value) => value.name === nextValueName);
+      setSelectedTypeId(nextType?.id ?? selectedType.id);
+      setSelectedMemberId(nextValue?.id ?? null);
+      setUiNotice(`已更新枚举项：${nextValueName}`);
+      setActiveAction(null);
+      setEditingEnumValueId(null);
+    });
+  }
+
+  async function deleteEnumValueFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "enum" || !editingEnumValueId) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.deleteEnumValue({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, valueId: editingEnumValueId });
+      applyWorkspaceResult(result, { selectTypeName: selectedType.name });
+      setUiNotice("枚举项已删除");
+      setActiveAction(null);
+      setEditingEnumValueId(null);
+    });
+  }
+
+  async function saveNote(): Promise<void> {
+    if (!workspace || !selectedNoteTarget) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateNote({ workspaceRoot: workspace.rootPath, targetId: selectedNoteTarget.id, note: noteDraft });
+      setWorkspace(result);
+      setUiNotice("注释已保存到 .protocol/meta/metadata.json");
     });
   }
 
@@ -467,6 +661,14 @@ function App(): React.JSX.Element {
     setActiveAction("edit-field");
   }
 
+  function openEditEnumValueAction(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void {
+    openTypeTab(type, value.id);
+    setEnumValueName(value.name);
+    setEnumValueNumber(value.value === undefined ? "" : String(value.value));
+    setEditingEnumValueId(value.id);
+    setActiveAction("edit-enum-value");
+  }
+
   function toggleNode(nodeId: string): void {
     setExpandedNodeIds((current) => {
       const next = new Set(current);
@@ -525,8 +727,10 @@ function App(): React.JSX.Element {
         </div>
         <div className="tree-actions" aria-label="协议树操作">
           <button aria-label="新增数据结构" title="新增数据结构" disabled={!workspace || loading} onClick={() => openStructuredAction("create-struct")}>✎</button>
+          <button aria-label="新增枚举" title="新增枚举" disabled={!workspace || loading} onClick={() => openStructuredAction("create-enum")}>E＋</button>
           <button aria-label="新建 Header 文件" title="新建 Header 文件" disabled={!workspace || loading} onClick={() => openStructuredAction("create-header")}>▣＋</button>
           <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => openStructuredAction("add-field")}>＋f</button>
+          <button aria-label="添加枚举项" title="添加枚举项" disabled={selectedType?.kind !== "enum" || loading} onClick={() => openStructuredAction("add-enum-value")}>＋#</button>
           <button aria-label="排序协议树" title="排序协议树" disabled={!workspace} onClick={() => setUiNotice("协议树已按目录、Header、类型排序")}>↥</button>
           <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}>⌃⌄</button>
         </div>
@@ -593,27 +797,43 @@ function App(): React.JSX.Element {
           structHeaderPath={structHeaderPath}
           structName={structName}
           structEditName={structEditName}
+          enumHeaderPath={enumHeaderPath}
+          enumName={enumName}
+          enumEditName={enumEditName}
           fieldType={fieldType}
           fieldName={fieldName}
+          enumValueName={enumValueName}
+          enumValueNumber={enumValueNumber}
           onHeaderRelativePathChange={setHeaderRelativePath}
           onHeaderEditRelativePathChange={setHeaderEditRelativePath}
           onStructHeaderPathChange={setStructHeaderPath}
           onStructNameChange={setStructName}
           onStructEditNameChange={setStructEditName}
+          onEnumHeaderPathChange={setEnumHeaderPath}
+          onEnumNameChange={setEnumName}
+          onEnumEditNameChange={setEnumEditName}
           onFieldTypeChange={setFieldType}
           onFieldNameChange={setFieldName}
+          onEnumValueNameChange={setEnumValueName}
+          onEnumValueNumberChange={setEnumValueNumber}
           onCancel={() => setActiveAction(null)}
           onCreateHeader={() => void createHeaderFromForm()}
           onCreateStruct={() => void createStructFromForm()}
+          onCreateEnum={() => void createEnumFromForm()}
           onRenameHeader={() => void renameHeaderFromForm()}
           onDeleteHeader={() => void deleteHeaderFromForm()}
           onRenameStruct={() => void renameStructFromForm()}
           onDeleteStruct={() => void deleteStructFromForm()}
+          onRenameEnum={() => void renameEnumFromForm()}
+          onDeleteEnum={() => void deleteEnumFromForm()}
           onAddField={() => void addFieldFromForm()}
           onUpdateField={() => void updateFieldFromForm()}
           onDeleteField={() => void deleteFieldFromForm()}
+          onAddEnumValue={() => void addEnumValueFromForm()}
+          onUpdateEnumValue={() => void updateEnumValueFromForm()}
+          onDeleteEnumValue={() => void deleteEnumValueFromForm()}
         />}
-        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditType={() => openStructuredAction("edit-struct")} onEditField={openEditFieldAction} onOpenContextMenu={openContextMenu} />}
+        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditType={() => openStructuredAction(selectedType.kind === "struct" ? "edit-struct" : "edit-enum")} onEditField={openEditFieldAction} onEditEnumValue={openEditEnumValueAction} onOpenContextMenu={openContextMenu} />}
         {workspace && selectedFile && <SourceViewer file={selectedFile} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
         {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
         {workspace && contextMenu && <ContextMenu
@@ -626,15 +846,29 @@ function App(): React.JSX.Element {
             setStructHeaderPath(file.path);
             setActiveAction("create-struct");
           })}
+          onCreateEnum={(file) => runContextAction(() => {
+            openFileTab(file);
+            setEnumName("NewEnum");
+            setEnumHeaderPath(file.path);
+            setActiveAction("create-enum");
+          })}
           onAddField={(type) => runContextAction(() => {
             openTypeTab(type);
             setFieldType("std::uint32_t");
             setFieldName("value");
             setActiveAction("add-field");
           })}
+          onAddEnumValue={(type) => runContextAction(() => {
+            openTypeTab(type);
+            setEnumValueName("Unknown");
+            setEnumValueNumber("");
+            setEditingEnumValueId(null);
+            setActiveAction("add-enum-value");
+          })}
           onEditFile={(file) => runContextAction(() => editFile(file))}
           onEditType={(type) => runContextAction(() => editType(type))}
           onEditField={(type, field) => runContextAction(() => openEditFieldAction(type, field))}
+          onEditEnumValue={(type, value) => runContextAction(() => openEditEnumValueAction(type, value))}
         />}
       </section>
       <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
@@ -644,6 +878,12 @@ function App(): React.JSX.Element {
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
         {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
+        {workspace && selectedNoteTarget && <section className="metadata-editor" aria-label="注释编辑">
+          <h2>注释</h2>
+          <p>{selectedNoteTarget.label}</p>
+          <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录语义说明、单位、范围、兼容性约束…" />
+          <button type="button" disabled={loading} onClick={() => void saveNote()}>保存注释</button>
+        </section>}
       </aside>
     </main>
   );
@@ -702,7 +942,7 @@ function typeNode(type: WorkspaceTypeView): ProtocolTreeNode {
     type,
     children: type.kind === "struct"
       ? type.fields.map((field) => ({ id: field.id, kind: "field" as const, name: field.name, parent: type, field }))
-      : type.values.map((value) => ({ id: `enum-value:${type.id}:${value.name}`, kind: "field" as const, name: value.name, parent: type, enumValue: value }))
+      : type.values.map((value) => ({ id: value.id, kind: "field" as const, name: value.name, parent: type, enumValue: value }))
   };
 }
 
@@ -842,7 +1082,7 @@ function TreeNodes({
           {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
-      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)} onContextMenu={(event) => node.field ? onOpenContextMenu(event, { kind: "field", type: node.parent, field: node.field }) : undefined}>
+      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)} onContextMenu={(event) => node.field ? onOpenContextMenu(event, { kind: "field", type: node.parent, field: node.field }) : node.enumValue ? onOpenContextMenu(event, { kind: "enum-value", type: node.parent, value: node.enumValue }) : undefined}>
         <span className="disclosure-spacer" /><span className="icon field-icon">{node.field ? "f" : "#"}</span><span>{node.name}</span>
         {node.field && <small>{node.field.type}</small>}
         {node.enumValue && <small>{node.enumValue.value ?? "auto"}</small>}
@@ -861,25 +1101,41 @@ function StructuredActionPanel({
   structHeaderPath,
   structName,
   structEditName,
+  enumHeaderPath,
+  enumName,
+  enumEditName,
   fieldType,
   fieldName,
+  enumValueName,
+  enumValueNumber,
   onHeaderRelativePathChange,
   onHeaderEditRelativePathChange,
   onStructHeaderPathChange,
   onStructNameChange,
   onStructEditNameChange,
+  onEnumHeaderPathChange,
+  onEnumNameChange,
+  onEnumEditNameChange,
   onFieldTypeChange,
   onFieldNameChange,
+  onEnumValueNameChange,
+  onEnumValueNumberChange,
   onCancel,
   onCreateHeader,
   onCreateStruct,
+  onCreateEnum,
   onRenameHeader,
   onDeleteHeader,
   onRenameStruct,
   onDeleteStruct,
+  onRenameEnum,
+  onDeleteEnum,
   onAddField,
   onUpdateField,
-  onDeleteField
+  onDeleteField,
+  onAddEnumValue,
+  onUpdateEnumValue,
+  onDeleteEnumValue
 }: {
   action: WorkspaceAction;
   workspace: WorkspaceView;
@@ -890,43 +1146,71 @@ function StructuredActionPanel({
   structHeaderPath: string;
   structName: string;
   structEditName: string;
+  enumHeaderPath: string;
+  enumName: string;
+  enumEditName: string;
   fieldType: string;
   fieldName: string;
+  enumValueName: string;
+  enumValueNumber: string;
   onHeaderRelativePathChange(value: string): void;
   onHeaderEditRelativePathChange(value: string): void;
   onStructHeaderPathChange(value: string): void;
   onStructNameChange(value: string): void;
   onStructEditNameChange(value: string): void;
+  onEnumHeaderPathChange(value: string): void;
+  onEnumNameChange(value: string): void;
+  onEnumEditNameChange(value: string): void;
   onFieldTypeChange(value: string): void;
   onFieldNameChange(value: string): void;
+  onEnumValueNameChange(value: string): void;
+  onEnumValueNumberChange(value: string): void;
   onCancel(): void;
   onCreateHeader(): void;
   onCreateStruct(): void;
+  onCreateEnum(): void;
   onRenameHeader(): void;
   onDeleteHeader(): void;
   onRenameStruct(): void;
   onDeleteStruct(): void;
+  onRenameEnum(): void;
+  onDeleteEnum(): void;
   onAddField(): void;
   onUpdateField(): void;
   onDeleteField(): void;
+  onAddEnumValue(): void;
+  onUpdateEnumValue(): void;
+  onDeleteEnumValue(): void;
 }): React.JSX.Element {
   const title = action === "create-header" ? "新建 Header"
     : action === "create-struct" ? "新增数据结构"
+      : action === "create-enum" ? "新增枚举"
       : action === "edit-header" ? "编辑 Header"
         : action === "edit-struct" ? "编辑数据结构"
-          : action === "add-field" ? "添加字段"
-            : "编辑字段";
+          : action === "edit-enum" ? "编辑枚举"
+            : action === "add-field" ? "添加字段"
+              : action === "add-enum-value" ? "添加枚举项"
+                : action === "edit-enum-value" ? "编辑枚举项"
+                  : "编辑字段";
   const description = action === "create-header"
     ? "在当前工作区内创建一个受控 Header 文件。"
     : action === "create-struct"
       ? "选择目标 Header，并插入一个最小 struct。"
+      : action === "create-enum"
+        ? "选择目标 Header，并插入一个 enum class。"
       : action === "edit-header"
         ? "重命名或删除当前 Header 文件。"
         : action === "edit-struct"
           ? `重命名或删除当前 struct ${selectedType?.name ?? ""}。`
-          : action === "add-field"
-            ? `向当前 struct ${selectedType?.name ?? ""} 追加字段。`
-            : `修改或删除当前 struct ${selectedType?.name ?? ""} 中的字段。`;
+          : action === "edit-enum"
+            ? `重命名或删除当前 enum ${selectedType?.name ?? ""}。`
+            : action === "add-field"
+              ? `向当前 struct ${selectedType?.name ?? ""} 追加字段。`
+              : action === "add-enum-value"
+                ? `向当前 enum ${selectedType?.name ?? ""} 追加枚举项。`
+                : action === "edit-enum-value"
+                  ? `修改或删除当前 enum ${selectedType?.name ?? ""} 中的枚举项。`
+                  : `修改或删除当前 struct ${selectedType?.name ?? ""} 中的字段。`;
 
   return <section className="action-panel" aria-label="结构化编辑">
     <div className="action-panel-title">
@@ -957,6 +1241,20 @@ function StructuredActionPanel({
       <button type="submit" disabled={loading || workspace.files.length === 0}>创建 Struct</button>
     </form>}
 
+    {action === "create-enum" && <form className="action-form" onSubmit={(event) => { event.preventDefault(); onCreateEnum(); }}>
+      <label>
+        <span>目标 Header</span>
+        <select value={enumHeaderPath} onChange={(event) => onEnumHeaderPathChange(event.target.value)}>
+          {workspace.files.map((file) => <option key={file.path} value={file.path}>{file.relativePath}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Enum 名称</span>
+        <input value={enumName} onChange={(event) => onEnumNameChange(event.target.value)} placeholder="PacketKind" autoFocus />
+      </label>
+      <button type="submit" disabled={loading || workspace.files.length === 0}>创建 Enum</button>
+    </form>}
+
     {action === "edit-header" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onRenameHeader(); }}>
       <label>
         <span>Header 相对路径</span>
@@ -978,6 +1276,18 @@ function StructuredActionPanel({
       <div className="form-actions">
         <button type="submit" disabled={loading || selectedType?.kind !== "struct"}>保存修改</button>
         <button type="button" className="danger" disabled={loading || selectedType?.kind !== "struct"} onClick={onDeleteStruct}>删除 Struct</button>
+      </div>
+    </form>}
+
+    {action === "edit-enum" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onRenameEnum(); }}>
+      <label>
+        <span>Enum 名称</span>
+        <input value={enumEditName} onChange={(event) => onEnumEditNameChange(event.target.value)} placeholder="PacketKind" autoFocus />
+      </label>
+      <small>重命名当前只修改 enum 声明，不自动改引用类型。</small>
+      <div className="form-actions">
+        <button type="submit" disabled={loading || selectedType?.kind !== "enum"}>保存修改</button>
+        <button type="button" className="danger" disabled={loading || selectedType?.kind !== "enum"} onClick={onDeleteEnum}>删除 Enum</button>
       </div>
     </form>}
 
@@ -1008,19 +1318,48 @@ function StructuredActionPanel({
         <button type="button" className="danger" disabled={loading || selectedType?.kind !== "struct"} onClick={onDeleteField}>删除字段</button>
       </div>
     </form>}
+
+    {action === "add-enum-value" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onAddEnumValue(); }}>
+      <label>
+        <span>枚举项名称</span>
+        <input value={enumValueName} onChange={(event) => onEnumValueNameChange(event.target.value)} placeholder="Unknown" autoFocus />
+      </label>
+      <label>
+        <span>枚举值</span>
+        <input value={enumValueNumber} onChange={(event) => onEnumValueNumberChange(event.target.value)} placeholder="留空自动编号" />
+      </label>
+      <small>当前目标：{selectedType?.qualifiedName ?? "未选择 enum"}</small>
+      <button type="submit" disabled={loading || selectedType?.kind !== "enum"}>添加枚举项</button>
+    </form>}
+
+    {action === "edit-enum-value" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onUpdateEnumValue(); }}>
+      <label>
+        <span>枚举项名称</span>
+        <input value={enumValueName} onChange={(event) => onEnumValueNameChange(event.target.value)} placeholder="Unknown" autoFocus />
+      </label>
+      <label>
+        <span>枚举值</span>
+        <input value={enumValueNumber} onChange={(event) => onEnumValueNumberChange(event.target.value)} placeholder="留空自动编号" />
+      </label>
+      <div className="form-actions">
+        <button type="submit" disabled={loading || selectedType?.kind !== "enum"}>保存修改</button>
+        <button type="button" className="danger" disabled={loading || selectedType?.kind !== "enum"} onClick={onDeleteEnumValue}>删除枚举项</button>
+      </div>
+    </form>}
   </section>;
 }
 
-function ProtocolEditor({ type, selectedMemberId, onEditType, onEditField, onOpenContextMenu }: {
+function ProtocolEditor({ type, selectedMemberId, onEditType, onEditField, onEditEnumValue, onOpenContextMenu }: {
   type: WorkspaceTypeView;
   selectedMemberId: string | null;
   onEditType(): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
+  onEditEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
   onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
 }): React.JSX.Element {
   return <div className="editor" onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type })}>
-    <div className="editor-title"><div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p></div><div className="editor-actions"><span className="status">AST 已同步</span>{type.kind === "struct" && <button className="inline-action" onClick={onEditType}>编辑 Struct</button>}</div></div>
-    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "field", type, field })}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditField(type, field)}>编辑</button></td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th></tr></thead><tbody>{type.values.map((value) => <tr className={`enum-value:${type.id}:${value.name}` === selectedMemberId ? "selected-row" : undefined} key={value.name}><td>{value.name}</td><td>{value.value ?? "自动"}</td></tr>)}</tbody></table>}
+    <div className="editor-title"><div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p>{type.note && <p className="note-preview">{type.note}</p>}</div><div className="editor-actions"><span className="status">AST 已同步</span><button className="inline-action" onClick={onEditType}>{type.kind === "struct" ? "编辑 Struct" : "编辑 Enum"}</button></div></div>
+    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "field", type, field })}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.note || "—"}</td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditField(type, field)}>编辑</button></td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.values.map((value) => <tr className={value.id === selectedMemberId ? "selected-row" : undefined} key={value.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "enum-value", type, value })}><td>{value.name}</td><td>{value.value ?? "自动"}</td><td>{value.note || "—"}</td><td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditEnumValue(type, value)}>编辑</button></td></tr>)}</tbody></table>}
   </div>;
 }
 
@@ -1036,19 +1375,25 @@ function ContextMenu({
   onClose,
   onCreateHeader,
   onCreateStruct,
+  onCreateEnum,
   onAddField,
+  onAddEnumValue,
   onEditFile,
   onEditType,
-  onEditField
+  onEditField,
+  onEditEnumValue
 }: {
   menu: ContextMenuState;
   onClose(): void;
   onCreateHeader(): void;
   onCreateStruct(file: WorkspaceFileView): void;
+  onCreateEnum(file: WorkspaceFileView): void;
   onAddField(type: WorkspaceTypeView): void;
+  onAddEnumValue(type: WorkspaceTypeView): void;
   onEditFile(file: WorkspaceFileView): void;
   onEditType(type: WorkspaceTypeView): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
+  onEditEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
 }): React.JSX.Element {
   const items: Array<{ label: string; action(): void; disabled?: boolean }> = [];
   if (menu.target.kind === "workspace") {
@@ -1058,14 +1403,16 @@ function ContextMenu({
     const { file } = menu.target;
     items.push(
       { label: "编辑 Header", action: () => onEditFile(file) },
-      { label: "新增 Struct", action: () => onCreateStruct(file) }
+      { label: "新增 Struct", action: () => onCreateStruct(file) },
+      { label: "新增 Enum", action: () => onCreateEnum(file) }
     );
   }
   if (menu.target.kind === "type") {
     const { type } = menu.target;
     items.push(
-      { label: "编辑 Struct", action: () => onEditType(type), disabled: type.kind !== "struct" },
-      { label: "添加字段", action: () => onAddField(type), disabled: type.kind !== "struct" }
+      { label: type.kind === "struct" ? "编辑 Struct" : "编辑 Enum", action: () => onEditType(type) },
+      { label: "添加字段", action: () => onAddField(type), disabled: type.kind !== "struct" },
+      { label: "添加枚举项", action: () => onAddEnumValue(type), disabled: type.kind !== "enum" }
     );
   }
   if (menu.target.kind === "field") {
@@ -1073,6 +1420,13 @@ function ContextMenu({
     items.push(
       { label: "编辑字段", action: () => onEditField(type, field) },
       { label: "添加字段", action: () => onAddField(type) }
+    );
+  }
+  if (menu.target.kind === "enum-value") {
+    const { type, value } = menu.target;
+    items.push(
+      { label: "编辑枚举项", action: () => onEditEnumValue(type, value) },
+      { label: "添加枚举项", action: () => onAddEnumValue(type) }
     );
   }
 

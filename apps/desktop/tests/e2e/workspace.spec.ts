@@ -15,6 +15,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
 
     await page.getByRole("button", { name: "加载示例项目" }).click();
     await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "新增枚举" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "新建 Header 文件" })).toBeEnabled();
     await page.getByRole("button", { name: "新建 Header 文件" }).click();
     let actionPanel = page.getByRole("region", { name: "结构化编辑" });
@@ -42,6 +43,12 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("新增数据结构");
     await expect(page.getByLabel("Struct 名称")).toBeVisible();
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+
+    await page.getByRole("button", { name: "新增枚举" }).click();
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("新增枚举");
+    await expect(page.getByLabel("Enum 名称")).toBeVisible();
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
 
     await page.getByRole("button", { name: "编辑 Struct" }).click();
@@ -143,6 +150,30 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.getByRole("button", { name: "demo::common::CoordinateFrame", exact: true }).click();
     await expect(page.getByRole("cell", { name: "ECEF" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "2", exact: true })).toBeVisible();
+    await page.keyboard.press("F2");
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("编辑枚举");
+    await expect(page.getByLabel("Enum 名称")).toHaveValue("CoordinateFrame");
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+
+    await page.getByRole("button", { name: "添加枚举项" }).click();
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("添加枚举项");
+    await expect(page.getByLabel("枚举项名称")).toBeVisible();
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+
+    await page.getByRole("row", { name: /ECEF/ }).getByRole("button", { name: "编辑" }).click();
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("编辑枚举项");
+    await expect(page.getByLabel("枚举项名称")).toHaveValue("ECEF");
+    await expect(page.getByLabel("枚举值")).toHaveValue("2");
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+
+    const noteEditor = page.getByRole("region", { name: "注释编辑" });
+    await expect(noteEditor).toContainText("枚举项 CoordinateFrame.ECEF");
+    await noteEditor.getByPlaceholder("记录语义说明、单位、范围、兼容性约束…").fill("测试坐标系枚举项注释");
+    await noteEditor.getByRole("button", { name: "保存注释" }).click();
+    await expect(page.getByText("注释已保存到 .protocol/meta/metadata.json")).toBeVisible();
   } finally {
     await application.close();
   }

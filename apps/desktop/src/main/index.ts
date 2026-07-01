@@ -4,27 +4,41 @@ import { join } from "node:path";
 import { createServiceHealth } from "../shared/service";
 import type {
   AddFieldInput,
+  AddEnumValueInput,
+  CreateEnumInput,
   CreateHeaderInput,
   CreateStructInput,
+  DeleteEnumInput,
+  DeleteEnumValueInput,
   DeleteFieldInput,
   DeleteHeaderInput,
   DeleteStructInput,
+  RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
-  UpdateFieldInput
+  UpdateEnumValueInput,
+  UpdateFieldInput,
+  UpdateNoteInput
 } from "../shared/workspace";
 import {
+  addEnumValue,
   addField,
+  createEnum,
   createHeader,
   createStruct,
+  deleteEnum,
+  deleteEnumValue,
   deleteField,
   deleteHeader,
   deleteStruct,
+  renameEnum,
   renameHeader,
   renameStruct,
   sampleWorkspacePath,
   scanWorkspace,
-  updateField
+  updateEnumValue,
+  updateField,
+  updateNote
 } from "./workspace";
 
 interface AppPreferences {
@@ -95,13 +109,20 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("protocol:create-header", (_event, input: CreateHeaderInput) => createHeader(input));
   ipcMain.handle("protocol:create-struct", (_event, input: CreateStructInput) => createStruct(input));
+  ipcMain.handle("protocol:create-enum", (_event, input: CreateEnumInput) => createEnum(input));
   ipcMain.handle("protocol:rename-header", (_event, input: RenameHeaderInput) => renameHeader(input));
   ipcMain.handle("protocol:delete-header", (_event, input: DeleteHeaderInput) => deleteHeader(input));
   ipcMain.handle("protocol:rename-struct", (_event, input: RenameStructInput) => renameStruct(input));
   ipcMain.handle("protocol:delete-struct", (_event, input: DeleteStructInput) => deleteStruct(input));
+  ipcMain.handle("protocol:rename-enum", (_event, input: RenameEnumInput) => renameEnum(input));
+  ipcMain.handle("protocol:delete-enum", (_event, input: DeleteEnumInput) => deleteEnum(input));
   ipcMain.handle("protocol:add-field", (_event, input: AddFieldInput) => addField(input));
   ipcMain.handle("protocol:update-field", (_event, input: UpdateFieldInput) => updateField(input));
   ipcMain.handle("protocol:delete-field", (_event, input: DeleteFieldInput) => deleteField(input));
+  ipcMain.handle("protocol:add-enum-value", (_event, input: AddEnumValueInput) => addEnumValue(input));
+  ipcMain.handle("protocol:update-enum-value", (_event, input: UpdateEnumValueInput) => updateEnumValue(input));
+  ipcMain.handle("protocol:delete-enum-value", (_event, input: DeleteEnumValueInput) => deleteEnumValue(input));
+  ipcMain.handle("protocol:update-note", (_event, input: UpdateNoteInput) => updateNote(input));
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

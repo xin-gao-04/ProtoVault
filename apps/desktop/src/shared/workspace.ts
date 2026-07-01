@@ -2,6 +2,15 @@ export interface WorkspaceFieldView {
   id: string;
   name: string;
   type: string;
+  note?: string;
+  location?: { file: string; line: number; column: number };
+}
+
+export interface WorkspaceEnumValueView {
+  id: string;
+  name: string;
+  value?: number;
+  note?: string;
   location?: { file: string; line: number; column: number };
 }
 
@@ -11,8 +20,9 @@ export interface WorkspaceTypeView {
   name: string;
   qualifiedName: string;
   file: string;
+  note?: string;
   fields: WorkspaceFieldView[];
-  values: Array<{ name: string; value?: number }>;
+  values: WorkspaceEnumValueView[];
 }
 
 export interface WorkspaceFileView {
@@ -49,6 +59,12 @@ export interface CreateStructInput {
   structName: string;
 }
 
+export interface CreateEnumInput {
+  workspaceRoot: string;
+  headerPath: string;
+  enumName: string;
+}
+
 export interface RenameHeaderInput {
   workspaceRoot: string;
   headerPath: string;
@@ -67,6 +83,17 @@ export interface RenameStructInput {
 }
 
 export interface DeleteStructInput {
+  workspaceRoot: string;
+  typeId: string;
+}
+
+export interface RenameEnumInput {
+  workspaceRoot: string;
+  typeId: string;
+  enumName: string;
+}
+
+export interface DeleteEnumInput {
   workspaceRoot: string;
   typeId: string;
 }
@@ -90,4 +117,31 @@ export interface DeleteFieldInput {
   workspaceRoot: string;
   typeId: string;
   fieldId: string;
+}
+
+export interface AddEnumValueInput {
+  workspaceRoot: string;
+  typeId: string;
+  valueName: string;
+  value?: number;
+}
+
+export interface UpdateEnumValueInput {
+  workspaceRoot: string;
+  typeId: string;
+  valueId: string;
+  valueName: string;
+  value?: number;
+}
+
+export interface DeleteEnumValueInput {
+  workspaceRoot: string;
+  typeId: string;
+  valueId: string;
+}
+
+export interface UpdateNoteInput {
+  workspaceRoot: string;
+  targetId: string;
+  note: string;
 }
