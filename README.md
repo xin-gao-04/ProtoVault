@@ -36,7 +36,8 @@ inside the opened workspace.
 
 The top navigator actions currently support the first structured editing loop:
 create a Header, create a `struct`, and append a field to the selected `struct`.
-After each write, ProtoVault rescans the workspace and refreshes the tree.
+These actions open in-app structured editing forms. After each write, ProtoVault
+rescans the workspace and refreshes the tree.
 ProtoVault also remembers the last opened workspace and restores it on the next
 launch when available.
 

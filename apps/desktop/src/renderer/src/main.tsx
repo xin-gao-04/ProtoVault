@@ -9,6 +9,8 @@ type ProtocolTreeNode =
   | { id: string; kind: "type"; name: string; type: WorkspaceTypeView; children: ProtocolTreeNode[] }
   | { id: string; kind: "field"; name: string; parent: WorkspaceTypeView; field?: WorkspaceFieldView; enumValue?: WorkspaceTypeView["values"][number] };
 
+type WorkspaceAction = "create-header" | "create-struct" | "add-field";
+
 function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
   const [workspace, setWorkspace] = React.useState<WorkspaceView | null>(null);
@@ -20,6 +22,12 @@ function App(): React.JSX.Element {
   const [inspectorWidth, setInspectorWidth] = React.useState(260);
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [activeAction, setActiveAction] = React.useState<WorkspaceAction | null>(null);
+  const [headerRelativePath, setHeaderRelativePath] = React.useState("");
+  const [structName, setStructName] = React.useState("NewProtocol");
+  const [structHeaderPath, setStructHeaderPath] = React.useState("");
+  const [fieldType, setFieldType] = React.useState("std::uint32_t");
+  const [fieldName, setFieldName] = React.useState("value");
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const selectedMemberName = selectedType?.fields.find((field) => field.id === selectedMemberId)?.name
@@ -103,48 +111,70 @@ function App(): React.JSX.Element {
     }
   }
 
-  async function createHeaderFromToolbar(): Promise<void> {
+  function openStructuredAction(action: WorkspaceAction): void {
     if (!workspace) return;
-    const defaultName = `headers/new_protocol_${workspace.files.length + 1}.hpp`;
-    const relativePath = window.prompt("新建 Header 相对路径", defaultName);
-    if (!relativePath) return;
+    if (action === "create-header") {
+      setHeaderRelativePath(`headers/new_protocol_${workspace.files.length + 1}.hpp`);
+    }
+    if (action === "create-struct") {
+      setStructName("NewProtocol");
+      setStructHeaderPath(selectedFilePath ?? selectedType?.file ?? workspace.files[0]?.path ?? "");
+    }
+    if (action === "add-field") {
+      setFieldType("std::uint32_t");
+      setFieldName("value");
+    }
+    setActiveAction(action);
+  }
+
+  async function createHeaderFromForm(): Promise<void> {
+    if (!workspace) return;
+    const relativePath = headerRelativePath.trim();
+    if (!relativePath) {
+      setUiNotice("Header 相对路径不能为空");
+      return;
+    }
     await runWorkspaceAction(async () => {
       const result = await window.protoVault.createHeader({ workspaceRoot: workspace.rootPath, relativePath });
       applyWorkspaceResult(result, { selectFileRelativePath: relativePath.replaceAll("\\", "/").replace(/^\/+/, "") });
       setUiNotice(`已创建 Header：${relativePath}`);
+      setActiveAction(null);
     });
   }
 
-  async function createStructFromToolbar(): Promise<void> {
+  async function createStructFromForm(): Promise<void> {
     if (!workspace) return;
-    const headerPath = selectedFilePath ?? selectedType?.file ?? workspace.files[0]?.path;
+    const headerPath = structHeaderPath || selectedFilePath || selectedType?.file || workspace.files[0]?.path;
     if (!headerPath) {
       setUiNotice("当前工作区还没有 Header，请先新建 Header 文件");
       return;
     }
-    const structName = window.prompt("新建 struct 名称", "NewProtocol");
-    if (!structName) return;
+    const nextStructName = structName.trim();
+    if (!nextStructName) {
+      setUiNotice("结构体名称不能为空");
+      return;
+    }
     await runWorkspaceAction(async () => {
-      const result = await window.protoVault.createStruct({ workspaceRoot: workspace.rootPath, headerPath, structName });
-      applyWorkspaceResult(result, { selectTypeName: structName });
-      setUiNotice(`已创建数据结构：${structName}`);
+      const result = await window.protoVault.createStruct({ workspaceRoot: workspace.rootPath, headerPath, structName: nextStructName });
+      applyWorkspaceResult(result, { selectTypeName: nextStructName });
+      setUiNotice(`已创建数据结构：${nextStructName}`);
+      setActiveAction(null);
     });
   }
 
-  async function addFieldFromToolbar(): Promise<void> {
+  async function addFieldFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "struct") return;
-    const raw = window.prompt("新增字段，格式：类型 名称", "std::uint32_t value");
-    if (!raw) return;
-    const match = raw.trim().match(/^(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)$/);
-    if (!match) {
-      setUiNotice("请输入类似 std::uint32_t value 的字段定义");
+    const nextFieldType = fieldType.trim();
+    const nextFieldName = fieldName.trim();
+    if (!nextFieldType || !nextFieldName) {
+      setUiNotice("字段类型和字段名称不能为空");
       return;
     }
-    const [, fieldType, fieldName] = match;
     await runWorkspaceAction(async () => {
-      const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldType, fieldName });
-      applyWorkspaceResult(result, { selectTypeName: selectedType.name, selectFieldName: fieldName });
-      setUiNotice(`已添加字段：${fieldName}`);
+      const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldType: nextFieldType, fieldName: nextFieldName });
+      applyWorkspaceResult(result, { selectTypeName: selectedType.name, selectFieldName: nextFieldName });
+      setUiNotice(`已添加字段：${nextFieldName}`);
+      setActiveAction(null);
     });
   }
 
@@ -205,9 +235,9 @@ function App(): React.JSX.Element {
           </div>
         </div>
         <div className="tree-actions" aria-label="协议树操作">
-          <button aria-label="新增数据结构" title="新增数据结构" disabled={!workspace || loading} onClick={() => void createStructFromToolbar()}>✎</button>
-          <button aria-label="新建 Header 文件" title="新建 Header 文件" disabled={!workspace || loading} onClick={() => void createHeaderFromToolbar()}>▣＋</button>
-          <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => void addFieldFromToolbar()}>＋f</button>
+          <button aria-label="新增数据结构" title="新增数据结构" disabled={!workspace || loading} onClick={() => openStructuredAction("create-struct")}>✎</button>
+          <button aria-label="新建 Header 文件" title="新建 Header 文件" disabled={!workspace || loading} onClick={() => openStructuredAction("create-header")}>▣＋</button>
+          <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => openStructuredAction("add-field")}>＋f</button>
           <button aria-label="排序协议树" title="排序协议树" disabled={!workspace} onClick={() => setUiNotice("协议树已按目录、Header、类型排序")}>↥</button>
           <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}>⌃⌄</button>
         </div>
@@ -269,6 +299,26 @@ function App(): React.JSX.Element {
           <p className="lede">扫描 C++ 数据结构，理解字段布局，维护语义元数据，并用受控生成与语义差异守住协议演进。</p>
           <div className="flow"><span>扫描</span><b>→</b><span>IR</span><b>→</b><span>布局</span><b>→</b><span>生成</span><b>→</b><span>检查</span></div>
         </article>}
+        {workspace && activeAction && <StructuredActionPanel
+          action={activeAction}
+          workspace={workspace}
+          selectedType={selectedType}
+          loading={loading}
+          headerRelativePath={headerRelativePath}
+          structHeaderPath={structHeaderPath}
+          structName={structName}
+          fieldType={fieldType}
+          fieldName={fieldName}
+          onHeaderRelativePathChange={setHeaderRelativePath}
+          onStructHeaderPathChange={setStructHeaderPath}
+          onStructNameChange={setStructName}
+          onFieldTypeChange={setFieldType}
+          onFieldNameChange={setFieldName}
+          onCancel={() => setActiveAction(null)}
+          onCreateHeader={() => void createHeaderFromForm()}
+          onCreateStruct={() => void createStructFromForm()}
+          onAddField={() => void addFieldFromForm()}
+        />}
         {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} />}
         {workspace && selectedFile && <SourceViewer file={selectedFile} />}
         {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
@@ -439,6 +489,96 @@ function TreeNodes({
       </button>;
     })}
   </div>;
+}
+
+function StructuredActionPanel({
+  action,
+  workspace,
+  selectedType,
+  loading,
+  headerRelativePath,
+  structHeaderPath,
+  structName,
+  fieldType,
+  fieldName,
+  onHeaderRelativePathChange,
+  onStructHeaderPathChange,
+  onStructNameChange,
+  onFieldTypeChange,
+  onFieldNameChange,
+  onCancel,
+  onCreateHeader,
+  onCreateStruct,
+  onAddField
+}: {
+  action: WorkspaceAction;
+  workspace: WorkspaceView;
+  selectedType?: WorkspaceTypeView;
+  loading: boolean;
+  headerRelativePath: string;
+  structHeaderPath: string;
+  structName: string;
+  fieldType: string;
+  fieldName: string;
+  onHeaderRelativePathChange(value: string): void;
+  onStructHeaderPathChange(value: string): void;
+  onStructNameChange(value: string): void;
+  onFieldTypeChange(value: string): void;
+  onFieldNameChange(value: string): void;
+  onCancel(): void;
+  onCreateHeader(): void;
+  onCreateStruct(): void;
+  onAddField(): void;
+}): React.JSX.Element {
+  const title = action === "create-header" ? "新建 Header" : action === "create-struct" ? "新增数据结构" : "添加字段";
+  const description = action === "create-header"
+    ? "在当前工作区内创建一个受控 Header 文件。"
+    : action === "create-struct"
+      ? "选择目标 Header，并插入一个最小 struct。"
+      : `向当前 struct ${selectedType?.name ?? ""} 追加字段。`;
+
+  return <section className="action-panel" aria-label="结构化编辑">
+    <div className="action-panel-title">
+      <div><p className="eyebrow">STRUCTURED EDIT</p><h2>{title}</h2><p>{description}</p></div>
+      <button type="button" onClick={onCancel} disabled={loading}>关闭</button>
+    </div>
+
+    {action === "create-header" && <form className="action-form" onSubmit={(event) => { event.preventDefault(); onCreateHeader(); }}>
+      <label>
+        <span>Header 相对路径</span>
+        <input value={headerRelativePath} onChange={(event) => onHeaderRelativePathChange(event.target.value)} placeholder="headers/protocol.hpp" autoFocus />
+      </label>
+      <small>路径必须位于当前 workspace 内，后缀支持 .h/.hh/.hpp/.hxx。</small>
+      <button type="submit" disabled={loading}>创建 Header</button>
+    </form>}
+
+    {action === "create-struct" && <form className="action-form" onSubmit={(event) => { event.preventDefault(); onCreateStruct(); }}>
+      <label>
+        <span>目标 Header</span>
+        <select value={structHeaderPath} onChange={(event) => onStructHeaderPathChange(event.target.value)}>
+          {workspace.files.map((file) => <option key={file.path} value={file.path}>{file.relativePath}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Struct 名称</span>
+        <input value={structName} onChange={(event) => onStructNameChange(event.target.value)} placeholder="PacketHeader" autoFocus />
+      </label>
+      <button type="submit" disabled={loading || workspace.files.length === 0}>创建 Struct</button>
+    </form>}
+
+    {action === "add-field" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onAddField(); }}>
+      <label>
+        <span>字段类型</span>
+        <input value={fieldType} onChange={(event) => onFieldTypeChange(event.target.value)} placeholder="std::uint32_t" autoFocus />
+      </label>
+      <label>
+        <span>字段名称</span>
+        <input value={fieldName} onChange={(event) => onFieldNameChange(event.target.value)} placeholder="value" />
+      </label>
+      <small>当前目标：{selectedType?.qualifiedName ?? "未选择 struct"}</small>
+      <button type="submit" disabled={loading || selectedType?.kind !== "struct"}>添加字段</button>
+    </form>}
+  </section>;
 }
 
 function ProtocolEditor({ type, selectedMemberId }: { type: WorkspaceTypeView; selectedMemberId: string | null }): React.JSX.Element {

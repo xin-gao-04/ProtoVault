@@ -16,9 +16,25 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.getByRole("button", { name: "加载示例项目" }).click();
     await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "新建 Header 文件" })).toBeEnabled();
+    await page.getByRole("button", { name: "新建 Header 文件" }).click();
+    await expect(page.getByRole("region", { name: "结构化编辑" })).toContainText("新建 Header");
+    await expect(page.getByLabel("Header 相对路径")).toBeVisible();
+    await page.getByRole("button", { name: "关闭" }).click();
+
     const radarTrack = page.getByRole("button", { name: "demo::radar::RadarTrack", exact: true });
     await expect(radarTrack).toBeVisible();
     await radarTrack.click();
+    await page.getByRole("button", { name: "新增数据结构" }).click();
+    await expect(page.getByRole("region", { name: "结构化编辑" })).toContainText("新增数据结构");
+    await expect(page.getByLabel("Struct 名称")).toBeVisible();
+    await page.getByRole("button", { name: "关闭" }).click();
+
+    await page.getByRole("button", { name: "添加字段" }).click();
+    await expect(page.getByRole("region", { name: "结构化编辑" })).toContainText("添加字段");
+    await expect(page.getByLabel("字段类型")).toBeVisible();
+    await expect(page.getByLabel("字段名称")).toBeVisible();
+    await page.getByRole("button", { name: "关闭" }).click();
+
     await expect(page.getByRole("cell", { name: "trackId" })).toBeVisible();
     await expect(page.getByText("没有扫描问题")).toBeVisible();
     await expect(page.getByText("__vcrt_va_list_is_reference")).toHaveCount(0);
