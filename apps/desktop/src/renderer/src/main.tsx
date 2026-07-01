@@ -158,12 +158,14 @@ function App(): React.JSX.Element {
     }
   }
 
-  async function runWorkspaceAction(action: () => Promise<void>): Promise<void> {
+  async function runWorkspaceAction(action: () => Promise<void>): Promise<boolean> {
     setLoading(true);
     try {
       await action();
+      return true;
     } catch (error) {
       setUiNotice(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -486,6 +488,21 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function addFieldInline(type: WorkspaceTypeView, nextFieldType: string, nextFieldName: string): Promise<boolean> {
+    if (!workspace || type.kind !== "struct") return false;
+    const trimmedType = nextFieldType.trim();
+    const trimmedName = nextFieldName.trim();
+    if (!trimmedType || !trimmedName) {
+      setUiNotice("字段类型和字段名称不能为空");
+      return false;
+    }
+    return runWorkspaceAction(async () => {
+      const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: type.id, fieldType: trimmedType, fieldName: trimmedName });
+      applyWorkspaceResult(result, { selectTypeName: type.name, selectFieldName: trimmedName });
+      setUiNotice(`已添加字段：${trimmedName}`);
+    });
+  }
+
   async function updateFieldFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "struct" || !editingFieldId) return;
     const nextFieldType = fieldType.trim();
@@ -503,6 +520,21 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function updateFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView, nextFieldType: string, nextFieldName: string): Promise<boolean> {
+    if (!workspace || type.kind !== "struct") return false;
+    const trimmedType = nextFieldType.trim();
+    const trimmedName = nextFieldName.trim();
+    if (!trimmedType || !trimmedName) {
+      setUiNotice("字段类型和字段名称不能为空");
+      return false;
+    }
+    return runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateField({ workspaceRoot: workspace.rootPath, typeId: type.id, fieldId: field.id, fieldType: trimmedType, fieldName: trimmedName });
+      applyWorkspaceResult(result, { selectTypeName: type.name, selectFieldName: trimmedName });
+      setUiNotice(`已更新字段：${trimmedName}`);
+    });
+  }
+
   async function deleteFieldFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "struct" || !editingFieldId) return;
     await runWorkspaceAction(async () => {
@@ -511,6 +543,15 @@ function App(): React.JSX.Element {
       setUiNotice("字段已删除");
       setActiveAction(null);
       setEditingFieldId(null);
+    });
+  }
+
+  async function deleteFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<boolean> {
+    if (!workspace || type.kind !== "struct") return false;
+    return runWorkspaceAction(async () => {
+      const result = await window.protoVault.deleteField({ workspaceRoot: workspace.rootPath, typeId: type.id, fieldId: field.id });
+      applyWorkspaceResult(result, { selectTypeName: type.name });
+      setUiNotice(`已删除字段：${field.name}`);
     });
   }
 
@@ -833,7 +874,18 @@ function App(): React.JSX.Element {
           onUpdateEnumValue={() => void updateEnumValueFromForm()}
           onDeleteEnumValue={() => void deleteEnumValueFromForm()}
         />}
-        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditType={() => openStructuredAction(selectedType.kind === "struct" ? "edit-struct" : "edit-enum")} onEditField={openEditFieldAction} onEditEnumValue={openEditEnumValueAction} onOpenContextMenu={openContextMenu} />}
+        {workspace && selectedType && <ProtocolEditor
+          type={selectedType}
+          selectedMemberId={selectedMemberId}
+          loading={loading}
+          onEditType={() => openStructuredAction(selectedType.kind === "struct" ? "edit-struct" : "edit-enum")}
+          onEditField={openEditFieldAction}
+          onAddFieldInline={addFieldInline}
+          onUpdateFieldInline={updateFieldInline}
+          onDeleteFieldInline={deleteFieldInline}
+          onEditEnumValue={openEditEnumValueAction}
+          onOpenContextMenu={openContextMenu}
+        />}
         {workspace && selectedFile && <SourceViewer file={selectedFile} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
         {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
         {workspace && contextMenu && <ContextMenu
@@ -1349,17 +1401,108 @@ function StructuredActionPanel({
   </section>;
 }
 
-function ProtocolEditor({ type, selectedMemberId, onEditType, onEditField, onEditEnumValue, onOpenContextMenu }: {
+function ProtocolEditor({
+  type,
+  selectedMemberId,
+  loading,
+  onEditType,
+  onEditField,
+  onAddFieldInline,
+  onUpdateFieldInline,
+  onDeleteFieldInline,
+  onEditEnumValue,
+  onOpenContextMenu
+}: {
   type: WorkspaceTypeView;
   selectedMemberId: string | null;
+  loading: boolean;
   onEditType(): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
+  onAddFieldInline(type: WorkspaceTypeView, fieldType: string, fieldName: string): Promise<boolean>;
+  onUpdateFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView, fieldType: string, fieldName: string): Promise<boolean>;
+  onDeleteFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<boolean>;
   onEditEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
   onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
 }): React.JSX.Element {
+  const [addingField, setAddingField] = React.useState(false);
+  const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
+  const [draftFieldType, setDraftFieldType] = React.useState("std::uint32_t");
+  const [draftFieldName, setDraftFieldName] = React.useState("value");
+
+  React.useEffect(() => {
+    setAddingField(false);
+    setEditingFieldId(null);
+    setDraftFieldType("std::uint32_t");
+    setDraftFieldName("value");
+  }, [type.id]);
+
+  function beginAddField(): void {
+    setAddingField(true);
+    setEditingFieldId(null);
+    setDraftFieldType("std::uint32_t");
+    setDraftFieldName(`field${type.fields.length + 1}`);
+  }
+
+  function beginEditField(field: WorkspaceFieldView): void {
+    setAddingField(false);
+    setEditingFieldId(field.id);
+    setDraftFieldType(field.type);
+    setDraftFieldName(field.name);
+  }
+
+  async function saveAddedField(): Promise<void> {
+    const ok = await onAddFieldInline(type, draftFieldType, draftFieldName);
+    if (ok) setAddingField(false);
+  }
+
+  async function saveEditedField(field: WorkspaceFieldView): Promise<void> {
+    const ok = await onUpdateFieldInline(type, field, draftFieldType, draftFieldName);
+    if (ok) setEditingFieldId(null);
+  }
+
+  async function deleteEditedField(field: WorkspaceFieldView): Promise<void> {
+    const ok = await onDeleteFieldInline(type, field);
+    if (ok) setEditingFieldId(null);
+  }
+
   return <div className="editor" onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type })}>
-    <div className="editor-title"><div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p>{type.note && <p className="note-preview">{type.note}</p>}</div><div className="editor-actions"><span className="status">AST 已同步</span><button className="inline-action" onClick={onEditType}>{type.kind === "struct" ? "编辑 Struct" : "编辑 Enum"}</button></div></div>
-    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "field", type, field })}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.note || "—"}</td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditField(type, field)}>编辑</button></td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.values.map((value) => <tr className={value.id === selectedMemberId ? "selected-row" : undefined} key={value.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "enum-value", type, value })}><td>{value.name}</td><td>{value.value ?? "自动"}</td><td>{value.note || "—"}</td><td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditEnumValue(type, value)}>编辑</button></td></tr>)}</tbody></table>}
+    <div className="editor-title">
+      <div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p>{type.note && <p className="note-preview">{type.note}</p>}</div>
+      <div className="editor-actions">
+        <span className="status">AST 已同步</span>
+        {type.kind === "struct" && <button className="inline-action" disabled={loading} onClick={beginAddField}>添加字段</button>}
+        <button className="inline-action" onClick={onEditType}>{type.kind === "struct" ? "编辑 Struct" : "编辑 Enum"}</button>
+      </div>
+    </div>
+    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>
+      {type.fields.map((field) => {
+        const editing = editingFieldId === field.id;
+        return <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "field", type, field })}>
+          {editing
+            ? <>
+                <td><input className="table-input" aria-label="字段名称" value={draftFieldName} onChange={(event) => setDraftFieldName(event.target.value)} autoFocus /></td>
+                <td><input className="table-input mono" aria-label="字段类型" value={draftFieldType} onChange={(event) => setDraftFieldType(event.target.value)} /></td>
+                <td>{field.note || "—"}</td>
+                <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
+                <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveEditedField(field)}>保存</button><button className="inline-action" disabled={loading} onClick={() => setEditingFieldId(null)}>取消</button><button className="inline-action danger" disabled={loading} onClick={() => void deleteEditedField(field)}>删除</button></div></td>
+              </>
+            : <>
+                <td>{field.name}</td>
+                <td><code>{field.type}</code></td>
+                <td>{field.note || "—"}</td>
+                <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
+                <td><div className="row-actions"><button className="inline-action" onClick={() => beginEditField(field)}>编辑</button><button className="inline-action ghost" onClick={() => onEditField(type, field)}>面板</button></div></td>
+              </>}
+        </tr>;
+      })}
+      {addingField && <tr className="draft-row">
+        <td><input className="table-input" aria-label="新增字段名称" value={draftFieldName} onChange={(event) => setDraftFieldName(event.target.value)} autoFocus /></td>
+        <td><input className="table-input mono" aria-label="新增字段类型" value={draftFieldType} onChange={(event) => setDraftFieldType(event.target.value)} /></td>
+        <td>—</td>
+        <td>新增</td>
+        <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveAddedField()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingField(false)}>取消</button></div></td>
+      </tr>}
+    </tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.values.map((value) => <tr className={value.id === selectedMemberId ? "selected-row" : undefined} key={value.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "enum-value", type, value })}><td>{value.name}</td><td>{value.value ?? "自动"}</td><td>{value.note || "—"}</td><td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditEnumValue(type, value)}>编辑</button></td></tr>)}</tbody></table>}
   </div>;
 }
 

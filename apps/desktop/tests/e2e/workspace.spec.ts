@@ -61,7 +61,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
     await radarTrack.click();
 
-    await page.getByRole("button", { name: "添加字段" }).click();
+    await page.locator(".tree-actions").getByRole("button", { name: "添加字段" }).click();
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("添加字段");
     await expect(page.getByLabel("字段类型")).toBeVisible();
@@ -69,7 +69,21 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
 
     await expect(page.getByRole("cell", { name: "trackId" })).toBeVisible();
-    await page.getByRole("row", { name: /trackId/ }).getByRole("button", { name: "编辑" }).click();
+    const editor = page.locator(".editor");
+    await editor.getByRole("button", { name: "添加字段" }).click();
+    await expect(editor.getByLabel("新增字段名称")).toHaveValue("field9");
+    await expect(editor.getByLabel("新增字段类型")).toHaveValue("std::uint32_t");
+    await editor.getByRole("button", { name: "取消" }).click();
+    await expect(editor.getByLabel("新增字段名称")).toHaveCount(0);
+
+    const trackIdRow = page.getByRole("row", { name: /trackId/ });
+    await trackIdRow.getByRole("button", { name: "编辑" }).click();
+    await expect(trackIdRow.getByLabel("字段名称")).toHaveValue("trackId");
+    await expect(trackIdRow.getByLabel("字段类型")).toHaveValue("std::uint32_t");
+    await trackIdRow.getByRole("button", { name: "取消" }).click();
+    await expect(trackIdRow.getByRole("button", { name: "编辑" })).toBeVisible();
+
+    await trackIdRow.getByRole("button", { name: "面板" }).click();
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑字段");
     await expect(page.getByLabel("字段名称")).toHaveValue("trackId");
