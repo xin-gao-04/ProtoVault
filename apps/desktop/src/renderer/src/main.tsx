@@ -11,6 +11,7 @@ type ProtocolTreeNode =
 
 type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit-header" | "edit-struct" | "edit-enum" | "add-field" | "edit-field" | "add-enum-value" | "edit-enum-value";
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
+type FieldTypeOption = { group: "workspace" | "base"; value: string; label: string; detail?: string };
 type ContextMenuState = {
   x: number;
   y: number;
@@ -21,6 +22,22 @@ type ContextMenuState = {
     | { kind: "field"; type: WorkspaceTypeView; field: WorkspaceFieldView }
     | { kind: "enum-value"; type: WorkspaceTypeView; value: WorkspaceEnumValueView };
 };
+
+const SUPPORTED_BASE_FIELD_TYPES = [
+  "std::int8_t",
+  "std::uint8_t",
+  "std::int16_t",
+  "std::uint16_t",
+  "std::int32_t",
+  "std::uint32_t",
+  "std::int64_t",
+  "std::uint64_t",
+  "float",
+  "double",
+  "bool",
+  "char",
+  "std::byte"
+];
 
 function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
@@ -64,6 +81,10 @@ function App(): React.JSX.Element {
       : selectedType
         ? { id: selectedType.id, label: `${selectedType.kind === "struct" ? "Struct" : "Enum"} ${selectedType.qualifiedName}`, note: selectedType.note ?? "" }
         : null;
+  const selectedFieldTypeOptions = React.useMemo(
+    () => workspace && selectedType ? buildFieldTypeOptions(workspace, selectedType) : buildBaseFieldTypeOptions(),
+    [workspace, selectedType]
+  );
   const tree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
 
   const applyWorkspaceResult = React.useCallback((result: WorkspaceView, options?: {
@@ -480,6 +501,11 @@ function App(): React.JSX.Element {
       setUiNotice("字段类型和字段名称不能为空");
       return;
     }
+    const typeError = validateFieldTypeValue(nextFieldType, selectedFieldTypeOptions);
+    if (typeError) {
+      setUiNotice(typeError);
+      return;
+    }
     await runWorkspaceAction(async () => {
       const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldType: nextFieldType, fieldName: nextFieldName });
       applyWorkspaceResult(result, { selectTypeName: selectedType.name, selectFieldName: nextFieldName });
@@ -494,6 +520,11 @@ function App(): React.JSX.Element {
     const trimmedName = nextFieldName.trim();
     if (!trimmedType || !trimmedName) {
       setUiNotice("字段类型和字段名称不能为空");
+      return false;
+    }
+    const typeError = validateFieldTypeValue(trimmedType, buildFieldTypeOptions(workspace, type));
+    if (typeError) {
+      setUiNotice(typeError);
       return false;
     }
     return runWorkspaceAction(async () => {
@@ -511,6 +542,11 @@ function App(): React.JSX.Element {
       setUiNotice("字段类型和字段名称不能为空");
       return;
     }
+    const typeError = validateFieldTypeValue(nextFieldType, selectedFieldTypeOptions);
+    if (typeError) {
+      setUiNotice(typeError);
+      return;
+    }
     await runWorkspaceAction(async () => {
       const result = await window.protoVault.updateField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldId: editingFieldId, fieldType: nextFieldType, fieldName: nextFieldName });
       applyWorkspaceResult(result, { selectTypeName: selectedType.name, selectFieldName: nextFieldName });
@@ -526,6 +562,11 @@ function App(): React.JSX.Element {
     const trimmedName = nextFieldName.trim();
     if (!trimmedType || !trimmedName) {
       setUiNotice("字段类型和字段名称不能为空");
+      return false;
+    }
+    const typeError = validateFieldTypeValue(trimmedType, buildFieldTypeOptions(workspace, type));
+    if (typeError) {
+      setUiNotice(typeError);
       return false;
     }
     return runWorkspaceAction(async () => {
@@ -841,6 +882,7 @@ function App(): React.JSX.Element {
           enumHeaderPath={enumHeaderPath}
           enumName={enumName}
           enumEditName={enumEditName}
+          fieldTypeOptions={selectedFieldTypeOptions}
           fieldType={fieldType}
           fieldName={fieldName}
           enumValueName={enumValueName}
@@ -878,6 +920,7 @@ function App(): React.JSX.Element {
           type={selectedType}
           selectedMemberId={selectedMemberId}
           loading={loading}
+          fieldTypeOptions={selectedFieldTypeOptions}
           onEditType={() => openStructuredAction(selectedType.kind === "struct" ? "edit-struct" : "edit-enum")}
           onEditField={openEditFieldAction}
           onAddFieldInline={addFieldInline}
@@ -1011,6 +1054,42 @@ function sortTree(nodes: ProtocolTreeNode[]): ProtocolTreeNode[] {
       return { ...node, children: sortTree(node.children) };
     })
     .sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
+}
+
+function buildBaseFieldTypeOptions(): FieldTypeOption[] {
+  return SUPPORTED_BASE_FIELD_TYPES.map((type) => ({ group: "base", value: type, label: type, detail: "基础类型" }));
+}
+
+function buildFieldTypeOptions(workspace: WorkspaceView, currentType: WorkspaceTypeView): FieldTypeOption[] {
+  const options = new Map<string, FieldTypeOption>();
+  for (const type of workspace.types) {
+    if (type.id === currentType.id) continue;
+    const detail = `${type.kind} · ${type.qualifiedName}`;
+    options.set(type.qualifiedName, { group: "workspace", value: type.qualifiedName, label: type.qualifiedName, detail });
+    if (!options.has(type.name)) options.set(type.name, { group: "workspace", value: type.name, label: type.name, detail });
+  }
+  return [
+    ...[...options.values()].sort((a, b) => a.value.localeCompare(b.value)),
+    ...buildBaseFieldTypeOptions()
+  ];
+}
+
+function normalizeFieldTypeValue(value: string): { coreType: string; arraySuffix: string } | null {
+  const match = value.trim().match(/^(.*?)(\s*\[[1-9][0-9]*\])?$/);
+  if (!match) return null;
+  const coreType = match[1].trim();
+  if (!coreType) return null;
+  return { coreType, arraySuffix: match[2]?.replace(/\s+/g, "") ?? "" };
+}
+
+function validateFieldTypeValue(value: string, options: FieldTypeOption[]): string | null {
+  const normalized = normalizeFieldTypeValue(value);
+  if (!normalized) return "字段类型格式无效；定长数组请使用 Type[N]。";
+  const allowedTypes = new Set(options.map((option) => option.value));
+  if (!allowedTypes.has(normalized.coreType)) {
+    return "字段类型不在支持范围内；请从类型索引选择，或输入索引中的类型/定长数组。";
+  }
+  return null;
 }
 
 function initialExpandedNodeIds(nodes: ProtocolTreeNode[], selectedTypeId: string | null): Set<string> {
@@ -1156,6 +1235,7 @@ function StructuredActionPanel({
   enumHeaderPath,
   enumName,
   enumEditName,
+  fieldTypeOptions,
   fieldType,
   fieldName,
   enumValueName,
@@ -1201,6 +1281,7 @@ function StructuredActionPanel({
   enumHeaderPath: string;
   enumName: string;
   enumEditName: string;
+  fieldTypeOptions: FieldTypeOption[];
   fieldType: string;
   fieldName: string;
   enumValueName: string;
@@ -1344,10 +1425,7 @@ function StructuredActionPanel({
     </form>}
 
     {action === "add-field" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onAddField(); }}>
-      <label>
-        <span>字段类型</span>
-        <input value={fieldType} onChange={(event) => onFieldTypeChange(event.target.value)} placeholder="std::uint32_t" autoFocus />
-      </label>
+      <FieldTypeInput label="字段类型" value={fieldType} options={fieldTypeOptions} onChange={onFieldTypeChange} autoFocus />
       <label>
         <span>字段名称</span>
         <input value={fieldName} onChange={(event) => onFieldNameChange(event.target.value)} placeholder="value" />
@@ -1357,10 +1435,7 @@ function StructuredActionPanel({
     </form>}
 
     {action === "edit-field" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onUpdateField(); }}>
-      <label>
-        <span>字段类型</span>
-        <input value={fieldType} onChange={(event) => onFieldTypeChange(event.target.value)} placeholder="std::uint32_t" autoFocus />
-      </label>
+      <FieldTypeInput label="字段类型" value={fieldType} options={fieldTypeOptions} onChange={onFieldTypeChange} autoFocus />
       <label>
         <span>字段名称</span>
         <input value={fieldName} onChange={(event) => onFieldNameChange(event.target.value)} placeholder="value" />
@@ -1401,10 +1476,97 @@ function StructuredActionPanel({
   </section>;
 }
 
+function FieldTypeInput({ label, value, options, onChange, autoFocus = false, compact = false }: {
+  label: string;
+  value: string;
+  options: FieldTypeOption[];
+  onChange(value: string): void;
+  autoFocus?: boolean;
+  compact?: boolean;
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  const [showAll, setShowAll] = React.useState(false);
+  const rootRef = React.useRef<HTMLLabelElement>(null);
+  const query = value.trim().toLowerCase();
+  const visibleOptions = React.useMemo(() => {
+    if (showAll || !query) return options;
+    return options.filter((option) => `${option.value} ${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query));
+  }, [options, query, showAll]);
+  const workspaceOptions = visibleOptions.filter((option) => option.group === "workspace");
+  const baseOptions = visibleOptions.filter((option) => option.group === "base");
+
+  React.useEffect(() => {
+    function closeOnOutside(event: MouseEvent): void {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    window.addEventListener("mousedown", closeOnOutside);
+    return () => window.removeEventListener("mousedown", closeOnOutside);
+  }, []);
+
+  function selectOption(option: FieldTypeOption): void {
+    onChange(option.value);
+    setOpen(false);
+    setShowAll(false);
+  }
+
+  return <label className={compact ? "field-type-input compact" : "field-type-input"} ref={rootRef}>
+    <span>{label}</span>
+    <div className="field-type-box">
+      <input
+        className="table-input mono"
+        aria-label={label}
+        value={value}
+        onFocus={() => {
+          setOpen(true);
+          setShowAll(true);
+        }}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(true);
+          setShowAll(false);
+        }}
+        placeholder="std::uint32_t"
+        autoFocus={autoFocus}
+      />
+      <button type="button" className="field-type-index-button" aria-label={`${label} 类型索引`} onClick={() => {
+        setOpen((current) => current && showAll ? false : true);
+        setShowAll(true);
+      }}>⌄</button>
+      {open && <div className="field-type-menu" role="listbox" aria-label={`${label} 候选类型`}>
+        <FieldTypeGroup title="工作区类型" emptyText="没有匹配的工作区类型" options={workspaceOptions} onSelect={selectOption} />
+        <FieldTypeGroup title="基础支持类型" emptyText="没有匹配的基础类型" options={baseOptions} onSelect={selectOption} />
+      </div>}
+    </div>
+  </label>;
+}
+
+function FieldTypeGroup({ title, emptyText, options, onSelect }: {
+  title: string;
+  emptyText: string;
+  options: FieldTypeOption[];
+  onSelect(option: FieldTypeOption): void;
+}): React.JSX.Element {
+  return <section className="field-type-group">
+    <h3>{title}</h3>
+    {options.length === 0
+      ? <p>{emptyText}</p>
+      : options.map((option) => <button
+          type="button"
+          role="option"
+          key={`${option.group}:${option.value}`}
+          onClick={() => onSelect(option)}
+        >
+          <span>{option.label}</span>
+          {option.detail && <small>{option.detail}</small>}
+        </button>)}
+  </section>;
+}
+
 function ProtocolEditor({
   type,
   selectedMemberId,
   loading,
+  fieldTypeOptions,
   onEditType,
   onEditField,
   onAddFieldInline,
@@ -1416,6 +1578,7 @@ function ProtocolEditor({
   type: WorkspaceTypeView;
   selectedMemberId: string | null;
   loading: boolean;
+  fieldTypeOptions: FieldTypeOption[];
   onEditType(): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
   onAddFieldInline(type: WorkspaceTypeView, fieldType: string, fieldName: string): Promise<boolean>;
@@ -1481,7 +1644,7 @@ function ProtocolEditor({
           {editing
             ? <>
                 <td><input className="table-input" aria-label="字段名称" value={draftFieldName} onChange={(event) => setDraftFieldName(event.target.value)} autoFocus /></td>
-                <td><input className="table-input mono" aria-label="字段类型" value={draftFieldType} onChange={(event) => setDraftFieldType(event.target.value)} /></td>
+                <td><FieldTypeInput compact label="字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={setDraftFieldType} /></td>
                 <td>{field.note || "—"}</td>
                 <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
                 <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveEditedField(field)}>保存</button><button className="inline-action" disabled={loading} onClick={() => setEditingFieldId(null)}>取消</button><button className="inline-action danger" disabled={loading} onClick={() => void deleteEditedField(field)}>删除</button></div></td>
@@ -1497,7 +1660,7 @@ function ProtocolEditor({
       })}
       {addingField && <tr className="draft-row">
         <td><input className="table-input" aria-label="新增字段名称" value={draftFieldName} onChange={(event) => setDraftFieldName(event.target.value)} autoFocus /></td>
-        <td><input className="table-input mono" aria-label="新增字段类型" value={draftFieldType} onChange={(event) => setDraftFieldType(event.target.value)} /></td>
+        <td><FieldTypeInput compact label="新增字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={setDraftFieldType} /></td>
         <td>—</td>
         <td>新增</td>
         <td><div className="row-actions"><button className="inline-action" disabled={loading} onClick={() => void saveAddedField()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingField(false)}>取消</button></div></td>
