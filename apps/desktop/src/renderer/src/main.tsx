@@ -46,6 +46,8 @@ function App(): React.JSX.Element {
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = React.useState<string | null>(null);
   const [expandedNodeIds, setExpandedNodeIds] = React.useState<Set<string>>(new Set());
+  const [treeSearchOpen, setTreeSearchOpen] = React.useState(false);
+  const [treeSearchQuery, setTreeSearchQuery] = React.useState("");
   const [navigatorWidth, setNavigatorWidth] = React.useState(340);
   const [inspectorWidth, setInspectorWidth] = React.useState(260);
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
@@ -93,7 +95,13 @@ function App(): React.JSX.Element {
     [workspace, selectedType]
   );
   const selectedLayout = selectedType?.layout ?? null;
-  const tree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
+  const rawTree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
+  const treeSearchResult = React.useMemo(() => filterProtocolTree(rawTree, treeSearchQuery), [rawTree, treeSearchQuery]);
+  const tree = treeSearchResult.nodes;
+  const effectiveExpandedNodeIds = React.useMemo(() => {
+    if (!treeSearchQuery.trim()) return expandedNodeIds;
+    return new Set([...expandedNodeIds, ...treeSearchResult.expandedNodeIds]);
+  }, [expandedNodeIds, treeSearchQuery, treeSearchResult.expandedNodeIds]);
 
   const applyWorkspaceResult = React.useCallback((result: WorkspaceView, options?: {
     selectFileRelativePath?: string;
@@ -909,16 +917,34 @@ function App(): React.JSX.Element {
           <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => openStructuredAction("add-field")}>＋f</button>
           <button aria-label="添加枚举项" title="添加枚举项" disabled={selectedType?.kind !== "enum" || loading} onClick={() => openStructuredAction("add-enum-value")}>＋#</button>
           <button aria-label="排序协议树" title="排序协议树" disabled={!workspace} onClick={() => setUiNotice("协议树已按目录、Header、类型排序")}>↥</button>
+          <button aria-label="搜索协议树" title="搜索协议树" disabled={!workspace} aria-pressed={treeSearchOpen} onClick={() => setTreeSearchOpen((open) => !open)}>⌕</button>
           <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}>⌃⌄</button>
         </div>
+        {workspace && treeSearchOpen && <div className="tree-search" role="search">
+          <input
+            aria-label="协议树搜索"
+            autoFocus
+            value={treeSearchQuery}
+            placeholder="搜索 Header / Struct / Field / Enum…"
+            onChange={(event) => setTreeSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setTreeSearchQuery("");
+                setTreeSearchOpen(false);
+              }
+            }}
+          />
+          <span>{treeSearchQuery.trim() ? `${treeSearchResult.matchCount} 项` : "过滤树图"}</span>
+          {treeSearchQuery && <button aria-label="清空搜索" onClick={() => setTreeSearchQuery("")}>×</button>}
+        </div>}
         {workspace
           ? <nav className="tree" aria-label="协议资产树" onContextMenu={(event) => openContextMenu(event, { kind: "workspace" })}>
-              <TreeNodes
+              {tree.length > 0 ? <TreeNodes
                 nodes={tree}
                 selectedFilePath={selectedFilePath}
                 selectedTypeId={selectedTypeId}
                 selectedMemberId={selectedMemberId}
-                expandedNodeIds={expandedNodeIds}
+                expandedNodeIds={effectiveExpandedNodeIds}
                 onToggleNode={toggleNode}
                 onSelectFile={(file) => previewFileTab(file)}
                 onPinFile={(file) => openFileTab(file)}
@@ -927,7 +953,7 @@ function App(): React.JSX.Element {
                 onSelectMember={(parent, memberId) => previewTypeTab(parent, memberId)}
                 onPinMember={(parent, memberId) => openTypeTab(parent, memberId)}
                 onOpenContextMenu={openContextMenu}
-              />
+              /> : <p className="tree-no-results">没有匹配的协议节点</p>}
             </nav>
           : <div className="tree-empty"><p>打开工作区后，这里会显示 Header、协议类型与字段。</p></div>}
         <div className="workspace-dock" aria-label="工作区管理">
@@ -1147,6 +1173,65 @@ function sortTree(nodes: ProtocolTreeNode[]): ProtocolTreeNode[] {
       return { ...node, children: sortTree(node.children) };
     })
     .sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
+}
+
+function filterProtocolTree(nodes: ProtocolTreeNode[], query: string): { nodes: ProtocolTreeNode[]; expandedNodeIds: Set<string>; matchCount: number } {
+  const normalizedQuery = query.trim().toLowerCase();
+  const expandedNodeIds = new Set<string>();
+  if (!normalizedQuery) return { nodes, expandedNodeIds, matchCount: countTreeNodes(nodes) };
+
+  let matchCount = 0;
+
+  function visit(node: ProtocolTreeNode): ProtocolTreeNode | null {
+    const selfMatches = nodeSearchText(node).includes(normalizedQuery);
+    if (selfMatches) matchCount += 1;
+    if (!("children" in node)) return selfMatches ? node : null;
+
+    const children = node.children.flatMap((child) => {
+      const filtered = visit(child);
+      return filtered ? [filtered] : [];
+    });
+    if (!selfMatches && children.length === 0) return null;
+    if (children.length > 0) expandedNodeIds.add(node.id);
+    return { ...node, children } as ProtocolTreeNode;
+  }
+
+  return {
+    nodes: nodes.flatMap((node) => {
+      const filtered = visit(node);
+      return filtered ? [filtered] : [];
+    }),
+    expandedNodeIds,
+    matchCount
+  };
+}
+
+function countTreeNodes(nodes: ProtocolTreeNode[]): number {
+  return nodes.reduce((count, node) => count + 1 + ("children" in node ? countTreeNodes(node.children) : 0), 0);
+}
+
+function nodeSearchText(node: ProtocolTreeNode): string {
+  if (node.kind === "folder") return node.name.toLowerCase();
+  if (node.kind === "file") return [
+    node.name,
+    node.file.relativePath,
+    node.file.includes.join(" ")
+  ].join(" ").toLowerCase();
+  if (node.kind === "type") return [
+    node.name,
+    node.type.qualifiedName,
+    node.type.kind,
+    node.type.note ?? ""
+  ].join(" ").toLowerCase();
+  return [
+    node.name,
+    node.field?.type ?? "",
+    node.field?.note ?? "",
+    node.enumValue?.value?.toString() ?? "",
+    node.enumValue?.note ?? "",
+    node.parent.name,
+    node.parent.qualifiedName
+  ].join(" ").toLowerCase();
 }
 
 function buildBaseFieldTypeOptions(): FieldTypeOption[] {

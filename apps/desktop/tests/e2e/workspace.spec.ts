@@ -20,6 +20,17 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "新增枚举" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "新建 Header 文件" })).toBeEnabled();
+    const treeBox = await page.locator(".tree").evaluate((element) => element.getBoundingClientRect());
+    const dockBox = await page.locator(".workspace-dock").evaluate((element) => element.getBoundingClientRect());
+    expect(treeBox.bottom).toBeLessThanOrEqual(dockBox.top + 1);
+    await page.getByRole("button", { name: "搜索协议树" }).click();
+    await page.getByRole("textbox", { name: "协议树搜索" }).fill("FaultSeverity");
+    await expect(page.getByRole("button", { name: "demo::diagnostics::FaultSeverity", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "demo::radar::RadarTrack", exact: true })).toHaveCount(0);
+    await page.getByRole("textbox", { name: "协议树搜索" }).fill("trackId");
+    await expect(page.getByRole("button", { name: "RadarTrack trackId", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "清空搜索" }).click();
+    await expect(page.getByRole("button", { name: "demo::radar::RadarTrack", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "新建 Header 文件" }).click();
     let actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("新建 Header");
