@@ -67,6 +67,7 @@ function App(): React.JSX.Element {
   const [editingEnumValueId, setEditingEnumValueId] = React.useState<string | null>(null);
   const [noteDraft, setNoteDraft] = React.useState("");
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
+  const [previewTab, setPreviewTab] = React.useState<WorkspaceTab | null>(null);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const [contextMenu, setContextMenu] = React.useState<ContextMenuState | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
@@ -109,7 +110,8 @@ function App(): React.JSX.Element {
     setSelectedMemberId(nextMemberId);
     setExpandedNodeIds(initialExpandedNodeIds(nextTree, nextType?.id ?? null));
     const nextActiveTab = nextFile ? tabForFile(nextFile) : nextType ? tabForType(nextType) : null;
-    setTabs((current) => reconcileTabs(current, result, nextActiveTab));
+    setTabs((current) => reconcileTabs(current, result));
+    setPreviewTab(nextActiveTab);
     setActiveTabId(nextActiveTab?.id ?? null);
   }, []);
 
@@ -674,28 +676,7 @@ function App(): React.JSX.Element {
     });
   }
 
-  function openFileTab(file: WorkspaceFileView): void {
-    const tab = tabForFile(file);
-    setTabs((current) => upsertTab(current, tab));
-    setActiveTabId(tab.id);
-    setSelectedFilePath(file.path);
-    setSelectedTypeId(null);
-    setSelectedMemberId(null);
-    syncActionForFileSelection(file);
-  }
-
-  function openTypeTab(type: WorkspaceTypeView, memberId: string | null = null): void {
-    const tab = tabForType(type);
-    setTabs((current) => upsertTab(current, tab));
-    setActiveTabId(tab.id);
-    setSelectedTypeId(type.id);
-    setSelectedFilePath(null);
-    setSelectedMemberId(memberId);
-    setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
-    syncActionForTypeSelection(type, memberId);
-  }
-
-  function activateTab(tab: WorkspaceTab): void {
+  function activateDocumentTab(tab: WorkspaceTab): void {
     setActiveTabId(tab.id);
     setActiveAction(null);
     if (tab.kind === "file") {
@@ -709,12 +690,92 @@ function App(): React.JSX.Element {
     }
   }
 
+  function previewFileTab(file: WorkspaceFileView): void {
+    const tab = tabForFile(file);
+    if (tabs.some((item) => item.id === tab.id)) {
+      setActiveTabId(tab.id);
+      setSelectedFilePath(file.path);
+      setSelectedTypeId(null);
+      setSelectedMemberId(null);
+      syncActionForFileSelection(file);
+    } else {
+      setPreviewTab(tab);
+      setActiveTabId(tab.id);
+      setSelectedFilePath(file.path);
+      setSelectedTypeId(null);
+      setSelectedMemberId(null);
+      syncActionForFileSelection(file);
+    }
+  }
+
+  function previewTypeTab(type: WorkspaceTypeView, memberId: string | null = null): void {
+    const tab = tabForType(type);
+    if (tabs.some((item) => item.id === tab.id)) {
+      setActiveTabId(tab.id);
+      setSelectedTypeId(type.id);
+      setSelectedFilePath(null);
+      setSelectedMemberId(memberId);
+      setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
+      syncActionForTypeSelection(type, memberId);
+    } else {
+      setPreviewTab(tab);
+      setActiveTabId(tab.id);
+      setSelectedTypeId(type.id);
+      setSelectedFilePath(null);
+      setSelectedMemberId(memberId);
+      setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
+      syncActionForTypeSelection(type, memberId);
+    }
+  }
+
+  function openFileTab(file: WorkspaceFileView): void {
+    const tab = tabForFile(file);
+    setTabs((current) => upsertTab(current, tab));
+    setPreviewTab((current) => current?.id === tab.id ? null : current);
+    setActiveTabId(tab.id);
+    setSelectedFilePath(file.path);
+    setSelectedTypeId(null);
+    setSelectedMemberId(null);
+    syncActionForFileSelection(file);
+  }
+
+  function openTypeTab(type: WorkspaceTypeView, memberId: string | null = null): void {
+    const tab = tabForType(type);
+    setTabs((current) => upsertTab(current, tab));
+    setPreviewTab((current) => current?.id === tab.id ? null : current);
+    setActiveTabId(tab.id);
+    setSelectedTypeId(type.id);
+    setSelectedFilePath(null);
+    setSelectedMemberId(memberId);
+    setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
+    syncActionForTypeSelection(type, memberId);
+  }
+
+  function activateTab(tab: WorkspaceTab): void {
+    activateDocumentTab(tab);
+  }
+
   function closeTab(tabId: string): void {
+    if (previewTab?.id === tabId) {
+      setPreviewTab(null);
+      if (activeTabId === tabId) {
+        const fallback = tabs.at(-1) ?? null;
+        setActiveTabId(fallback?.id ?? null);
+        if (fallback) activateDocumentTab(fallback);
+        else {
+          setSelectedFilePath(null);
+          setSelectedTypeId(null);
+          setSelectedMemberId(null);
+          setActiveAction(null);
+        }
+      }
+      return;
+    }
     setTabs((current) => {
       const index = current.findIndex((tab) => tab.id === tabId);
       const next = current.filter((tab) => tab.id !== tabId);
       if (activeTabId === tabId) {
-        const fallback = next[Math.max(0, index - 1)] ?? next[0] ?? null;
+        const fallback = next[Math.max(0, index - 1)] ?? next[0] ?? previewTab ?? null;
         setActiveTabId(fallback?.id ?? null);
         if (!fallback) {
           setSelectedFilePath(null);
@@ -825,15 +886,12 @@ function App(): React.JSX.Element {
                 selectedMemberId={selectedMemberId}
                 expandedNodeIds={expandedNodeIds}
                 onToggleNode={toggleNode}
-                onSelectFile={(file) => {
-                  openFileTab(file);
-                }}
-                onSelectType={(type) => {
-                  openTypeTab(type);
-                }}
-                onSelectMember={(parent, memberId) => {
-                  openTypeTab(parent, memberId);
-                }}
+                onSelectFile={(file) => previewFileTab(file)}
+                onPinFile={(file) => openFileTab(file)}
+                onSelectType={(type) => previewTypeTab(type)}
+                onPinType={(type) => openTypeTab(type)}
+                onSelectMember={(parent, memberId) => previewTypeTab(parent, memberId)}
+                onPinMember={(parent, memberId) => openTypeTab(parent, memberId)}
                 onOpenContextMenu={openContextMenu}
               />
             </nav>
@@ -868,7 +926,7 @@ function App(): React.JSX.Element {
           <p className="lede">扫描 C++ 数据结构，理解字段布局，维护语义元数据，并用受控生成与语义差异守住协议演进。</p>
           <div className="flow"><span>扫描</span><b>→</b><span>IR</span><b>→</b><span>布局</span><b>→</b><span>生成</span><b>→</b><span>检查</span></div>
         </article>}
-        {workspace && <TabStrip tabs={tabs} activeTabId={activeTabId} onActivate={activateTab} onClose={closeTab} />}
+        {workspace && <TabStrip tabs={tabs} previewTab={previewTab} activeTabId={activeTabId} onActivate={activateTab} onClose={closeTab} />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -1124,10 +1182,10 @@ function upsertTab(tabs: WorkspaceTab[], tab: WorkspaceTab): WorkspaceTab[] {
   return tabs.some((item) => item.id === tab.id) ? tabs : [...tabs, tab];
 }
 
-function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView, activeTab: WorkspaceTab | null): WorkspaceTab[] {
+function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView): WorkspaceTab[] {
   const files = new Map(workspace.files.map((file) => [file.path, file]));
   const types = new Map(workspace.types.map((type) => [type.id, type]));
-  const next = tabs.flatMap((tab): WorkspaceTab[] => {
+  return tabs.flatMap((tab): WorkspaceTab[] => {
     if (tab.kind === "file") {
       const file = files.get(tab.filePath);
       return file ? [tabForFile(file)] : [];
@@ -1135,16 +1193,17 @@ function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView, activeTab
     const type = types.get(tab.typeId);
     return type ? [tabForType(type)] : [];
   });
-  return activeTab ? upsertTab(next, activeTab) : next;
 }
 
-function TabStrip({ tabs, activeTabId, onActivate, onClose }: {
+function TabStrip({ tabs, previewTab, activeTabId, onActivate, onClose }: {
   tabs: WorkspaceTab[];
+  previewTab: WorkspaceTab | null;
   activeTabId: string | null;
   onActivate(tab: WorkspaceTab): void;
   onClose(tabId: string): void;
 }): React.JSX.Element | null {
-  if (tabs.length === 0) return null;
+  const visiblePreview = previewTab && !tabs.some((tab) => tab.id === previewTab.id) ? previewTab : null;
+  if (tabs.length === 0 && !visiblePreview) return null;
   return <nav className="tab-strip" aria-label="工作区标签页">
     {tabs.map((tab) => <div className={tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"} key={tab.id}>
       <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}`} onClick={() => onActivate(tab)}>
@@ -1153,6 +1212,14 @@ function TabStrip({ tabs, activeTabId, onActivate, onClose }: {
       </button>
       <button className="workspace-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => onClose(tab.id)}>×</button>
     </div>)}
+    {visiblePreview && <div className={visiblePreview.id === activeTabId ? "workspace-tab preview active" : "workspace-tab preview"} key={`preview:${visiblePreview.id}`}>
+      <button className="workspace-tab-main" aria-label={`预览 ${visiblePreview.title}`} onClick={() => onActivate(visiblePreview)}>
+        <span className={visiblePreview.kind === "file" ? "tab-kind file" : "tab-kind type"}>{visiblePreview.kind === "file" ? "H" : "S"}</span>
+        <span>{visiblePreview.title}</span>
+        <small>Preview</small>
+      </button>
+      <button className="workspace-tab-close" aria-label={`关闭预览 ${visiblePreview.title}`} onClick={() => onClose(visiblePreview.id)}>×</button>
+    </div>}
   </nav>;
 }
 
@@ -1164,8 +1231,11 @@ function TreeNodes({
   expandedNodeIds,
   onToggleNode,
   onSelectFile,
+  onPinFile,
   onSelectType,
+  onPinType,
   onSelectMember,
+  onPinMember,
   onOpenContextMenu,
   level = 0
 }: {
@@ -1176,8 +1246,11 @@ function TreeNodes({
   expandedNodeIds: Set<string>;
   onToggleNode(nodeId: string): void;
   onSelectFile(file: WorkspaceFileView): void;
+  onPinFile(file: WorkspaceFileView): void;
   onSelectType(type: WorkspaceTypeView): void;
+  onPinType(type: WorkspaceTypeView): void;
   onSelectMember(parent: WorkspaceTypeView, memberId: string): void;
+  onPinMember(parent: WorkspaceTypeView, memberId: string): void;
   onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
   level?: number;
 }): React.JSX.Element {
@@ -1190,7 +1263,7 @@ function TreeNodes({
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"}目录 ${node.name}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
             <button className="node-label folder-label" aria-label={`目录 ${node.name}`} onClick={() => onToggleNode(node.id)}><span className="icon folder-icon">■</span><span>{node.name}</span></button>
           </div>
-          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
+          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onPinFile={onPinFile} onSelectType={onSelectType} onPinType={onPinType} onSelectMember={onSelectMember} onPinMember={onPinMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
       if (node.kind === "file") {
@@ -1198,9 +1271,9 @@ function TreeNodes({
         return <div className="tree-branch" key={node.id}>
           <div className={node.file.path === selectedFilePath ? "tree-row active" : "tree-row"} onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file: node.file })}>
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"} Header ${node.file.relativePath}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
-            <button className="node-label" aria-label={`打开 Header ${node.file.relativePath}`} onClick={() => onSelectFile(node.file)}><span className="icon file-icon">H</span><span>{node.name}</span></button>
+            <button className="node-label" aria-label={`打开 Header ${node.file.relativePath}`} onClick={() => onSelectFile(node.file)} onDoubleClick={() => onPinFile(node.file)}><span className="icon file-icon">H</span><span>{node.name}</span></button>
           </div>
-          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
+          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onPinFile={onPinFile} onSelectType={onSelectType} onPinType={onPinType} onSelectMember={onSelectMember} onPinMember={onPinMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
       if (node.kind === "type") {
@@ -1208,12 +1281,12 @@ function TreeNodes({
         return <div className="tree-branch" key={node.id}>
           <div className={node.type.id === selectedTypeId && !selectedMemberId ? "tree-row active" : "tree-row"} onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type: node.type })}>
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"}类型 ${node.type.qualifiedName}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
-            <button className="node-label" aria-label={node.type.qualifiedName} onClick={() => onSelectType(node.type)}><span className="icon type-icon">{node.type.kind === "struct" ? "S" : "E"}</span><span>{node.name}</span></button>
+            <button className="node-label" aria-label={node.type.qualifiedName} onClick={() => onSelectType(node.type)} onDoubleClick={() => onPinType(node.type)}><span className="icon type-icon">{node.type.kind === "struct" ? "S" : "E"}</span><span>{node.name}</span></button>
           </div>
-          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
+          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onPinFile={onPinFile} onSelectType={onSelectType} onPinType={onPinType} onSelectMember={onSelectMember} onPinMember={onPinMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
-      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)} onContextMenu={(event) => node.field ? onOpenContextMenu(event, { kind: "field", type: node.parent, field: node.field }) : node.enumValue ? onOpenContextMenu(event, { kind: "enum-value", type: node.parent, value: node.enumValue }) : undefined}>
+      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)} onDoubleClick={() => onPinMember(node.parent, node.id)} onContextMenu={(event) => node.field ? onOpenContextMenu(event, { kind: "field", type: node.parent, field: node.field }) : node.enumValue ? onOpenContextMenu(event, { kind: "enum-value", type: node.parent, value: node.enumValue }) : undefined}>
         <span className="disclosure-spacer" /><span className="icon field-icon">{node.field ? "f" : "#"}</span><span>{node.name}</span>
         {node.field && <small>{node.field.type}</small>}
         {node.enumValue && <small>{node.enumValue.value ?? "auto"}</small>}
