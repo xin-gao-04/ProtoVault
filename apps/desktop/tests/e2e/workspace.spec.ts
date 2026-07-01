@@ -27,6 +27,17 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await radarTrack.click();
     await expect(page.getByRole("navigation", { name: "工作区标签页" })).toBeVisible();
     await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();
+    await page.keyboard.press("F2");
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("编辑数据结构");
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+    await radarTrack.click({ button: "right" });
+    await expect(page.getByRole("menu", { name: "上下文菜单" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "编辑 Struct" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "添加字段" }).click();
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("添加字段");
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
     await page.getByRole("button", { name: "新增数据结构" }).click();
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("新增数据结构");
@@ -62,6 +73,11 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "RadarTrack trackId" })).toHaveCount(0);
     await page.getByRole("button", { name: "展开类型 demo::radar::RadarTrack", exact: true }).click();
     await page.getByRole("button", { name: "RadarTrack velocity" }).click();
+    await page.keyboard.press("F2");
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("编辑字段");
+    await expect(page.getByLabel("字段名称")).toHaveValue("velocity");
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
     await expect(page.locator("tr.selected-row").getByRole("cell", { name: "velocity" })).toBeVisible();
 
     await expect(page.getByRole("button", { name: "目录 radar-workspace", exact: true })).toBeVisible();
@@ -108,6 +124,12 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(actionPanel).toContainText("编辑 Header");
     await expect(page.getByLabel("Header 相对路径")).toHaveValue("radar-workspace/headers/radar/track.hpp");
     await expect(page.getByRole("button", { name: "删除 Header" })).toBeVisible();
+    await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+    await page.getByRole("button", { name: "打开 Header radar-workspace/headers/radar/track.hpp" }).click({ button: "right" });
+    await expect(page.getByRole("menu", { name: "上下文菜单" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "编辑 Header" }).click();
+    actionPanel = page.getByRole("region", { name: "结构化编辑" });
+    await expect(actionPanel).toContainText("编辑 Header");
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
 
     await page.getByRole("button", { name: "demo::common::CoordinateFrame", exact: true }).click();

@@ -11,6 +11,15 @@ type ProtocolTreeNode =
 
 type WorkspaceAction = "create-header" | "create-struct" | "edit-header" | "edit-struct" | "add-field" | "edit-field";
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
+type ContextMenuState = {
+  x: number;
+  y: number;
+  target:
+    | { kind: "workspace" }
+    | { kind: "file"; file: WorkspaceFileView }
+    | { kind: "type"; type: WorkspaceTypeView }
+    | { kind: "field"; type: WorkspaceTypeView; field: WorkspaceFieldView };
+};
 
 function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
@@ -34,6 +43,7 @@ function App(): React.JSX.Element {
   const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
+  const [contextMenu, setContextMenu] = React.useState<ContextMenuState | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const selectedMemberName = selectedType?.fields.find((field) => field.id === selectedMemberId)?.name
@@ -96,6 +106,25 @@ function App(): React.JSX.Element {
     return () => window.clearTimeout(timer);
   }, [uiNotice]);
 
+  React.useEffect(() => {
+    function closeMenu(): void {
+      setContextMenu(null);
+    }
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === "F2") {
+        event.preventDefault();
+        triggerEditSelected();
+      }
+      if (event.key === "Escape") closeMenu();
+    }
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  });
+
   async function openWorkspace(sample: boolean): Promise<void> {
     setLoading(true);
     try {
@@ -146,6 +175,52 @@ function App(): React.JSX.Element {
       setFieldName("value");
     }
     setActiveAction(action);
+  }
+
+  function triggerEditSelected(): void {
+    if (selectedMemberId && selectedType?.kind === "struct") {
+      const field = selectedType.fields.find((item) => item.id === selectedMemberId);
+      if (field) {
+        openEditFieldAction(selectedType, field);
+        return;
+      }
+    }
+    if (selectedType?.kind === "struct") {
+      openStructuredAction("edit-struct");
+      return;
+    }
+    if (selectedFile) {
+      openStructuredAction("edit-header");
+      return;
+    }
+    setUiNotice("当前选中项暂不支持 F2 编辑");
+  }
+
+  function openContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ x: event.clientX, y: event.clientY, target });
+  }
+
+  function runContextAction(action: () => void): void {
+    setContextMenu(null);
+    action();
+  }
+
+  function editFile(file: WorkspaceFileView): void {
+    openFileTab(file);
+    setHeaderEditRelativePath(file.relativePath);
+    setActiveAction("edit-header");
+  }
+
+  function editType(type: WorkspaceTypeView): void {
+    openTypeTab(type);
+    if (type.kind !== "struct") {
+      setUiNotice("当前仅支持编辑 struct");
+      return;
+    }
+    setStructEditName(type.name);
+    setActiveAction("edit-struct");
   }
 
   async function createHeaderFromForm(): Promise<void> {
@@ -410,7 +485,7 @@ function App(): React.JSX.Element {
           <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}>⌃⌄</button>
         </div>
         {workspace
-          ? <nav className="tree" aria-label="协议资产树">
+          ? <nav className="tree" aria-label="协议资产树" onContextMenu={(event) => openContextMenu(event, { kind: "workspace" })}>
               <TreeNodes
                 nodes={tree}
                 selectedFilePath={selectedFilePath}
@@ -427,6 +502,7 @@ function App(): React.JSX.Element {
                 onSelectMember={(parent, memberId) => {
                   openTypeTab(parent, memberId);
                 }}
+                onOpenContextMenu={openContextMenu}
               />
             </nav>
           : <div className="tree-empty"><p>打开工作区后，这里会显示 Header、协议类型与字段。</p></div>}
@@ -491,9 +567,29 @@ function App(): React.JSX.Element {
           onUpdateField={() => void updateFieldFromForm()}
           onDeleteField={() => void deleteFieldFromForm()}
         />}
-        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditType={() => openStructuredAction("edit-struct")} onEditField={openEditFieldAction} />}
-        {workspace && selectedFile && <SourceViewer file={selectedFile} onEditHeader={() => openStructuredAction("edit-header")} />}
+        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditType={() => openStructuredAction("edit-struct")} onEditField={openEditFieldAction} onOpenContextMenu={openContextMenu} />}
+        {workspace && selectedFile && <SourceViewer file={selectedFile} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
         {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
+        {workspace && contextMenu && <ContextMenu
+          menu={contextMenu}
+          onClose={() => setContextMenu(null)}
+          onCreateHeader={() => runContextAction(() => openStructuredAction("create-header"))}
+          onCreateStruct={(file) => runContextAction(() => {
+            openFileTab(file);
+            setStructName("NewProtocol");
+            setStructHeaderPath(file.path);
+            setActiveAction("create-struct");
+          })}
+          onAddField={(type) => runContextAction(() => {
+            openTypeTab(type);
+            setFieldType("std::uint32_t");
+            setFieldName("value");
+            setActiveAction("add-field");
+          })}
+          onEditFile={(file) => runContextAction(() => editFile(file))}
+          onEditType={(type) => runContextAction(() => editType(type))}
+          onEditField={(type, field) => runContextAction(() => openEditFieldAction(type, field))}
+        />}
       </section>
       <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
       <aside className="inspector">
@@ -653,6 +749,7 @@ function TreeNodes({
   onSelectFile,
   onSelectType,
   onSelectMember,
+  onOpenContextMenu,
   level = 0
 }: {
   nodes: ProtocolTreeNode[];
@@ -664,6 +761,7 @@ function TreeNodes({
   onSelectFile(file: WorkspaceFileView): void;
   onSelectType(type: WorkspaceTypeView): void;
   onSelectMember(parent: WorkspaceTypeView, memberId: string): void;
+  onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
   level?: number;
 }): React.JSX.Element {
   return <div className="tree-level" style={{ "--level": level } as React.CSSProperties}>
@@ -675,30 +773,30 @@ function TreeNodes({
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"}目录 ${node.name}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
             <button className="node-label folder-label" aria-label={`目录 ${node.name}`} onClick={() => onToggleNode(node.id)}><span className="icon folder-icon">■</span><span>{node.name}</span></button>
           </div>
-          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} level={level + 1} />}
+          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
       if (node.kind === "file") {
         const expanded = expandedNodeIds.has(node.id);
         return <div className="tree-branch" key={node.id}>
-          <div className={node.file.path === selectedFilePath ? "tree-row active" : "tree-row"}>
+          <div className={node.file.path === selectedFilePath ? "tree-row active" : "tree-row"} onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file: node.file })}>
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"} Header ${node.file.relativePath}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
             <button className="node-label" aria-label={`打开 Header ${node.file.relativePath}`} onClick={() => onSelectFile(node.file)}><span className="icon file-icon">H</span><span>{node.name}</span></button>
           </div>
-          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} level={level + 1} />}
+          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
       if (node.kind === "type") {
         const expanded = expandedNodeIds.has(node.id);
         return <div className="tree-branch" key={node.id}>
-          <div className={node.type.id === selectedTypeId && !selectedMemberId ? "tree-row active" : "tree-row"}>
+          <div className={node.type.id === selectedTypeId && !selectedMemberId ? "tree-row active" : "tree-row"} onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type: node.type })}>
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"}类型 ${node.type.qualifiedName}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
             <button className="node-label" aria-label={node.type.qualifiedName} onClick={() => onSelectType(node.type)}><span className="icon type-icon">{node.type.kind === "struct" ? "S" : "E"}</span><span>{node.name}</span></button>
           </div>
-          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} level={level + 1} />}
+          {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onSelectType={onSelectType} onSelectMember={onSelectMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
-      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)}>
+      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)} onContextMenu={(event) => node.field ? onOpenContextMenu(event, { kind: "field", type: node.parent, field: node.field }) : undefined}>
         <span className="disclosure-spacer" /><span className="icon field-icon">{node.field ? "f" : "#"}</span><span>{node.name}</span>
         {node.field && <small>{node.field.type}</small>}
         {node.enumValue && <small>{node.enumValue.value ?? "auto"}</small>}
@@ -867,22 +965,73 @@ function StructuredActionPanel({
   </section>;
 }
 
-function ProtocolEditor({ type, selectedMemberId, onEditType, onEditField }: {
+function ProtocolEditor({ type, selectedMemberId, onEditType, onEditField, onOpenContextMenu }: {
   type: WorkspaceTypeView;
   selectedMemberId: string | null;
   onEditType(): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
+  onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
 }): React.JSX.Element {
-  return <div className="editor">
+  return <div className="editor" onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type })}>
     <div className="editor-title"><div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p></div><div className="editor-actions"><span className="status">AST 已同步</span>{type.kind === "struct" && <button className="inline-action" onClick={onEditType}>编辑 Struct</button>}</div></div>
-    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditField(type, field)}>编辑</button></td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th></tr></thead><tbody>{type.values.map((value) => <tr className={`enum-value:${type.id}:${value.name}` === selectedMemberId ? "selected-row" : undefined} key={value.name}><td>{value.name}</td><td>{value.value ?? "自动"}</td></tr>)}</tbody></table>}
+    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "field", type, field })}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditField(type, field)}>编辑</button></td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th></tr></thead><tbody>{type.values.map((value) => <tr className={`enum-value:${type.id}:${value.name}` === selectedMemberId ? "selected-row" : undefined} key={value.name}><td>{value.name}</td><td>{value.value ?? "自动"}</td></tr>)}</tbody></table>}
   </div>;
 }
 
-function SourceViewer({ file, onEditHeader }: { file: WorkspaceView["files"][number]; onEditHeader(): void }): React.JSX.Element {
-  return <div className="source-viewer">
+function SourceViewer({ file, onEditHeader, onOpenContextMenu }: { file: WorkspaceView["files"][number]; onEditHeader(): void; onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void }): React.JSX.Element {
+  return <div className="source-viewer" onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file })}>
     <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖</p></div><div className="editor-actions"><span className="status">只读预览</span><button className="inline-action" onClick={onEditHeader}>编辑 Header</button></div></div>
     <pre><code>{file.content}</code></pre>
+  </div>;
+}
+
+function ContextMenu({
+  menu,
+  onClose,
+  onCreateHeader,
+  onCreateStruct,
+  onAddField,
+  onEditFile,
+  onEditType,
+  onEditField
+}: {
+  menu: ContextMenuState;
+  onClose(): void;
+  onCreateHeader(): void;
+  onCreateStruct(file: WorkspaceFileView): void;
+  onAddField(type: WorkspaceTypeView): void;
+  onEditFile(file: WorkspaceFileView): void;
+  onEditType(type: WorkspaceTypeView): void;
+  onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
+}): React.JSX.Element {
+  const items: Array<{ label: string; action(): void; disabled?: boolean }> = [];
+  if (menu.target.kind === "workspace") {
+    items.push({ label: "新建 Header", action: onCreateHeader });
+  }
+  if (menu.target.kind === "file") {
+    const { file } = menu.target;
+    items.push(
+      { label: "编辑 Header", action: () => onEditFile(file) },
+      { label: "新增 Struct", action: () => onCreateStruct(file) }
+    );
+  }
+  if (menu.target.kind === "type") {
+    const { type } = menu.target;
+    items.push(
+      { label: "编辑 Struct", action: () => onEditType(type), disabled: type.kind !== "struct" },
+      { label: "添加字段", action: () => onAddField(type), disabled: type.kind !== "struct" }
+    );
+  }
+  if (menu.target.kind === "field") {
+    const { type, field } = menu.target;
+    items.push(
+      { label: "编辑字段", action: () => onEditField(type, field) },
+      { label: "添加字段", action: () => onAddField(type) }
+    );
+  }
+
+  return <div className="context-menu" role="menu" aria-label="上下文菜单" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
+    {items.map((item) => <button key={item.label} role="menuitem" disabled={item.disabled} onClick={() => { item.action(); onClose(); }}>{item.label}</button>)}
   </div>;
 }
 
