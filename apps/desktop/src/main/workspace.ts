@@ -181,6 +181,8 @@ function enumValueDeclaration(valueName: string, value?: number): string {
   return `${valueName}${value === undefined ? "" : ` = ${value}`},`;
 }
 
+const NOTE_COMMENT_PATTERN = /^\s*\/\/\/\s*@protovault-note:(?:\s?(.*))?$/;
+
 async function atomicWriteFile(targetPath: string, content: string): Promise<void> {
   await fs.mkdir(dirname(targetPath), { recursive: true });
   const tempPath = join(dirname(targetPath), `.${basename(targetPath)}.${process.pid}.${Date.now()}.tmp`);
@@ -671,17 +673,72 @@ export async function deleteEnumValue(input: DeleteEnumValueInput): Promise<Work
 export async function updateNote(input: UpdateNoteInput): Promise<WorkspaceView> {
   const root = resolve(input.workspaceRoot);
   const workspace = await scanWorkspace(root);
-  const validIds = new Set<string>();
-  for (const type of workspace.types) {
-    validIds.add(type.id);
-    type.fields.forEach((field) => validIds.add(field.id));
-    type.values.forEach((value) => validIds.add(value.id));
-  }
-  if (!validIds.has(input.targetId)) throw new Error("未找到要记录注释的协议对象。");
+  const target = findNoteTarget(workspace, input.targetId);
+  if (!target) throw new Error("未找到要记录注释的协议对象。");
   const metadata = await readMetadata(root);
   const note = input.note.trim();
   if (note) metadata.notes[input.targetId] = note;
   else delete metadata.notes[input.targetId];
   await writeMetadata(root, metadata);
+  await syncNoteToSource(root, target, note);
   return scanWorkspace(root);
+}
+
+type NoteSourceTarget = {
+  header: string;
+  lineIndex: number;
+  declarationKind?: WorkspaceTypeView["kind"];
+  declarationName?: string;
+};
+
+function findNoteTarget(workspace: WorkspaceView, targetId: string): NoteSourceTarget | null {
+  for (const type of workspace.types) {
+    if (type.id === targetId) {
+      return findTypeDeclarationLine(type);
+    }
+    const field = type.fields.find((item) => item.id === targetId);
+    if (field?.location?.line) return { header: type.file, lineIndex: field.location.line - 1 };
+    const enumValue = type.values.find((item) => item.id === targetId);
+    if (enumValue?.location?.line) return { header: type.file, lineIndex: enumValue.location.line - 1 };
+  }
+  return null;
+}
+
+function findTypeDeclarationLine(type: WorkspaceTypeView): NoteSourceTarget | null {
+  return { header: type.file, lineIndex: -1, declarationKind: type.kind, declarationName: type.name };
+}
+
+async function syncNoteToSource(root: string, target: NoteSourceTarget, note: string): Promise<void> {
+  const header = assertWorkspaceFile(root, target.header);
+  const content = await fs.readFile(header, "utf8");
+  const lines = content.split(/\r?\n/);
+  let lineIndex = target.lineIndex;
+  if (lineIndex < 0 && target.declarationKind && target.declarationName) {
+    lineIndex = findDeclarationLineIndex(lines, target.declarationKind, target.declarationName);
+  }
+  if (lineIndex < 0) throw new Error("该对象缺少源码位置，暂不能同步注释到 Header。");
+  if (lineIndex >= lines.length) throw new Error("注释同步目标行超出 Header 范围。");
+
+  const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "";
+  let commentStart = lineIndex;
+  while (commentStart > 0 && NOTE_COMMENT_PATTERN.test(lines[commentStart - 1] ?? "")) {
+    commentStart -= 1;
+  }
+  const commentLines = note
+    ? note.split(/\r?\n/).map((line) => `${indent}/// @protovault-note: ${line.trimEnd()}`)
+    : [];
+  lines.splice(commentStart, lineIndex - commentStart, ...commentLines);
+  await atomicWriteFile(header, lines.join("\n"));
+}
+
+function findDeclarationLineIndex(lines: string[], kind: WorkspaceTypeView["kind"], name: string): number {
+  const escapedName = escapeRegExp(name);
+  const pattern = kind === "struct"
+    ? new RegExp(`\\bstruct\\s+${escapedName}\\b`)
+    : new RegExp(`\\benum\\s+(?:class\\s+)?${escapedName}\\b`);
+  return lines.findIndex((line) => pattern.test(line));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

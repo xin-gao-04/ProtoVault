@@ -59,12 +59,14 @@ input, select, textarea { font: inherit; color: var(--text-normal); }
 .tab-strip { display: flex; align-items: flex-end; gap: 1px; min-height: 38px; padding: 6px 18px 0; border-bottom: 1px solid var(--background-modifier-border); background: color-mix(in srgb, var(--background-primary-alt) 82%, transparent); overflow-x: auto; }
 .workspace-tab { display: flex; align-items: center; max-width: 220px; border: 1px solid transparent; border-bottom: 0; border-radius: var(--radius-m) var(--radius-m) 0 0; background: transparent; color: var(--text-muted); }
 .workspace-tab.active { border-color: var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); }
+.workspace-tab.dirty { color: var(--text-accent-hover); }
 .workspace-tab.preview { margin-left: auto; border-style: dashed; opacity: .92; }
 .workspace-tab.preview .workspace-tab-main { grid-template-columns: 18px minmax(0, 1fr) auto; }
 .workspace-tab.preview .workspace-tab-main span:last-of-type { font-style: italic; }
 .workspace-tab-main { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 7px; min-width: 0; padding: 8px 8px 7px 10px; border: 0; background: transparent; text-align: left; }
 .workspace-tab-main span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-tab-main small { padding: 1px 5px; border: 1px solid var(--background-modifier-border); border-radius: 999px; color: var(--text-faint); font-size: 9px; text-transform: uppercase; }
+.workspace-tab.dirty .workspace-tab-main small { border-color: var(--interactive-accent); color: var(--text-accent-hover); }
 .workspace-tab-close { width: 24px; height: 28px; border: 0; background: transparent; color: var(--text-faint); }
 .workspace-tab-close:hover { color: var(--text-accent-hover); }
 .tab-kind { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; font-size: 9px; font-weight: 800; }

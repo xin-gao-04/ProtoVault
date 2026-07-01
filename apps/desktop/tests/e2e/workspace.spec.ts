@@ -1,8 +1,11 @@
 import { _electron as electron, expect, test } from "@playwright/test";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 test("opens the sample workspace and navigates headers and protocol types", async () => {
   const desktopRoot = resolve(import.meta.dirname, "../..");
+  const geometryHeader = resolve(desktopRoot, "../../examples/radar-workspace/headers/common/geometry.hpp");
+  const originalGeometryHeader = await readFile(geometryHeader, "utf8");
   const application = await electron.launch({
     args: ["."],
     cwd: desktopRoot,
@@ -203,11 +206,15 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
 
     const noteEditor = page.getByRole("region", { name: "注释编辑" });
+    const noteText = `测试坐标系枚举项注释 CtrlS ${Date.now()}`;
     await expect(noteEditor).toContainText("枚举项 CoordinateFrame.ECEF");
-    await noteEditor.getByPlaceholder("记录语义说明、单位、范围、兼容性约束…").fill("测试坐标系枚举项注释");
-    await noteEditor.getByRole("button", { name: "保存注释" }).click();
-    await expect(page.getByText("注释已保存到 .protocol/meta/metadata.json")).toBeVisible();
+    await noteEditor.getByPlaceholder("记录语义说明、单位、范围、兼容性约束…").fill(noteText);
+    await expect(page.getByRole("button", { name: "切换到 CoordinateFrame 未保存", exact: true })).toBeVisible();
+    await page.keyboard.press("Control+S");
+    await expect(page.getByText("注释已同步到 Header 和 .protocol/meta/metadata.json")).toBeVisible();
+    await expect(page.getByRole("button", { name: "切换到 CoordinateFrame", exact: true })).toBeVisible();
   } finally {
     await application.close();
+    await writeFile(geometryHeader, originalGeometryHeader, "utf8");
   }
 });

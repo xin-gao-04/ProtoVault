@@ -306,6 +306,12 @@ describe("scanWorkspace", () => {
 
       const metadata = JSON.parse(await readFile(resolve(root, ".protocol", "meta", "metadata.json"), "utf8")) as { notes: Record<string, string> };
       expect(Object.values(metadata.notes)).toEqual(expect.arrayContaining(["协议包头结构", "业务侧稳定 ID", "消息类型枚举", "缺省值"]));
+
+      const headerContent = await readFile(resolve(root, "headers", "meta.hpp"), "utf8");
+      expect(headerContent).toContain("/// @protovault-note: 协议包头结构");
+      expect(headerContent).toContain("/// @protovault-note: 业务侧稳定 ID");
+      expect(headerContent).toContain("/// @protovault-note: 消息类型枚举");
+      expect(headerContent).toContain("/// @protovault-note: 缺省值");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

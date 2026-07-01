@@ -84,7 +84,7 @@ function App(): React.JSX.Element {
   const [enumValueName, setEnumValueName] = React.useState("Unknown");
   const [enumValueNumber, setEnumValueNumber] = React.useState("0");
   const [editingEnumValueId, setEditingEnumValueId] = React.useState<string | null>(null);
-  const [noteDraft, setNoteDraft] = React.useState("");
+  const [dirtyNotes, setDirtyNotes] = React.useState<Record<string, string>>({});
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
   const [previewTab, setPreviewTab] = React.useState<WorkspaceTab | null>(null);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
@@ -100,6 +100,12 @@ function App(): React.JSX.Element {
       : selectedType
         ? { id: selectedType.id, label: `${selectedType.kind === "struct" ? "Struct" : "Enum"} ${selectedType.qualifiedName}`, note: selectedType.note ?? "" }
         : null;
+  const activeNoteText = selectedNoteTarget ? dirtyNotes[selectedNoteTarget.id] ?? selectedNoteTarget.note : "";
+  const activeNoteDirty = selectedNoteTarget ? dirtyNotes[selectedNoteTarget.id] !== undefined : false;
+  const dirtyTabIds = React.useMemo(
+    () => workspace ? buildDirtyTabIds(workspace, dirtyNotes) : new Set<string>(),
+    [workspace, dirtyNotes]
+  );
   const selectedFieldTypeOptions = React.useMemo(
     () => workspace && selectedType ? buildFieldTypeOptions(workspace, selectedType) : buildBaseFieldTypeOptions(),
     [workspace, selectedType]
@@ -168,14 +174,15 @@ function App(): React.JSX.Element {
   }, [uiNotice]);
 
   React.useEffect(() => {
-    setNoteDraft(selectedNoteTarget?.note ?? "");
-  }, [selectedNoteTarget?.id, selectedNoteTarget?.note]);
-
-  React.useEffect(() => {
     function closeMenu(): void {
       setContextMenu(null);
     }
     function handleKeyDown(event: KeyboardEvent): void {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void saveNote();
+        return;
+      }
       if (event.key === "F2") {
         event.preventDefault();
         triggerEditSelected();
@@ -689,12 +696,32 @@ function App(): React.JSX.Element {
     });
   }
 
+  function updateNoteDraft(targetId: string, value: string, savedValue: string): void {
+    setDirtyNotes((current) => {
+      const next = { ...current };
+      if (value === savedValue) delete next[targetId];
+      else next[targetId] = value;
+      return next;
+    });
+  }
+
   async function saveNote(): Promise<void> {
     if (!workspace || !selectedNoteTarget) return;
+    if (!activeNoteDirty) {
+      setUiNotice("没有需要保存的注释改动");
+      return;
+    }
+    const targetId = selectedNoteTarget.id;
+    const noteToSave = activeNoteText;
     await runWorkspaceAction(async () => {
-      const result = await window.protoVault.updateNote({ workspaceRoot: workspace.rootPath, targetId: selectedNoteTarget.id, note: noteDraft });
+      const result = await window.protoVault.updateNote({ workspaceRoot: workspace.rootPath, targetId, note: noteToSave });
       setWorkspace(result);
-      setUiNotice("注释已保存到 .protocol/meta/metadata.json");
+      setDirtyNotes((current) => {
+        const next = { ...current };
+        delete next[targetId];
+        return next;
+      });
+      setUiNotice("注释已同步到 Header 和 .protocol/meta/metadata.json");
     });
   }
 
@@ -948,7 +975,7 @@ function App(): React.JSX.Element {
           <p className="lede">扫描 C++ 数据结构，理解字段布局，维护语义元数据，并用受控生成与语义差异守住协议演进。</p>
           <div className="flow"><span>扫描</span><b>→</b><span>IR</span><b>→</b><span>布局</span><b>→</b><span>生成</span><b>→</b><span>检查</span></div>
         </article>}
-        {workspace && <TabStrip tabs={tabs} previewTab={previewTab} activeTabId={activeTabId} onActivate={activateTab} onClose={closeTab} />}
+        {workspace && <TabStrip tabs={tabs} previewTab={previewTab} activeTabId={activeTabId} dirtyTabIds={dirtyTabIds} onActivate={activateTab} onClose={closeTab} />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -1056,8 +1083,8 @@ function App(): React.JSX.Element {
         {workspace && selectedNoteTarget && <section className="metadata-editor" aria-label="注释编辑">
           <h2>注释</h2>
           <p>{selectedNoteTarget.label}</p>
-          <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录语义说明、单位、范围、兼容性约束…" />
-          <button type="button" disabled={loading} onClick={() => void saveNote()}>保存注释</button>
+          <textarea value={activeNoteText} onChange={(event) => updateNoteDraft(selectedNoteTarget.id, event.target.value, selectedNoteTarget.note)} placeholder="记录语义说明、单位、范围、兼容性约束…" />
+          <button type="button" disabled={loading || !activeNoteDirty} onClick={() => void saveNote()}>{activeNoteDirty ? "保存注释 Ctrl+S" : "注释已保存"}</button>
         </section>}
       </aside>
     </main>
@@ -1276,6 +1303,21 @@ function tabForType(type: WorkspaceTypeView): WorkspaceTab {
   return { id: `type:${type.id}`, kind: "type", title: type.name, typeId: type.id };
 }
 
+function buildDirtyTabIds(workspace: WorkspaceView, dirtyNotes: Record<string, string>): Set<string> {
+  const dirtyIds = new Set(Object.keys(dirtyNotes));
+  const tabIds = new Set<string>();
+  for (const type of workspace.types) {
+    if (
+      dirtyIds.has(type.id)
+      || type.fields.some((field) => dirtyIds.has(field.id))
+      || type.values.some((value) => dirtyIds.has(value.id))
+    ) {
+      tabIds.add(tabForType(type).id);
+    }
+  }
+  return tabIds;
+}
+
 function upsertTab(tabs: WorkspaceTab[], tab: WorkspaceTab): WorkspaceTab[] {
   return tabs.some((item) => item.id === tab.id) ? tabs : [...tabs, tab];
 }
@@ -1293,31 +1335,39 @@ function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView): Workspac
   });
 }
 
-function TabStrip({ tabs, previewTab, activeTabId, onActivate, onClose }: {
+function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onClose }: {
   tabs: WorkspaceTab[];
   previewTab: WorkspaceTab | null;
   activeTabId: string | null;
+  dirtyTabIds: Set<string>;
   onActivate(tab: WorkspaceTab): void;
   onClose(tabId: string): void;
 }): React.JSX.Element | null {
   const visiblePreview = previewTab && !tabs.some((tab) => tab.id === previewTab.id) ? previewTab : null;
   if (tabs.length === 0 && !visiblePreview) return null;
   return <nav className="tab-strip" aria-label="工作区标签页">
-    {tabs.map((tab) => <div className={tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"} key={tab.id}>
-      <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}`} onClick={() => onActivate(tab)}>
+    {tabs.map((tab) => {
+      const dirty = dirtyTabIds.has(tab.id);
+      return <div className={`${tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"}${dirty ? " dirty" : ""}`} key={tab.id}>
+      <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}${dirty ? " 未保存" : ""}`} onClick={() => onActivate(tab)}>
         <span className={tab.kind === "file" ? "tab-kind file" : "tab-kind type"}>{tab.kind === "file" ? "H" : "S"}</span>
         <span>{tab.title}</span>
+        {dirty && <small>●</small>}
       </button>
       <button className="workspace-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => onClose(tab.id)}>×</button>
-    </div>)}
-    {visiblePreview && <div className={visiblePreview.id === activeTabId ? "workspace-tab preview active" : "workspace-tab preview"} key={`preview:${visiblePreview.id}`}>
-      <button className="workspace-tab-main" aria-label={`预览 ${visiblePreview.title}`} onClick={() => onActivate(visiblePreview)}>
+    </div>;
+    })}
+    {visiblePreview && (() => {
+      const dirty = dirtyTabIds.has(visiblePreview.id);
+      return <div className={`${visiblePreview.id === activeTabId ? "workspace-tab preview active" : "workspace-tab preview"}${dirty ? " dirty" : ""}`} key={`preview:${visiblePreview.id}`}>
+      <button className="workspace-tab-main" aria-label={`预览 ${visiblePreview.title}${dirty ? " 未保存" : ""}`} onClick={() => onActivate(visiblePreview)}>
         <span className={visiblePreview.kind === "file" ? "tab-kind file" : "tab-kind type"}>{visiblePreview.kind === "file" ? "H" : "S"}</span>
         <span>{visiblePreview.title}</span>
-        <small>Preview</small>
+        <small>{dirty ? "●" : "Preview"}</small>
       </button>
       <button className="workspace-tab-close" aria-label={`关闭预览 ${visiblePreview.title}`} onClick={() => onClose(visiblePreview.id)}>×</button>
-    </div>}
+    </div>;
+    })()}
   </nav>;
 }
 
