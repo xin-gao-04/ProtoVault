@@ -22,6 +22,7 @@ import {
   scanWorkspace,
   updateEnumValue,
   updateField,
+  updateHeaderContent,
   updateNote
 } from "./workspace";
 
@@ -444,6 +445,80 @@ describe("scanWorkspace", () => {
       workspace = await deleteEnum({ workspaceRoot: root, typeId: packetKind!.id });
       expect(workspace.types.map((type) => type.qualifiedName)).not.toContain("protovault::MessageKind");
       expect(await readFile(resolve(root, "headers", "enums.hpp"), "utf8")).not.toContain("enum class MessageKind");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("adds enum values without corrupting enums that omit the trailing comma", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-enum-comma-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "quality.hpp"), `#pragma once
+#include <cstdint>
+namespace demo {
+enum class QualityLevel : std::uint8_t {
+  Low = 1,
+  Medium = 2,
+  High = 3
+};
+}
+`, "utf8");
+
+      let workspace = await scanWorkspace(root);
+      const quality = workspace.types.find((type) => type.qualifiedName === "demo::QualityLevel")!;
+      workspace = await addEnumValue({ workspaceRoot: root, typeId: quality.id, valueName: "VeryHigh" });
+
+      const updated = await readFile(resolve(root, "headers", "quality.hpp"), "utf8");
+      expect(updated).toContain("High = 3,");
+      expect(updated).toContain("VeryHigh,");
+      expect(workspace.diagnostics).toEqual([]);
+      expect(workspace.types.find((type) => type.qualifiedName === "demo::QualityLevel")?.values.map((value) => value.name)).toEqual([
+        "Low",
+        "Medium",
+        "High",
+        "VeryHigh"
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("keeps bad headers editable and can recover after source save", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-bad-header-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      const headerPath = resolve(root, "headers", "broken.hpp");
+      await writeFile(headerPath, `#pragma once
+#include <cstdint>
+namespace demo {
+enum class Broken : std::uint8_t {
+  Good = 1
+  Better,
+};
+}
+`, "utf8");
+
+      const broken = await scanWorkspace(root);
+      expect(broken.files.map((file) => file.relativePath)).toEqual(["headers/broken.hpp"]);
+      expect(broken.types).toEqual([]);
+      expect(broken.diagnostics.some((diagnostic) => diagnostic.severity === "error")).toBe(true);
+
+      const repaired = await updateHeaderContent({
+        workspaceRoot: root,
+        headerPath,
+        content: `#pragma once
+#include <cstdint>
+namespace demo {
+enum class Broken : std::uint8_t {
+  Good = 1,
+  Better,
+};
+}
+`
+      });
+      expect(repaired.diagnostics).toEqual([]);
+      expect(repaired.types.find((type) => type.qualifiedName === "demo::Broken")?.values.map((value) => value.name)).toEqual(["Good", "Better"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

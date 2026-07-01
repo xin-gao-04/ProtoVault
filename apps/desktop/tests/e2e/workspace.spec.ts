@@ -176,9 +176,10 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "预览 track.hpp", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "打开 Header radar-workspace/headers/radar/track.hpp" }).dblclick();
     await expect(page.getByRole("button", { name: "切换到 track.hpp" })).toBeVisible();
-    await expect(page.getByText("struct RadarTrack", { exact: false })).toBeVisible();
-    await expect(page.getByText("只读预览")).toBeVisible();
-    await page.getByRole("button", { name: "编辑 Header" }).click();
+    await expect(page.getByLabel("Header 源码")).toContainText("struct RadarTrack");
+    await expect(page.getByText("源码已同步")).toBeVisible();
+    await expect(page.getByRole("button", { name: "保存源码" })).toBeDisabled();
+    await page.getByRole("button", { name: "Header 操作" }).click();
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑 Header");
     await expect(page.getByLabel("Header 相对路径")).toHaveValue("radar-workspace/headers/radar/track.hpp");

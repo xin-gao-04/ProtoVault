@@ -112,6 +112,12 @@ export interface DeleteHeaderInput {
   headerPath: string;
 }
 
+export interface UpdateHeaderContentInput {
+  workspaceRoot: string;
+  headerPath: string;
+  content: string;
+}
+
 export interface RenameStructInput {
   workspaceRoot: string;
   typeId: string;

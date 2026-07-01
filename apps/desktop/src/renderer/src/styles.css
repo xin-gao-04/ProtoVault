@@ -119,6 +119,7 @@ input, select, textarea { font: inherit; color: var(--text-normal); }
 .editor-note-card p { margin: 0; color: var(--text-faint); font-size: 12px; line-height: 1.6; }
 .editor-actions { display: flex; align-items: center; gap: 8px; }
 .status { padding: 6px 10px; border: 1px solid #315a41; border-radius: 12px; color: #73c590; font-size: 11px; }
+.status.dirty { border-color: color-mix(in srgb, var(--interactive-accent) 60%, #315a41); color: var(--text-accent-hover); }
 .table-scroll { max-width: 100%; overflow: auto; border-radius: var(--radius-m); }
 table { width: 100%; min-width: 720px; border-collapse: collapse; background: #191b21cc; font-size: 13px; }
 th, td { padding: 12px 15px; border-bottom: 1px solid #2b2e36; text-align: left; }
@@ -154,8 +155,8 @@ tr.selected-row { background: #2b251c; box-shadow: inset 3px 0 0 #d4a64f; }
 .field-type-group button span { overflow: hidden; font: 12px var(--font-monospace); text-overflow: ellipsis; white-space: nowrap; }
 .field-type-group button small { overflow: hidden; color: var(--text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 code { color: #e4bc70; font-family: "Cascadia Code", monospace; }
-.source-viewer pre { overflow: auto; margin: 0; padding: 24px; border: 1px solid #292c34; border-radius: 6px; background: #111319e6; line-height: 1.65; }
-.source-viewer pre code { color: #d9dce3; font-size: 12px; white-space: pre; }
+.source-editor { width: 100%; min-height: 520px; resize: vertical; overflow: auto; margin: 0; padding: 24px; border: 1px solid #292c34; border-radius: 6px; background: #111319e6; color: #d9dce3; font: 12px/1.65 "Cascadia Code", Consolas, monospace; white-space: pre; tab-size: 2; outline: none; }
+.source-editor:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent); }
 .scan-empty { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 80px; color: #8f95a2; }
 .problems { margin-top: 48px; border-top: 1px solid #292c34; padding-top: 18px; }
 .ok { color: #70bb89; font-size: 12px; }

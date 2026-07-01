@@ -463,6 +463,21 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function saveHeaderContent(file: WorkspaceFileView, content: string): Promise<boolean> {
+    if (!workspace) return false;
+    return runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateHeaderContent({
+        workspaceRoot: workspace.rootPath,
+        headerPath: file.path,
+        content
+      });
+      applyWorkspaceResult(result, { selectFileRelativePath: file.relativePath });
+      setUiNotice(result.diagnostics.length > 0
+        ? "Header 已保存，但仍存在解析问题；可继续在源码区修复"
+        : "Header 源码已保存并重新扫描");
+    });
+  }
+
   async function renameStructFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "struct") return;
     const nextName = structEditName.trim();
@@ -1114,7 +1129,7 @@ function App(): React.JSX.Element {
           onSaveNote={saveNoteTarget}
           onOpenContextMenu={openContextMenu}
         />}
-        {workspace && selectedFile && <SourceViewer file={selectedFile} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
+        {workspace && selectedFile && <SourceViewer file={selectedFile} loading={loading} onSaveContent={saveHeaderContent} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
         {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
         {workspace && contextMenu && <ContextMenu
           menu={contextMenu}
@@ -2066,10 +2081,27 @@ function ProtocolEditor({
   </div>;
 }
 
-function SourceViewer({ file, onEditHeader, onOpenContextMenu }: { file: WorkspaceView["files"][number]; onEditHeader(): void; onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void }): React.JSX.Element {
+function SourceViewer({ file, loading, onSaveContent, onEditHeader, onOpenContextMenu }: {
+  file: WorkspaceView["files"][number];
+  loading: boolean;
+  onSaveContent(file: WorkspaceFileView, content: string): Promise<boolean>;
+  onEditHeader(): void;
+  onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
+}): React.JSX.Element {
+  const [draftContent, setDraftContent] = React.useState(file.content);
+  React.useEffect(() => {
+    setDraftContent(file.content);
+  }, [file.path, file.content]);
+  const dirty = draftContent !== file.content;
+
+  async function save(): Promise<void> {
+    const ok = await onSaveContent(file, draftContent);
+    if (ok) setDraftContent(draftContent);
+  }
+
   return <div className="source-viewer" onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file })}>
-    <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖</p></div><div className="editor-actions"><span className="status">只读预览</span><button className="inline-action" onClick={onEditHeader}>编辑 Header</button></div></div>
-    <pre><code>{file.content}</code></pre>
+    <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖</p></div><div className="editor-actions"><span className={dirty ? "status dirty" : "status"}>{dirty ? "源码未保存" : "源码已同步"}</span><button className="inline-action" disabled={loading || !dirty} onClick={() => void save()}>保存源码</button><button className="inline-action" onClick={onEditHeader}>Header 操作</button></div></div>
+    <textarea className="source-editor" aria-label="Header 源码" value={draftContent} spellCheck={false} onChange={(event) => setDraftContent(event.target.value)} />
   </div>;
 }
 

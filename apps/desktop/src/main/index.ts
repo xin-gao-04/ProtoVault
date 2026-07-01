@@ -18,6 +18,7 @@ import type {
   RenameStructInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
+  UpdateHeaderContentInput,
   UpdateNoteInput,
   WorkspaceScanProgress
 } from "../shared/workspace";
@@ -39,6 +40,7 @@ import {
   scanWorkspace,
   updateEnumValue,
   updateField,
+  updateHeaderContent,
   updateNote
 } from "./workspace";
 
@@ -117,6 +119,7 @@ app.whenReady().then(() => {
   ipcMain.handle("protocol:create-enum", (_event, input: CreateEnumInput) => createEnum(input));
   ipcMain.handle("protocol:rename-header", (_event, input: RenameHeaderInput) => renameHeader(input));
   ipcMain.handle("protocol:delete-header", (_event, input: DeleteHeaderInput) => deleteHeader(input));
+  ipcMain.handle("protocol:update-header-content", (_event, input: UpdateHeaderContentInput) => updateHeaderContent(input));
   ipcMain.handle("protocol:rename-struct", (_event, input: RenameStructInput) => renameStruct(input));
   ipcMain.handle("protocol:delete-struct", (_event, input: DeleteStructInput) => deleteStruct(input));
   ipcMain.handle("protocol:rename-enum", (_event, input: RenameEnumInput) => renameEnum(input));

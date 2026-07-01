@@ -19,6 +19,7 @@ import type {
   RenameStructInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
+  UpdateHeaderContentInput,
   UpdateNoteInput,
   WorkspaceDirectoryView,
   WorkspaceEnumValueView,
@@ -212,6 +213,19 @@ function enumBlockPattern(enumName: string): RegExp {
 
 function enumValueDeclaration(valueName: string, value?: number): string {
   return `${valueName}${value === undefined ? "" : ` = ${value}`},`;
+}
+
+function ensureEnumBodyTrailingComma(body: string): string {
+  const lines = body.trimEnd().split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] ?? "";
+    if (!line.trim() || NOTE_COMMENT_PATTERN.test(line)) continue;
+    if (!line.trimEnd().endsWith(",")) {
+      lines[index] = `${line.trimEnd()},`;
+    }
+    break;
+  }
+  return lines.join("\n");
 }
 
 const NOTE_COMMENT_PATTERN = /^\s*\/\/\/\s*@protovault-note:(?:\s?(.*))?$/;
@@ -578,6 +592,25 @@ async function scanHeader(clang: string, header: string, root: string, includeRo
   return applyHeaderLayoutHints(collectTypes(JSON.parse(stdout) as AstNode, root, header), content);
 }
 
+async function validateHeaderContent(root: string, header: string, content: string): Promise<void> {
+  const clang = await findClang();
+  const discovery = await discoverWorkspace(root);
+  const includeArgs = [root, ...discovery.directories].flatMap((includeRoot) => ["-I", includeRoot]);
+  const tempPath = join(dirname(header), `.${basename(header)}.${process.pid}.${Date.now()}.validate${extname(header) || ".hpp"}`);
+  await fs.writeFile(tempPath, content, "utf8");
+  try {
+    await execFileAsync(clang, [
+      "-x", "c++-header", "-std=c++20", ...includeArgs,
+      "-fsyntax-only", tempPath
+    ], { cwd: root, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`生成内容未通过 C++ 语法检查，已取消写入：${message}`);
+  } finally {
+    await fs.rm(tempPath, { force: true });
+  }
+}
+
 async function readFileView(path: string, root: string): Promise<WorkspaceFileView> {
   const content = await fs.readFile(path, "utf8");
   const includes = [...content.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm)].map((match) => match[1]);
@@ -778,6 +811,14 @@ export async function deleteHeader(input: DeleteHeaderInput): Promise<WorkspaceV
   return scanWorkspace(root);
 }
 
+export async function updateHeaderContent(input: UpdateHeaderContentInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const header = assertWorkspaceFile(root, input.headerPath);
+  if (!HEADER_EXTENSIONS.has(extname(header).toLowerCase())) throw new Error("只能编辑 Header 文件内容。");
+  await atomicWriteFile(header, input.content);
+  return scanWorkspace(root);
+}
+
 export async function renameStruct(input: RenameStructInput): Promise<WorkspaceView> {
   const root = resolve(input.workspaceRoot);
   const workspace = await scanWorkspace(root);
@@ -959,9 +1000,10 @@ export async function addEnumValue(input: AddEnumValueInput): Promise<WorkspaceV
   const pattern = enumBlockPattern(targetType.name);
   const match = pattern.exec(content);
   if (!match) throw new Error(`无法在 Header 中定位 enum ${targetType.name} 的受控编辑区域。`);
-  const body = match[2].trimEnd();
+  const body = ensureEnumBodyTrailingComma(match[2]);
   const nextBody = `${body}\n  ${enumValueDeclaration(valueName, input.value)}`;
   const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
+  await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
@@ -975,7 +1017,9 @@ export async function updateEnumValue(input: UpdateEnumValueInput): Promise<Work
   }
   const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "  ";
   lines[lineIndex] = `${indent}${enumValueDeclaration(valueName, input.value)}`;
-  await atomicWriteFile(header, lines.join("\n"));
+  const nextContent = lines.join("\n");
+  await validateHeaderContent(root, header, nextContent);
+  await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
 
@@ -983,7 +1027,9 @@ export async function deleteEnumValue(input: DeleteEnumValueInput): Promise<Work
   const root = resolve(input.workspaceRoot);
   const { header, lines, lineIndex } = await findEditableEnumValue(root, input.typeId, input.valueId);
   lines.splice(lineIndex, 1);
-  await atomicWriteFile(header, lines.join("\n"));
+  const nextContent = lines.join("\n");
+  await validateHeaderContent(root, header, nextContent);
+  await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
 
