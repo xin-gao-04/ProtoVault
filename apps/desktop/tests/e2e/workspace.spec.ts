@@ -5,7 +5,8 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
   const desktopRoot = resolve(import.meta.dirname, "../..");
   const application = await electron.launch({
     args: ["."],
-    cwd: desktopRoot
+    cwd: desktopRoot,
+    env: { ...process.env, PROTOVAULT_DISABLE_RESTORE: "1" }
   });
 
   try {

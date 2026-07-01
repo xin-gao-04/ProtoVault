@@ -19,12 +19,19 @@ describe("scanWorkspace", () => {
     ]));
     expect(workspace.files.map((file) => file.relativePath)).toEqual([
       "radar-workspace/headers/common/geometry.hpp",
+      "radar-workspace/headers/common/time.hpp",
+      "radar-workspace/headers/radar/detection.hpp",
       "radar-workspace/headers/radar/track.hpp"
     ]);
-    expect(workspace.files[1].content).toContain("struct RadarTrack");
+    expect(workspace.files.find((file) => file.relativePath.endsWith("track.hpp"))?.content).toContain("struct RadarTrack");
     expect(workspace.types.map((type) => type.qualifiedName)).toEqual(expect.arrayContaining([
       "demo::common::CoordinateFrame",
+      "demo::common::Pose3D",
+      "demo::common::QualityLevel",
+      "demo::common::Timestamp",
       "demo::common::Vec3",
+      "demo::radar::DetectionFrame",
+      "demo::radar::RadarDetection",
       "demo::radar::RadarTrack"
     ]));
     expect(workspace.types.map((type) => type.qualifiedName)).not.toContain("__vcrt_va_list_is_reference");
@@ -39,9 +46,11 @@ describe("scanWorkspace", () => {
 
     expect(radarTrack?.fields.map((field) => [field.name, field.type])).toEqual([
       ["trackId", "std::uint32_t"],
+      ["timestamp", "demo::common::Timestamp"],
       ["position", "demo::common::Vec3"],
       ["velocity", "demo::common::Vec3"],
       ["frame", "demo::common::CoordinateFrame"],
+      ["state", "TrackState"],
       ["confidence", "float"],
       ["history", "std::uint16_t[8]"]
     ]);
@@ -49,7 +58,8 @@ describe("scanWorkspace", () => {
     expect(coordinateFrame?.values).toEqual([
       { name: "Unknown", value: 0 },
       { name: "ENU", value: 1 },
-      { name: "ECEF", value: 2 }
+      { name: "ECEF", value: 2 },
+      { name: "SensorBody", value: 3 }
     ]);
   }, 30_000);
 

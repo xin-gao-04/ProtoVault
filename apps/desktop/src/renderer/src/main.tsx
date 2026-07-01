@@ -16,7 +16,7 @@ function App(): React.JSX.Element {
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = React.useState<string | null>(null);
   const [expandedNodeIds, setExpandedNodeIds] = React.useState<Set<string>>(new Set());
-  const [navigatorWidth, setNavigatorWidth] = React.useState(430);
+  const [navigatorWidth, setNavigatorWidth] = React.useState(340);
   const [inspectorWidth, setInspectorWidth] = React.useState(260);
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -26,46 +26,15 @@ function App(): React.JSX.Element {
     ?? selectedType?.values.find((value) => `enum-value:${selectedType.id}:${value.name}` === selectedMemberId)?.name;
   const tree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
 
-  React.useEffect(() => {
-    window.protoVault.health()
-      .then((result) => setHealth(`服务就绪 · Contract ${result.contractVersion}`))
-      .catch(() => setHealth("本地协议服务不可用"));
-  }, []);
-
-  React.useEffect(() => {
-    if (!uiNotice) return;
-    const timer = window.setTimeout(() => setUiNotice(null), 2800);
-    return () => window.clearTimeout(timer);
-  }, [uiNotice]);
-
-  async function openWorkspace(sample: boolean): Promise<void> {
-    setLoading(true);
-    try {
-      const result = sample ? await window.protoVault.openSampleWorkspace() : await window.protoVault.openWorkspace();
-      if (result) {
-        const nextTree = buildProtocolTree(result);
-        const firstTypeId = result.types[0]?.id ?? null;
-        setWorkspace(result);
-        setSelectedTypeId(firstTypeId);
-        setSelectedFilePath(null);
-        setSelectedMemberId(null);
-        setExpandedNodeIds(initialExpandedNodeIds(nextTree, firstTypeId));
-        setUiNotice(result.metadataPath ? "目录记录已更新：.protocol/workspace.json" : "工作区已扫描");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function applyWorkspaceResult(result: WorkspaceView, options?: {
+  const applyWorkspaceResult = React.useCallback((result: WorkspaceView, options?: {
     selectFileRelativePath?: string;
     selectTypeName?: string;
     selectFieldName?: string;
-  }): void {
+  }): void => {
     const nextTree = buildProtocolTree(result);
     const nextType = options?.selectTypeName
       ? result.types.find((type) => type.name === options.selectTypeName)
-      : result.types.find((type) => type.id === selectedTypeId) ?? result.types[0];
+      : result.types[0];
     const nextFile = options?.selectFileRelativePath
       ? result.files.find((file) => file.relativePath === options.selectFileRelativePath)
       : undefined;
@@ -78,6 +47,49 @@ function App(): React.JSX.Element {
     setSelectedFilePath(nextFile?.path ?? null);
     setSelectedMemberId(nextMemberId);
     setExpandedNodeIds(initialExpandedNodeIds(nextTree, nextType?.id ?? null));
+  }, []);
+
+  React.useEffect(() => {
+    window.protoVault.health()
+      .then((result) => setHealth(`服务就绪 · Contract ${result.contractVersion}`))
+      .catch(() => setHealth("本地协议服务不可用"));
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    window.protoVault.restoreLastWorkspace()
+      .then((result) => {
+        if (cancelled || !result) return;
+        applyWorkspaceResult(result);
+        setUiNotice(`已恢复上次工作区：${result.name}`);
+      })
+      .catch(() => {
+        if (!cancelled) setUiNotice("上次工作区不可用，请重新打开目录");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [applyWorkspaceResult]);
+
+  React.useEffect(() => {
+    if (!uiNotice) return;
+    const timer = window.setTimeout(() => setUiNotice(null), 2800);
+    return () => window.clearTimeout(timer);
+  }, [uiNotice]);
+
+  async function openWorkspace(sample: boolean): Promise<void> {
+    setLoading(true);
+    try {
+      const result = sample ? await window.protoVault.openSampleWorkspace() : await window.protoVault.openWorkspace();
+      if (result) {
+        applyWorkspaceResult(result);
+        setUiNotice(result.metadataPath ? "目录记录已更新：.protocol/workspace.json" : "工作区已扫描");
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function runWorkspaceAction(action: () => Promise<void>): Promise<void> {
@@ -158,7 +170,7 @@ function App(): React.JSX.Element {
 
     function move(pointerEvent: PointerEvent): void {
       if (kind === "navigator") {
-        setNavigatorWidth(clamp(startNavigatorWidth + pointerEvent.clientX - startX, 300, 620));
+        setNavigatorWidth(clamp(startNavigatorWidth + pointerEvent.clientX - startX, 280, 560));
       } else {
         setInspectorWidth(clamp(startInspectorWidth + startX - pointerEvent.clientX, 220, 460));
       }
