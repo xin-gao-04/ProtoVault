@@ -49,6 +49,28 @@ export interface CreateStructInput {
   structName: string;
 }
 
+export interface RenameHeaderInput {
+  workspaceRoot: string;
+  headerPath: string;
+  newRelativePath: string;
+}
+
+export interface DeleteHeaderInput {
+  workspaceRoot: string;
+  headerPath: string;
+}
+
+export interface RenameStructInput {
+  workspaceRoot: string;
+  typeId: string;
+  structName: string;
+}
+
+export interface DeleteStructInput {
+  workspaceRoot: string;
+  typeId: string;
+}
+
 export interface AddFieldInput {
   workspaceRoot: string;
   typeId: string;

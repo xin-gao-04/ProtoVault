@@ -9,7 +9,7 @@ type ProtocolTreeNode =
   | { id: string; kind: "type"; name: string; type: WorkspaceTypeView; children: ProtocolTreeNode[] }
   | { id: string; kind: "field"; name: string; parent: WorkspaceTypeView; field?: WorkspaceFieldView; enumValue?: WorkspaceTypeView["values"][number] };
 
-type WorkspaceAction = "create-header" | "create-struct" | "add-field" | "edit-field";
+type WorkspaceAction = "create-header" | "create-struct" | "edit-header" | "edit-struct" | "add-field" | "edit-field";
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
 
 function App(): React.JSX.Element {
@@ -27,6 +27,8 @@ function App(): React.JSX.Element {
   const [headerRelativePath, setHeaderRelativePath] = React.useState("");
   const [structName, setStructName] = React.useState("NewProtocol");
   const [structHeaderPath, setStructHeaderPath] = React.useState("");
+  const [headerEditRelativePath, setHeaderEditRelativePath] = React.useState("");
+  const [structEditName, setStructEditName] = React.useState("");
   const [fieldType, setFieldType] = React.useState("std::uint32_t");
   const [fieldName, setFieldName] = React.useState("value");
   const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
@@ -127,6 +129,18 @@ function App(): React.JSX.Element {
       setStructName("NewProtocol");
       setStructHeaderPath(selectedFilePath ?? selectedType?.file ?? workspace.files[0]?.path ?? "");
     }
+    if (action === "edit-header") {
+      const file = selectedFile ?? workspace.files.find((item) => item.path === selectedType?.file) ?? workspace.files[0];
+      if (!file) return;
+      setSelectedFilePath(file.path);
+      setSelectedTypeId(null);
+      setSelectedMemberId(null);
+      setHeaderEditRelativePath(file.relativePath);
+    }
+    if (action === "edit-struct") {
+      if (!selectedType || selectedType.kind !== "struct") return;
+      setStructEditName(selectedType.name);
+    }
     if (action === "add-field") {
       setFieldType("std::uint32_t");
       setFieldName("value");
@@ -165,6 +179,58 @@ function App(): React.JSX.Element {
       const result = await window.protoVault.createStruct({ workspaceRoot: workspace.rootPath, headerPath, structName: nextStructName });
       applyWorkspaceResult(result, { selectTypeName: nextStructName });
       setUiNotice(`已创建数据结构：${nextStructName}`);
+      setActiveAction(null);
+    });
+  }
+
+  async function renameHeaderFromForm(): Promise<void> {
+    if (!workspace || !selectedFile) return;
+    const newRelativePath = headerEditRelativePath.trim();
+    if (!newRelativePath) {
+      setUiNotice("Header 相对路径不能为空");
+      return;
+    }
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.renameHeader({ workspaceRoot: workspace.rootPath, headerPath: selectedFile.path, newRelativePath });
+      applyWorkspaceResult(result, { selectFileRelativePath: newRelativePath.replaceAll("\\", "/").replace(/^\/+/, "") });
+      setUiNotice(`已重命名 Header：${newRelativePath}`);
+      setActiveAction(null);
+    });
+  }
+
+  async function deleteHeaderFromForm(): Promise<void> {
+    if (!workspace || !selectedFile) return;
+    if (!window.confirm(`确认删除 Header？\n${selectedFile.relativePath}`)) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.deleteHeader({ workspaceRoot: workspace.rootPath, headerPath: selectedFile.path });
+      applyWorkspaceResult(result);
+      setUiNotice(`已删除 Header：${selectedFile.relativePath}`);
+      setActiveAction(null);
+    });
+  }
+
+  async function renameStructFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "struct") return;
+    const nextName = structEditName.trim();
+    if (!nextName) {
+      setUiNotice("结构体名称不能为空");
+      return;
+    }
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.renameStruct({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, structName: nextName });
+      applyWorkspaceResult(result, { selectTypeName: nextName });
+      setUiNotice(`已重命名数据结构：${nextName}`);
+      setActiveAction(null);
+    });
+  }
+
+  async function deleteStructFromForm(): Promise<void> {
+    if (!workspace || selectedType?.kind !== "struct") return;
+    if (!window.confirm(`确认删除 struct？\n${selectedType.qualifiedName}`)) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.deleteStruct({ workspaceRoot: workspace.rootPath, typeId: selectedType.id });
+      applyWorkspaceResult(result);
+      setUiNotice(`已删除数据结构：${selectedType.name}`);
       setActiveAction(null);
     });
   }
@@ -401,24 +467,32 @@ function App(): React.JSX.Element {
           selectedType={selectedType}
           loading={loading}
           headerRelativePath={headerRelativePath}
+          headerEditRelativePath={headerEditRelativePath}
           structHeaderPath={structHeaderPath}
           structName={structName}
+          structEditName={structEditName}
           fieldType={fieldType}
           fieldName={fieldName}
           onHeaderRelativePathChange={setHeaderRelativePath}
+          onHeaderEditRelativePathChange={setHeaderEditRelativePath}
           onStructHeaderPathChange={setStructHeaderPath}
           onStructNameChange={setStructName}
+          onStructEditNameChange={setStructEditName}
           onFieldTypeChange={setFieldType}
           onFieldNameChange={setFieldName}
           onCancel={() => setActiveAction(null)}
           onCreateHeader={() => void createHeaderFromForm()}
           onCreateStruct={() => void createStructFromForm()}
+          onRenameHeader={() => void renameHeaderFromForm()}
+          onDeleteHeader={() => void deleteHeaderFromForm()}
+          onRenameStruct={() => void renameStructFromForm()}
+          onDeleteStruct={() => void deleteStructFromForm()}
           onAddField={() => void addFieldFromForm()}
           onUpdateField={() => void updateFieldFromForm()}
           onDeleteField={() => void deleteFieldFromForm()}
         />}
-        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditField={openEditFieldAction} />}
-        {workspace && selectedFile && <SourceViewer file={selectedFile} />}
+        {workspace && selectedType && <ProtocolEditor type={selectedType} selectedMemberId={selectedMemberId} onEditType={() => openStructuredAction("edit-struct")} onEditField={openEditFieldAction} />}
+        {workspace && selectedFile && <SourceViewer file={selectedFile} onEditHeader={() => openStructuredAction("edit-header")} />}
         {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
       </section>
       <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
@@ -639,18 +713,26 @@ function StructuredActionPanel({
   selectedType,
   loading,
   headerRelativePath,
+  headerEditRelativePath,
   structHeaderPath,
   structName,
+  structEditName,
   fieldType,
   fieldName,
   onHeaderRelativePathChange,
+  onHeaderEditRelativePathChange,
   onStructHeaderPathChange,
   onStructNameChange,
+  onStructEditNameChange,
   onFieldTypeChange,
   onFieldNameChange,
   onCancel,
   onCreateHeader,
   onCreateStruct,
+  onRenameHeader,
+  onDeleteHeader,
+  onRenameStruct,
+  onDeleteStruct,
   onAddField,
   onUpdateField,
   onDeleteField
@@ -660,30 +742,47 @@ function StructuredActionPanel({
   selectedType?: WorkspaceTypeView;
   loading: boolean;
   headerRelativePath: string;
+  headerEditRelativePath: string;
   structHeaderPath: string;
   structName: string;
+  structEditName: string;
   fieldType: string;
   fieldName: string;
   onHeaderRelativePathChange(value: string): void;
+  onHeaderEditRelativePathChange(value: string): void;
   onStructHeaderPathChange(value: string): void;
   onStructNameChange(value: string): void;
+  onStructEditNameChange(value: string): void;
   onFieldTypeChange(value: string): void;
   onFieldNameChange(value: string): void;
   onCancel(): void;
   onCreateHeader(): void;
   onCreateStruct(): void;
+  onRenameHeader(): void;
+  onDeleteHeader(): void;
+  onRenameStruct(): void;
+  onDeleteStruct(): void;
   onAddField(): void;
   onUpdateField(): void;
   onDeleteField(): void;
 }): React.JSX.Element {
-  const title = action === "create-header" ? "新建 Header" : action === "create-struct" ? "新增数据结构" : action === "add-field" ? "添加字段" : "编辑字段";
+  const title = action === "create-header" ? "新建 Header"
+    : action === "create-struct" ? "新增数据结构"
+      : action === "edit-header" ? "编辑 Header"
+        : action === "edit-struct" ? "编辑数据结构"
+          : action === "add-field" ? "添加字段"
+            : "编辑字段";
   const description = action === "create-header"
     ? "在当前工作区内创建一个受控 Header 文件。"
     : action === "create-struct"
       ? "选择目标 Header，并插入一个最小 struct。"
-      : action === "add-field"
-        ? `向当前 struct ${selectedType?.name ?? ""} 追加字段。`
-        : `修改或删除当前 struct ${selectedType?.name ?? ""} 中的字段。`;
+      : action === "edit-header"
+        ? "重命名或删除当前 Header 文件。"
+        : action === "edit-struct"
+          ? `重命名或删除当前 struct ${selectedType?.name ?? ""}。`
+          : action === "add-field"
+            ? `向当前 struct ${selectedType?.name ?? ""} 追加字段。`
+            : `修改或删除当前 struct ${selectedType?.name ?? ""} 中的字段。`;
 
   return <section className="action-panel" aria-label="结构化编辑">
     <div className="action-panel-title">
@@ -712,6 +811,30 @@ function StructuredActionPanel({
         <input value={structName} onChange={(event) => onStructNameChange(event.target.value)} placeholder="PacketHeader" autoFocus />
       </label>
       <button type="submit" disabled={loading || workspace.files.length === 0}>创建 Struct</button>
+    </form>}
+
+    {action === "edit-header" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onRenameHeader(); }}>
+      <label>
+        <span>Header 相对路径</span>
+        <input value={headerEditRelativePath} onChange={(event) => onHeaderEditRelativePathChange(event.target.value)} placeholder="headers/protocol.hpp" autoFocus />
+      </label>
+      <small>重命名不会自动更新其他 Header 的 include 路径。</small>
+      <div className="form-actions">
+        <button type="submit" disabled={loading}>保存修改</button>
+        <button type="button" className="danger" disabled={loading} onClick={onDeleteHeader}>删除 Header</button>
+      </div>
+    </form>}
+
+    {action === "edit-struct" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onRenameStruct(); }}>
+      <label>
+        <span>Struct 名称</span>
+        <input value={structEditName} onChange={(event) => onStructEditNameChange(event.target.value)} placeholder="PacketHeader" autoFocus />
+      </label>
+      <small>重命名当前只修改 struct 声明，不自动改引用类型。</small>
+      <div className="form-actions">
+        <button type="submit" disabled={loading || selectedType?.kind !== "struct"}>保存修改</button>
+        <button type="button" className="danger" disabled={loading || selectedType?.kind !== "struct"} onClick={onDeleteStruct}>删除 Struct</button>
+      </div>
     </form>}
 
     {action === "add-field" && <form className="action-form action-form-grid" onSubmit={(event) => { event.preventDefault(); onAddField(); }}>
@@ -744,20 +867,21 @@ function StructuredActionPanel({
   </section>;
 }
 
-function ProtocolEditor({ type, selectedMemberId, onEditField }: {
+function ProtocolEditor({ type, selectedMemberId, onEditType, onEditField }: {
   type: WorkspaceTypeView;
   selectedMemberId: string | null;
+  onEditType(): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
 }): React.JSX.Element {
   return <div className="editor">
-    <div className="editor-title"><div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p></div><span className="status">AST 已同步</span></div>
+    <div className="editor-title"><div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p></div><div className="editor-actions"><span className="status">AST 已同步</span>{type.kind === "struct" && <button className="inline-action" onClick={onEditType}>编辑 Struct</button>}</div></div>
     {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>位置</th><th>操作</th></tr></thead><tbody>{type.fields.map((field) => <tr className={field.id === selectedMemberId ? "selected-row" : undefined} key={field.id}><td>{field.name}</td><td><code>{field.type}</code></td><td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td><td><button className="inline-action" onClick={() => onEditField(type, field)}>编辑</button></td></tr>)}</tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th></tr></thead><tbody>{type.values.map((value) => <tr className={`enum-value:${type.id}:${value.name}` === selectedMemberId ? "selected-row" : undefined} key={value.name}><td>{value.name}</td><td>{value.value ?? "自动"}</td></tr>)}</tbody></table>}
   </div>;
 }
 
-function SourceViewer({ file }: { file: WorkspaceView["files"][number] }): React.JSX.Element {
+function SourceViewer({ file, onEditHeader }: { file: WorkspaceView["files"][number]; onEditHeader(): void }): React.JSX.Element {
   return <div className="source-viewer">
-    <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖</p></div><span className="status">只读预览</span></div>
+    <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖</p></div><div className="editor-actions"><span className="status">只读预览</span><button className="inline-action" onClick={onEditHeader}>编辑 Header</button></div></div>
     <pre><code>{file.content}</code></pre>
   </div>;
 }

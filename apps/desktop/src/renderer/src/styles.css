@@ -92,6 +92,7 @@ input, select { font: inherit; color: var(--text-normal); }
 .editor-title { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 38px; }
 .editor-title h2 { margin: 3px 0; font: 500 36px Georgia, serif; }
 .editor-title p { margin: 5px 0; color: #8d929e; }
+.editor-actions { display: flex; align-items: center; gap: 8px; }
 .status { padding: 6px 10px; border: 1px solid #315a41; border-radius: 12px; color: #73c590; font-size: 11px; }
 table { width: 100%; border-collapse: collapse; background: #191b21cc; font-size: 13px; }
 th, td { padding: 12px 15px; border-bottom: 1px solid #2b2e36; text-align: left; }

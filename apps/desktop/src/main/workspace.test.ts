@@ -2,7 +2,18 @@ import { resolve } from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { addField, createHeader, createStruct, deleteField, scanWorkspace, updateField } from "./workspace";
+import {
+  addField,
+  createHeader,
+  createStruct,
+  deleteField,
+  deleteHeader,
+  deleteStruct,
+  renameHeader,
+  renameStruct,
+  scanWorkspace,
+  updateField
+} from "./workspace";
 
 const examplesWorkspace = resolve(import.meta.dirname, "../../../../examples");
 
@@ -154,6 +165,48 @@ describe("scanWorkspace", () => {
       };
       expect(record.counts.headers).toBe(1);
       expect(record.types.map((type) => type.qualifiedName)).toContain("protovault::PacketHeader");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("renames and deletes headers and structs", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-crud-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/source.hpp" });
+      let workspace = await createStruct({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "source.hpp"),
+        structName: "SourcePacket"
+      });
+      let packet = workspace.types.find((type) => type.qualifiedName === "protovault::SourcePacket");
+      expect(packet).toBeTruthy();
+
+      workspace = await renameStruct({
+        workspaceRoot: root,
+        typeId: packet!.id,
+        structName: "RenamedPacket"
+      });
+      packet = workspace.types.find((type) => type.qualifiedName === "protovault::RenamedPacket");
+      expect(packet).toBeTruthy();
+      expect(await readFile(resolve(root, "headers", "source.hpp"), "utf8")).toContain("struct RenamedPacket");
+
+      workspace = await deleteStruct({ workspaceRoot: root, typeId: packet!.id });
+      expect(workspace.types.map((type) => type.qualifiedName)).not.toContain("protovault::RenamedPacket");
+      expect(await readFile(resolve(root, "headers", "source.hpp"), "utf8")).not.toContain("struct RenamedPacket");
+
+      workspace = await renameHeader({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "source.hpp"),
+        newRelativePath: "headers/renamed.hpp"
+      });
+      expect(workspace.files.map((file) => file.relativePath)).toEqual(["headers/renamed.hpp"]);
+
+      workspace = await deleteHeader({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "renamed.hpp")
+      });
+      expect(workspace.files).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

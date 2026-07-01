@@ -7,7 +7,11 @@ import type {
   AddFieldInput,
   CreateHeaderInput,
   CreateStructInput,
+  DeleteHeaderInput,
   DeleteFieldInput,
+  DeleteStructInput,
+  RenameHeaderInput,
+  RenameStructInput,
   UpdateFieldInput,
   WorkspaceDirectoryView,
   WorkspaceFileView,
@@ -151,6 +155,10 @@ function fieldDeclaration(fieldType: string, fieldName: string): string {
   const arrayMatch = fieldType.match(/^(.*?)(\[[0-9]+\])$/);
   if (arrayMatch) return `${arrayMatch[1].trim()} ${fieldName}${arrayMatch[2]};`;
   return `${fieldType} ${fieldName};`;
+}
+
+function structPattern(structName: string): RegExp {
+  return new RegExp(`(struct\\s+)${structName}(\\s*\\{[\\s\\S]*?\\n\\s*\\};)`);
 }
 
 async function atomicWriteFile(targetPath: string, content: string): Promise<void> {
@@ -351,6 +359,66 @@ export async function createStruct(input: CreateStructInput): Promise<WorkspaceV
   const nextContent = namespaceMarker?.index !== undefined
     ? `${content.slice(0, namespaceMarker.index)}${insertion}${content.slice(namespaceMarker.index)}`
     : `${content.trimEnd()}\n${insertion}\n`;
+  await atomicWriteFile(header, nextContent);
+  return scanWorkspace(root);
+}
+
+export async function renameHeader(input: RenameHeaderInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const current = assertWorkspaceFile(root, input.headerPath);
+  const newRelativePath = sanitizeHeaderRelativePath(input.newRelativePath);
+  const target = assertWorkspaceFile(root, join(root, newRelativePath));
+  if (current === target) return scanWorkspace(root);
+  try {
+    await fs.stat(target);
+    throw new Error(`Header 已存在：${newRelativePath}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await fs.mkdir(dirname(target), { recursive: true });
+  await fs.rename(current, target);
+  return scanWorkspace(root);
+}
+
+export async function deleteHeader(input: DeleteHeaderInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const header = assertWorkspaceFile(root, input.headerPath);
+  await fs.unlink(header);
+  return scanWorkspace(root);
+}
+
+export async function renameStruct(input: RenameStructInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const targetType = workspace.types.find((type) => type.id === input.typeId);
+  if (!targetType) throw new Error("未找到要重命名的数据结构。");
+  if (targetType.kind !== "struct") throw new Error("当前仅支持重命名 struct。");
+  const structName = sanitizeCppIdentifier(input.structName, "结构体名称");
+  if (structName !== targetType.name && workspace.types.some((type) => type.file === targetType.file && type.name === structName)) {
+    throw new Error(`结构体已存在：${structName}`);
+  }
+  const header = assertWorkspaceFile(root, targetType.file);
+  const content = await fs.readFile(header, "utf8");
+  const pattern = structPattern(targetType.name);
+  const match = pattern.exec(content);
+  if (!match) throw new Error(`无法在 Header 中定位 struct ${targetType.name} 的受控编辑区域。`);
+  const nextContent = `${content.slice(0, match.index)}${match[1]}${structName}${match[2]}${content.slice(match.index + match[0].length)}`;
+  await atomicWriteFile(header, nextContent);
+  return scanWorkspace(root);
+}
+
+export async function deleteStruct(input: DeleteStructInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const targetType = workspace.types.find((type) => type.id === input.typeId);
+  if (!targetType) throw new Error("未找到要删除的数据结构。");
+  if (targetType.kind !== "struct") throw new Error("当前仅支持删除 struct。");
+  const header = assertWorkspaceFile(root, targetType.file);
+  const content = await fs.readFile(header, "utf8");
+  const pattern = new RegExp(`\\n?struct\\s+${targetType.name}\\s*\\{[\\s\\S]*?\\n\\s*\\};\\n?`);
+  const match = pattern.exec(content);
+  if (!match) throw new Error(`无法在 Header 中定位 struct ${targetType.name} 的受控编辑区域。`);
+  const nextContent = `${content.slice(0, match.index)}\n${content.slice(match.index + match[0].length)}`.replace(/\n{3,}/g, "\n\n");
   await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
