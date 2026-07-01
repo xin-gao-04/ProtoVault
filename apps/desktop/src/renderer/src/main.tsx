@@ -223,6 +223,50 @@ function App(): React.JSX.Element {
     setActiveAction("edit-struct");
   }
 
+  function syncActionForFileSelection(file: WorkspaceFileView): void {
+    if (!activeAction) return;
+    if (activeAction === "create-header") return;
+    if (activeAction === "create-struct") {
+      setStructHeaderPath(file.path);
+      return;
+    }
+    setHeaderEditRelativePath(file.relativePath);
+    setEditingFieldId(null);
+    setActiveAction("edit-header");
+  }
+
+  function syncActionForTypeSelection(type: WorkspaceTypeView, memberId: string | null): void {
+    if (!activeAction) return;
+    if (activeAction === "create-header") return;
+    if (activeAction === "create-struct") {
+      setStructHeaderPath(type.file);
+      return;
+    }
+    if (type.kind !== "struct") {
+      setActiveAction(null);
+      setEditingFieldId(null);
+      setUiNotice("当前 enum 暂不支持结构化编辑");
+      return;
+    }
+    const field = memberId ? type.fields.find((item) => item.id === memberId) : undefined;
+    if (field) {
+      setFieldType(field.type);
+      setFieldName(field.name);
+      setEditingFieldId(field.id);
+      setActiveAction("edit-field");
+      return;
+    }
+    if (activeAction === "add-field") {
+      setFieldType("std::uint32_t");
+      setFieldName("value");
+      setEditingFieldId(null);
+      return;
+    }
+    setStructEditName(type.name);
+    setEditingFieldId(null);
+    setActiveAction("edit-struct");
+  }
+
   async function createHeaderFromForm(): Promise<void> {
     if (!workspace) return;
     const relativePath = headerRelativePath.trim();
@@ -361,6 +405,7 @@ function App(): React.JSX.Element {
     setSelectedFilePath(file.path);
     setSelectedTypeId(null);
     setSelectedMemberId(null);
+    syncActionForFileSelection(file);
   }
 
   function openTypeTab(type: WorkspaceTypeView, memberId: string | null = null): void {
@@ -371,6 +416,7 @@ function App(): React.JSX.Element {
     setSelectedFilePath(null);
     setSelectedMemberId(memberId);
     setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
+    syncActionForTypeSelection(type, memberId);
   }
 
   function activateTab(tab: WorkspaceTab): void {

@@ -43,6 +43,8 @@ fields can be edited or deleted from the field table. Headers and structs can
 also be renamed or deleted from their editor views.
 Press F2 to edit the current Header, Struct, or Field, or use the tree/context
 right-click menu for the same structured actions.
+Open edit panels follow the current tree selection, so clicking another Header,
+Struct, or Field remaps the form target immediately.
 ProtoVault also remembers the last opened workspace and restores it on the next
 launch when available.
 

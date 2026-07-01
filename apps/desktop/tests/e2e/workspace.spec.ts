@@ -48,8 +48,11 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑数据结构");
     await expect(page.getByLabel("Struct 名称")).toHaveValue("RadarTrack");
+    await page.getByRole("button", { name: "demo::radar::RadarDetection", exact: true }).click();
+    await expect(page.getByLabel("Struct 名称")).toHaveValue("RadarDetection");
     await expect(page.getByRole("button", { name: "删除 Struct" })).toBeVisible();
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+    await radarTrack.click();
 
     await page.getByRole("button", { name: "添加字段" }).click();
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
@@ -77,8 +80,10 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑字段");
     await expect(page.getByLabel("字段名称")).toHaveValue("velocity");
+    await page.getByRole("button", { name: "RadarTrack confidence" }).click();
+    await expect(page.getByLabel("字段名称")).toHaveValue("confidence");
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
-    await expect(page.locator("tr.selected-row").getByRole("cell", { name: "velocity" })).toBeVisible();
+    await expect(page.locator("tr.selected-row").getByRole("cell", { name: "confidence" })).toBeVisible();
 
     await expect(page.getByRole("button", { name: "目录 radar-workspace", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "目录 headers", exact: true })).toBeVisible();
@@ -123,8 +128,11 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
     await expect(actionPanel).toContainText("编辑 Header");
     await expect(page.getByLabel("Header 相对路径")).toHaveValue("radar-workspace/headers/radar/track.hpp");
+    await page.getByRole("button", { name: "打开 Header radar-workspace/headers/common/time.hpp" }).click();
+    await expect(page.getByLabel("Header 相对路径")).toHaveValue("radar-workspace/headers/common/time.hpp");
     await expect(page.getByRole("button", { name: "删除 Header" })).toBeVisible();
     await actionPanel.getByRole("button", { name: "关闭", exact: true }).click();
+    await page.getByRole("button", { name: "打开 Header radar-workspace/headers/radar/track.hpp" }).click();
     await page.getByRole("button", { name: "打开 Header radar-workspace/headers/radar/track.hpp" }).click({ button: "right" });
     await expect(page.getByRole("menu", { name: "上下文菜单" })).toBeVisible();
     await page.getByRole("menuitem", { name: "编辑 Header" }).click();
