@@ -25,6 +25,7 @@ import type {
   SemanticChange,
   SemanticDiffReport,
   ProtocolSnapshotSummary,
+  UpdateDataFlowInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateHeaderContentInput,
@@ -317,6 +318,7 @@ async function atomicWriteFile(targetPath: string, content: string): Promise<voi
 interface WorkspaceMetadata {
   schemaVersion: 1;
   notes: Record<string, string>;
+  dataFlows: Record<string, { producers: string[]; consumers: string[] }>;
 }
 
 function metadataPath(root: string): string {
@@ -326,9 +328,9 @@ function metadataPath(root: string): string {
 async function readMetadata(root: string): Promise<WorkspaceMetadata> {
   try {
     const parsed = JSON.parse(await fs.readFile(metadataPath(root), "utf8")) as Partial<WorkspaceMetadata>;
-    return { schemaVersion: 1, notes: parsed.notes ?? {} };
+    return { schemaVersion: 1, notes: parsed.notes ?? {}, dataFlows: normalizeMetadataDataFlows(parsed.dataFlows) };
   } catch {
-    return { schemaVersion: 1, notes: {} };
+    return { schemaVersion: 1, notes: {}, dataFlows: {} };
   }
 }
 
@@ -337,11 +339,12 @@ async function writeMetadata(root: string, metadata: WorkspaceMetadata): Promise
 }
 
 function mergeMetadataWithSourceNotes(metadata: WorkspaceMetadata, sourceNotes: Record<string, string>): WorkspaceMetadata {
-  return { schemaVersion: 1, notes: { ...metadata.notes, ...sourceNotes } };
+  return { schemaVersion: 1, notes: { ...metadata.notes, ...sourceNotes }, dataFlows: metadata.dataFlows };
 }
 
 function metadataEquals(left: WorkspaceMetadata, right: WorkspaceMetadata): boolean {
-  return JSON.stringify(left.notes) === JSON.stringify(right.notes);
+  return JSON.stringify(left.notes) === JSON.stringify(right.notes)
+    && JSON.stringify(left.dataFlows) === JSON.stringify(right.dataFlows);
 }
 
 function applyMetadata(workspace: WorkspaceView, metadata: WorkspaceMetadata): WorkspaceView {
@@ -350,10 +353,29 @@ function applyMetadata(workspace: WorkspaceView, metadata: WorkspaceMetadata): W
     types: workspace.types.map((type) => ({
       ...type,
       note: metadata.notes[type.id],
+      dataFlow: metadata.dataFlows[type.id],
       fields: type.fields.map((field) => ({ ...field, note: metadata.notes[field.id] })),
       values: type.values.map((value) => ({ ...value, note: metadata.notes[value.id] }))
     }))
   };
+}
+
+function normalizeMetadataDataFlows(value: unknown): Record<string, { producers: string[]; consumers: string[] }> {
+  if (!value || typeof value !== "object") return {};
+  const result: Record<string, { producers: string[]; consumers: string[] }> = {};
+  for (const [id, flow] of Object.entries(value as Record<string, unknown>)) {
+    if (!flow || typeof flow !== "object") continue;
+    const candidate = flow as { producers?: unknown; consumers?: unknown };
+    const producers = normalizeFlowTags(candidate.producers);
+    const consumers = normalizeFlowTags(candidate.consumers);
+    if (producers.length > 0 || consumers.length > 0) result[id] = { producers, consumers };
+  }
+  return result;
+}
+
+function normalizeFlowTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
 async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<Record<string, string>> {
@@ -1535,6 +1557,23 @@ export async function updateNote(input: UpdateNoteInput): Promise<WorkspaceView>
   else delete metadata.notes[input.targetId];
   await writeMetadata(root, metadata);
   await syncNoteToSource(root, target, note);
+  return scanWorkspace(root);
+}
+
+export async function updateDataFlow(input: UpdateDataFlowInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const target = workspace.types.find((type) => type.id === input.typeId);
+  if (!target) throw new Error("未找到要更新数据流标签的协议类型。");
+  const metadata = await readMetadata(root);
+  const producers = normalizeFlowTags(input.producers);
+  const consumers = normalizeFlowTags(input.consumers);
+  if (producers.length > 0 || consumers.length > 0) {
+    metadata.dataFlows[input.typeId] = { producers, consumers };
+  } else {
+    delete metadata.dataFlows[input.typeId];
+  }
+  await writeMetadata(root, metadata);
   return scanWorkspace(root);
 }
 

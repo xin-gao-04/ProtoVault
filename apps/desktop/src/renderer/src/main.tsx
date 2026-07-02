@@ -45,8 +45,10 @@ type ContextMenuState = {
 };
 type ProtocolGraphNode =
   | { id: string; kind: "file"; label: string; file: WorkspaceFileView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
-  | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number; z: number; metrics: GraphNodeMetrics };
-type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; kind: "contains" | "references" };
+  | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
+  | { id: string; kind: "producer" | "consumer"; label: string; x: number; y: number; z: number; metrics: GraphNodeMetrics };
+type ProtocolGraphMode = "dependency" | "data-flow";
+type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; kind: "contains" | "references" | "flow" };
 type GraphSimNode = ProtocolGraphNode & { vx: number; vy: number; vz: number; radius: number; screenX: number; screenY: number; screenRadius: number };
 type GraphSimEdge = ProtocolGraphEdge & { source: GraphSimNode; target: GraphSimNode };
 type GraphRiskLevel = "normal" | "warning" | "critical";
@@ -135,7 +137,7 @@ function App(): React.JSX.Element {
   );
   const selectedLayout = selectedType?.layout ?? null;
   const rawTree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
-  const graphContext = React.useMemo(() => workspace ? buildProtocolGraph(workspace) : null, [workspace]);
+  const graphContext = React.useMemo(() => workspace ? buildProtocolGraph(workspace, "dependency") : null, [workspace]);
   const selectedGraphNode = React.useMemo(() => {
     if (!graphContext) return null;
     const selectedId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
@@ -381,13 +383,15 @@ function App(): React.JSX.Element {
 
   function selectGraphNode(node: ProtocolGraphNode): void {
     if (node.kind === "file") locateFileInTree(node.file);
-    else locateTypeInTree(node.type);
+    else if (node.kind === "struct" || node.kind === "enum") locateTypeInTree(node.type);
+    else setUiNotice(`${node.kind === "producer" ? "生产节点" : "消费节点"}：${node.label}`);
   }
 
   function openGraphNode(node: ProtocolGraphNode): void {
     setCenterViewMode("workspace");
     if (node.kind === "file") openFileTab(node.file);
-    else openTypeTab(node.type);
+    else if (node.kind === "struct" || node.kind === "enum") openTypeTab(node.type);
+    else setCenterViewMode("graph");
   }
 
   async function deleteFieldWithConfirm(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
@@ -971,6 +975,15 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function updateDataFlowForType(type: WorkspaceTypeView, producers: string[], consumers: string[]): Promise<void> {
+    if (!workspace) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateDataFlow({ workspaceRoot: workspace.rootPath, typeId: type.id, producers, consumers });
+      setWorkspace(result);
+      setUiNotice("数据流标签已保存到 .protocol/meta/metadata.json");
+    });
+  }
+
   async function saveStructuralEdit(targetId: string): Promise<boolean> {
     const edit = dirtyStructuralEdits[targetId];
     if (!workspace || !edit) return false;
@@ -1487,8 +1500,9 @@ function App(): React.JSX.Element {
           selectedNode={selectedGraphNode}
           onOpenNode={openGraphNode}
           onSelectNode={selectGraphNode}
+          onUpdateDataFlow={(type, producers, consumers) => void updateDataFlowForType(type, producers, consumers)}
         />
-          : selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} />
+          : selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} onUpdateDataFlow={(type, producers, consumers) => void updateDataFlowForType(type, producers, consumers)} />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
         {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
@@ -2578,7 +2592,8 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
   } | null>(null);
   const [hoveredLabel, setHoveredLabel] = React.useState<string | null>(null);
   const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
-  const graph = React.useMemo(() => buildProtocolGraph(workspace), [workspace]);
+  const [graphMode, setGraphMode] = React.useState<ProtocolGraphMode>("dependency");
+  const graph = React.useMemo(() => buildProtocolGraph(workspace, graphMode), [workspace, graphMode]);
   const focusedNodeId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
   const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
   const normalizedGraphSearch = graphSearchQuery.trim().toLowerCase();
@@ -2749,6 +2764,10 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
         <p>Canvas 力导向视图：拖拽节点、滚轮缩放、拖动画布平移；单击定位左侧树图，双击打开对应 tab。</p>
       </div>
       <div className="graph-title-actions">
+        <div className="graph-mode-toggle" role="group" aria-label="图谱模式">
+          <button className={graphMode === "dependency" ? "active" : ""} onClick={() => setGraphMode("dependency")}>依赖</button>
+          <button className={graphMode === "data-flow" ? "active" : ""} onClick={() => setGraphMode("data-flow")}>数据流</button>
+        </div>
         <input
           aria-label="图谱搜索"
           value={graphSearchQuery}
@@ -2780,6 +2799,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       <span><i className="file-dot" /> Header</span>
       <span><i className="struct-dot" /> Struct</span>
       <span><i className="enum-dot" /> Enum</span>
+      {graphMode === "data-flow" && <span><i className="producer-dot" /> 生产/消费节点</span>}
       <span><i className="risk-dot warning" /> 布局/质量关注</span>
       <span><i className="risk-dot critical" /> 高风险</span>
       <span>箭头表示字段类型引用</span>
@@ -2793,12 +2813,19 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
         aria-label={`图谱节点 ${node.kind} ${node.label}`}
         onClick={() => onSelectNode(node)}
         onDoubleClick={() => onOpenNode(node)}
-      >{node.kind === "file" ? "H" : node.kind === "struct" ? "S" : "E"} · {node.label} · {node.metrics.impactScore}</button>)}
+      >{graphNodeShortKind(node)} · {node.label} · {node.metrics.impactScore}</button>)}
     </div>
   </section>;
 }
 
-function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
+function graphNodeShortKind(node: ProtocolGraphNode): string {
+  if (node.kind === "file") return "H";
+  if (node.kind === "struct") return "S";
+  if (node.kind === "enum") return "E";
+  return node.kind === "producer" ? "P" : "C";
+}
+
+function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
   const files = workspace.files;
   const types = workspace.types;
   const fileRadius = 330;
@@ -2814,17 +2841,17 @@ function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNod
     paddingRatio: 0
   };
   const nodes: ProtocolGraphNode[] = [
-    ...files.map((file, index) => {
+    ...(mode === "dependency" ? files.map((file, index) => {
       const point = radialPoint(index, Math.max(files.length, 1), fileRadius, 0, 0, -Math.PI / 2);
       return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point, z: Math.sin(index * 1.9) * 90, metrics: { ...emptyMetrics } };
-    }),
+    }) : []),
     ...types.map((type, index) => {
       const point = radialPoint(index, Math.max(types.length, 1), typeRadius, 0, 0, -Math.PI / 2 + Math.PI / Math.max(types.length, 2));
       return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point, z: Math.cos(index * 1.35) * 70, metrics: { ...emptyMetrics } };
     })
   ];
   const edges: ProtocolGraphEdge[] = [];
-  for (const type of types) {
+  if (mode === "dependency") for (const type of types) {
     const sourceTypeId = `type:${type.id}`;
     const ownerFile = files.find((file) => file.path === type.file);
     if (ownerFile) {
@@ -2838,10 +2865,45 @@ function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNod
       edges.push({ id: `ref:${field.id}:${target.id}`, from: sourceTypeId, to: `type:${target.id}`, label: field.name, kind: "references" });
     }
   }
+  if (mode === "data-flow") {
+    const actorNodes = new Map<string, ProtocolGraphNode>();
+    function actorNode(label: string, kind: "producer" | "consumer", index: number): ProtocolGraphNode {
+      const id = `${kind}:${label}`;
+      const existing = actorNodes.get(id);
+      if (existing) return existing;
+      const point = radialPoint(index, Math.max(6, actorNodes.size + 6), kind === "producer" ? 355 : 420, 0, 0, kind === "producer" ? -Math.PI * 0.8 : Math.PI * 0.2);
+      const node: ProtocolGraphNode = {
+        id,
+        kind,
+        label,
+        ...point,
+        z: kind === "producer" ? -80 + actorNodes.size * 4 : 80 - actorNodes.size * 3,
+        metrics: { ...emptyMetrics, impactScore: 2, layoutRiskLabel: kind === "producer" ? "生产节点" : "消费节点" }
+      };
+      actorNodes.set(id, node);
+      return node;
+    }
+    let actorIndex = 0;
+    for (const type of types) {
+      const flow = type.dataFlow;
+      if (!flow) continue;
+      for (const producer of flow.producers) {
+        const actor = actorNode(producer, "producer", actorIndex);
+        actorIndex += 1;
+        edges.push({ id: `flow:${actor.id}:type:${type.id}`, from: actor.id, to: `type:${type.id}`, label: "produces", kind: "flow" });
+      }
+      for (const consumer of flow.consumers) {
+        const actor = actorNode(consumer, "consumer", actorIndex);
+        actorIndex += 1;
+        edges.push({ id: `flow:type:${type.id}:${actor.id}`, from: `type:${type.id}`, to: actor.id, label: "consumes", kind: "flow" });
+      }
+    }
+    nodes.push(...actorNodes.values());
+  }
   const inbound = new Map<string, number>();
   const outbound = new Map<string, number>();
   for (const edge of edges) {
-    if (edge.kind !== "references") continue;
+    if (edge.kind === "contains") continue;
     inbound.set(edge.to, (inbound.get(edge.to) ?? 0) + 1);
     outbound.set(edge.from, (outbound.get(edge.from) ?? 0) + 1);
   }
@@ -2862,6 +2924,22 @@ function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNod
       };
       continue;
     }
+    if (node.kind === "producer" || node.kind === "consumer") {
+      const inboundReferences = inbound.get(node.id) ?? 0;
+      const outboundReferences = outbound.get(node.id) ?? 0;
+      node.metrics = {
+        inboundReferences,
+        outboundReferences,
+        impactScore: Math.max(2, inboundReferences * 2 + outboundReferences * 2),
+        diagnosticCount: 0,
+        metadataMissingCount: 0,
+        layoutRisk: "normal",
+        layoutRiskLabel: node.kind === "producer" ? "生产节点" : "消费节点",
+        paddingRatio: 0
+      };
+      continue;
+    }
+    if (!isProtocolTypeNode(node)) continue;
     const diagnosticCount = diagnosticsForFile(workspace, node.type.file).length;
     const layoutRisk = riskForType(node.type, diagnosticCount);
     const inboundReferences = inbound.get(node.id) ?? 0;
@@ -2905,16 +2983,22 @@ function riskForType(type: WorkspaceTypeView, diagnosticCount: number): { level:
 }
 
 function graphNodeRadius(node: ProtocolGraphNode): number {
-  const base = node.kind === "file" ? 4.8 : node.kind === "struct" ? 6.8 : 6;
+  const base = node.kind === "file" ? 4.8 : node.kind === "struct" ? 6.8 : node.kind === "enum" ? 6 : 6.4;
   return clamp(base + Math.sqrt(node.metrics.impactScore) * 1.7, base, node.kind === "file" ? 13 : 19);
 }
 
 function graphNodeSearchText(node: ProtocolGraphNode): string {
   if (node.kind === "file") return `${node.label} ${node.file.relativePath}`.toLowerCase();
+  if (node.kind === "producer" || node.kind === "consumer") return `${node.label} ${node.kind === "producer" ? "生产节点 producer" : "消费节点 consumer"}`.toLowerCase();
+  if (!isProtocolTypeNode(node)) return node.label.toLowerCase();
   const memberText = node.type.kind === "struct"
     ? node.type.fields.map((field) => `${field.name} ${field.type}`).join(" ")
     : node.type.values.map((value) => value.name).join(" ");
   return `${node.label} ${node.type.name} ${node.type.qualifiedName} ${node.type.file} ${memberText}`.toLowerCase();
+}
+
+function isProtocolTypeNode(node: ProtocolGraphNode): node is Extract<ProtocolGraphNode, { kind: "struct" | "enum" }> {
+  return node.kind === "struct" || node.kind === "enum";
 }
 
 function buildGraphRelationDepth(edges: ProtocolGraphEdge[], focusNodeId: string | null): Map<string, number> {
@@ -2922,7 +3006,7 @@ function buildGraphRelationDepth(edges: ProtocolGraphEdge[], focusNodeId: string
   if (!focusNodeId) return depth;
   const neighbors = new Map<string, Set<string>>();
   for (const edge of edges) {
-    if (edge.kind !== "references") continue;
+    if (edge.kind === "contains") continue;
     if (!neighbors.has(edge.from)) neighbors.set(edge.from, new Set());
     if (!neighbors.has(edge.to)) neighbors.set(edge.to, new Set());
     neighbors.get(edge.from)?.add(edge.to);
@@ -3061,18 +3145,22 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     const sourceRelevance = graphNodeRelevance(source, options);
     const targetRelevance = graphNodeRelevance(target, options);
     const edgeRelevance = Math.min(sourceRelevance, targetRelevance);
-    const alpha = edge.kind === "references" ? 0.58 : 0.25;
+    const alpha = edge.kind === "flow" ? 0.72 : edge.kind === "references" ? 0.58 : 0.25;
     context.beginPath();
     context.moveTo(source.screenX, source.screenY);
     context.lineTo(target.screenX, target.screenY);
-    context.strokeStyle = edge.kind === "references" ? `rgba(172, 78, 74, ${alpha * edgeRelevance})` : `rgba(104, 122, 151, ${alpha * edgeRelevance})`;
-    context.lineWidth = (edge.kind === "references" ? 1.25 : 0.8) * (edgeRelevance > 0.9 ? 1.35 : 1);
+    context.strokeStyle = edge.kind === "flow"
+      ? `rgba(86, 188, 170, ${alpha * edgeRelevance})`
+      : edge.kind === "references" ? `rgba(172, 78, 74, ${alpha * edgeRelevance})` : `rgba(104, 122, 151, ${alpha * edgeRelevance})`;
+    context.lineWidth = (edge.kind === "flow" ? 1.7 : edge.kind === "references" ? 1.25 : 0.8) * (edgeRelevance > 0.9 ? 1.35 : 1);
     context.stroke();
   }
 
   for (const item of projected) {
     const node = item.node;
-    const selected = node.kind === "file" ? node.file.path === options.selectedFilePath : node.type.id === options.selectedTypeId;
+    const selected = node.kind === "file"
+      ? node.file.path === options.selectedFilePath
+      : isProtocolTypeNode(node) && node.type.id === options.selectedTypeId;
     const hovered = node.id === options.hoveredId;
     const relevance = graphNodeRelevance(node, options);
     context.globalAlpha = relevance;
@@ -3089,7 +3177,7 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     }
     context.beginPath();
     context.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
-    context.fillStyle = node.kind === "file" ? "#b9c6d7" : node.kind === "struct" ? "#cfdae8" : "#e0b879";
+    context.fillStyle = node.kind === "file" ? "#b9c6d7" : node.kind === "struct" ? "#cfdae8" : node.kind === "enum" ? "#e0b879" : "#56bcaa";
     context.shadowColor = selected ? "rgba(229, 173, 85, 0.85)" : "rgba(185, 211, 244, 0.38)";
     context.shadowBlur = selected ? 18 : 10;
     context.fill();
@@ -3349,19 +3437,20 @@ function ContextMenu({
   </div>;
 }
 
-function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNode }: {
+function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNode, onUpdateDataFlow }: {
   workspace: WorkspaceView;
   graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] };
   selectedNode: ProtocolGraphNode | null;
   onOpenNode(node: ProtocolGraphNode): void;
   onSelectNode(node: ProtocolGraphNode): void;
+  onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
 }): React.JSX.Element {
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
   const referenceEdges = graph.edges.filter((edge) => edge.kind === "references");
   const riskNodes = graph.nodes.filter((node) => node.metrics.layoutRisk !== "normal");
   const diagnosticNodes = graph.nodes.filter((node) => node.metrics.diagnosticCount > 0);
   const topImpactNodes = [...graph.nodes]
-    .filter((node) => node.kind !== "file")
+    .filter((node) => isProtocolTypeNode(node))
     .sort((a, b) => b.metrics.impactScore - a.metrics.impactScore)
     .slice(0, 5);
 
@@ -3391,15 +3480,18 @@ function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNo
 
   const outgoing = referenceEdges.filter((edge) => edge.from === selectedNode.id).map((edge) => nodeById.get(edge.to)).filter(Boolean) as ProtocolGraphNode[];
   const incoming = referenceEdges.filter((edge) => edge.to === selectedNode.id).map((edge) => nodeById.get(edge.from)).filter(Boolean) as ProtocolGraphNode[];
-  const selectedTypeForLayout = selectedNode.kind === "file" ? null : selectedNode.type;
+  const selectedTypeForLayout = isProtocolTypeNode(selectedNode) ? selectedNode.type : null;
   const layout = selectedTypeForLayout?.layout;
   const declaredTypes = selectedNode.kind === "file"
-    ? graph.nodes.filter((node) => node.kind !== "file" && node.type.file === selectedNode.file.path)
+    ? graph.nodes.filter((node) => isProtocolTypeNode(node) && node.type.file === selectedNode.file.path)
     : [];
+  const selectedNodeName = selectedNode.kind === "file"
+    ? selectedNode.file.relativePath
+    : isProtocolTypeNode(selectedNode) ? selectedNode.type.qualifiedName : selectedNode.label;
 
   return <div className="inspector-stack">
     <dl>
-      <dt>名称</dt><dd>{selectedNode.kind === "file" ? selectedNode.file.relativePath : selectedNode.type.qualifiedName}</dd>
+      <dt>名称</dt><dd>{selectedNodeName}</dd>
       <dt>类型</dt><dd>{selectedNode.kind === "file" ? "Header" : selectedNode.kind}</dd>
       <dt>影响力</dt><dd>{selectedNode.metrics.impactScore}</dd>
       <dt>被引用</dt><dd>{selectedNode.metrics.inboundReferences}</dd>
@@ -3416,6 +3508,7 @@ function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNo
         <dt>状态</dt><dd>{layout.partial ? "部分解析" : "已完成"}</dd>
       </dl>
     </section>}
+    {selectedTypeForLayout && <DataFlowEditor type={selectedTypeForLayout} onUpdateDataFlow={onUpdateDataFlow} />}
     <section className="property-card">
       <h3>{selectedNode.kind === "file" ? "声明类型" : "影响范围"}</h3>
       {selectedNode.kind === "file"
@@ -3452,11 +3545,62 @@ function GraphNodeList({ nodes, emptyText, onSelectNode, onOpenNode }: {
   </div>;
 }
 
-function ProtocolInspector({ type, layout, selectedField, selectedEnumValue }: {
+function DataFlowEditor({ type, onUpdateDataFlow }: {
+  type: WorkspaceTypeView;
+  onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
+}): React.JSX.Element {
+  const savedProducers = type.dataFlow?.producers ?? [];
+  const savedConsumers = type.dataFlow?.consumers ?? [];
+  const [producerText, setProducerText] = React.useState(savedProducers.join(", "));
+  const [consumerText, setConsumerText] = React.useState(savedConsumers.join(", "));
+
+  React.useEffect(() => {
+    setProducerText(savedProducers.join(", "));
+    setConsumerText(savedConsumers.join(", "));
+  }, [type.id, savedProducers.join("\u0000"), savedConsumers.join("\u0000")]);
+
+  const producers = parseFlowTags(producerText);
+  const consumers = parseFlowTags(consumerText);
+  const dirty = producers.join("\u0000") !== savedProducers.join("\u0000")
+    || consumers.join("\u0000") !== savedConsumers.join("\u0000");
+  const isBaseData = producers.length === 0 && consumers.length === 0;
+
+  return <section className="property-card data-flow-editor">
+    <h3>数据流标签</h3>
+    <p className="readonly-note">{isBaseData ? "生产节点和消费节点均为空，当前按基础数据类型处理。" : "这些标签会在图谱的数据流模式中生成 Producer → Data → Consumer 关系。"}</p>
+    <label>
+      <span>生产节点</span>
+      <textarea aria-label={`${type.name} 生产节点`} value={producerText} placeholder="例如：RadarDriver, ReplayTool" onChange={(event) => setProducerText(event.target.value)} />
+    </label>
+    <TagPreview tags={producers} emptyText="无生产节点" />
+    <label>
+      <span>消费节点</span>
+      <textarea aria-label={`${type.name} 消费节点`} value={consumerText} placeholder="例如：Tracker, Telemetry" onChange={(event) => setConsumerText(event.target.value)} />
+    </label>
+    <TagPreview tags={consumers} emptyText="无消费节点" />
+    <div className="graph-inspector-actions">
+      <button className="inline-action" disabled={!dirty} onClick={() => onUpdateDataFlow(type, producers, consumers)}>保存数据流</button>
+      <button className="inline-action ghost" disabled={!producerText && !consumerText} onClick={() => { setProducerText(""); setConsumerText(""); }}>清空</button>
+    </div>
+  </section>;
+}
+
+function TagPreview({ tags, emptyText }: { tags: string[]; emptyText: string }): React.JSX.Element {
+  return tags.length === 0
+    ? <small className="tag-empty">{emptyText}</small>
+    : <div className="tag-list">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div>;
+}
+
+function parseFlowTags(value: string): string[] {
+  return [...new Set(value.split(/[,，;\n\r]+/).map((item) => item.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function ProtocolInspector({ type, layout, selectedField, selectedEnumValue, onUpdateDataFlow }: {
   type: WorkspaceTypeView;
   layout: WorkspaceMemoryLayoutView | null;
   selectedField?: WorkspaceFieldView;
   selectedEnumValue?: WorkspaceEnumValueView;
+  onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
 }): React.JSX.Element {
   const selectedFieldLayout = selectedField && type.kind === "struct" && layout
     ? layout.fields.find((field) => field.fieldId === selectedField.id)
@@ -3479,6 +3623,8 @@ function ProtocolInspector({ type, layout, selectedField, selectedEnumValue }: {
       <h3>{readonlyNoteLabel}</h3>
       <p className="readonly-note">{readonlyNote || "暂无注释；请在中间 Editor 中编辑。"}</p>
     </section>
+
+    <DataFlowEditor type={type} onUpdateDataFlow={onUpdateDataFlow} />
 
     {layout && <section className="property-card">
       <h3>内存布局</h3>

@@ -19,6 +19,7 @@ import type {
   RenameStructInput,
   ProtocolSnapshotSummary,
   SemanticDiffReport,
+  UpdateDataFlowInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateHeaderContentInput,
@@ -51,6 +52,7 @@ export interface ProtoVaultDesktopApi {
   updateEnumValue(input: UpdateEnumValueInput): Promise<WorkspaceView>;
   deleteEnumValue(input: DeleteEnumValueInput): Promise<WorkspaceView>;
   updateNote(input: UpdateNoteInput): Promise<WorkspaceView>;
+  updateDataFlow(input: UpdateDataFlowInput): Promise<WorkspaceView>;
   lint(workspaceRoot: string): Promise<WorkspaceLintReport>;
   generateDocument(input: GenerateDocumentInput): Promise<GeneratedDocumentReport>;
   createSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary>;
@@ -84,6 +86,7 @@ contextBridge.exposeInMainWorld("protoVault", {
   updateEnumValue: (input) => ipcRenderer.invoke("protocol:update-enum-value", input),
   deleteEnumValue: (input) => ipcRenderer.invoke("protocol:delete-enum-value", input),
   updateNote: (input) => ipcRenderer.invoke("protocol:update-note", input),
+  updateDataFlow: (input) => ipcRenderer.invoke("protocol:update-data-flow", input),
   lint: (workspaceRoot) => ipcRenderer.invoke("protocol:lint", workspaceRoot),
   generateDocument: (input) => ipcRenderer.invoke("protocol:generate-document", input),
   createSnapshot: (input) => ipcRenderer.invoke("protocol:create-snapshot", input),

@@ -19,6 +19,7 @@ import type {
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
+  UpdateDataFlowInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateHeaderContentInput,
@@ -45,6 +46,7 @@ import {
   renameStruct,
   sampleWorkspacePath,
   scanWorkspace,
+  updateDataFlow,
   updateEnumValue,
   updateField,
   updateHeaderContent,
@@ -138,6 +140,7 @@ app.whenReady().then(() => {
   ipcMain.handle("protocol:update-enum-value", (_event, input: UpdateEnumValueInput) => updateEnumValue(input));
   ipcMain.handle("protocol:delete-enum-value", (_event, input: DeleteEnumValueInput) => deleteEnumValue(input));
   ipcMain.handle("protocol:update-note", (_event, input: UpdateNoteInput) => updateNote(input));
+  ipcMain.handle("protocol:update-data-flow", (_event, input: UpdateDataFlowInput) => updateDataFlow(input));
   ipcMain.handle("protocol:lint", (_event, workspaceRoot: string) => lintWorkspace(workspaceRoot));
   ipcMain.handle("protocol:generate-document", (_event, input: GenerateDocumentInput) => generateProtocolDocument(input));
   ipcMain.handle("protocol:create-snapshot", (_event, input: CreateSnapshotInput) => createProtocolSnapshot(input));

@@ -45,12 +45,18 @@ export interface WorkspaceTypeView {
   qualifiedName: string;
   file: string;
   note?: string;
+  dataFlow?: WorkspaceDataFlowMetadata;
   pack?: number;
   underlyingType?: string;
   location?: { file: string; line: number; column: number };
   layout?: WorkspaceMemoryLayoutView;
   fields: WorkspaceFieldView[];
   values: WorkspaceEnumValueView[];
+}
+
+export interface WorkspaceDataFlowMetadata {
+  producers: string[];
+  consumers: string[];
 }
 
 export interface WorkspaceFileView {
@@ -188,6 +194,13 @@ export interface UpdateNoteInput {
   workspaceRoot: string;
   targetId: string;
   note: string;
+}
+
+export interface UpdateDataFlowInput {
+  workspaceRoot: string;
+  typeId: string;
+  producers: string[];
+  consumers: string[];
 }
 
 export interface WorkspaceLintIssue {

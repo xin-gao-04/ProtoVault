@@ -24,6 +24,7 @@ import {
   renameHeader,
   renameStruct,
   scanWorkspace,
+  updateDataFlow,
   updateEnumValue,
   updateField,
   updateHeaderContent,
@@ -568,6 +569,42 @@ enum class Broken : std::uint8_t {
       expect(headerContent).toContain("/// @brief 业务侧稳定 ID");
       expect(headerContent).toContain("/// @brief 消息类型枚举");
       expect(headerContent).toContain("/// @brief 缺省值");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("persists producer and consumer tags for protocol types", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-data-flow-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/flow.hpp" });
+      let workspace = await createStruct({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "flow.hpp"),
+        structName: "RadarFrame"
+      });
+      const frame = workspace.types.find((type) => type.qualifiedName === "protovault::RadarFrame")!;
+      workspace = await updateDataFlow({
+        workspaceRoot: root,
+        typeId: frame.id,
+        producers: ["RadarDriver", "  RadarDriver  ", "ReplayTool"],
+        consumers: ["Tracker", "Telemetry"]
+      });
+      const updated = workspace.types.find((type) => type.id === frame.id)!;
+      expect(updated.dataFlow).toEqual({
+        producers: ["RadarDriver", "ReplayTool"],
+        consumers: ["Telemetry", "Tracker"]
+      });
+
+      const rescanned = await scanWorkspace(root);
+      expect(rescanned.types.find((type) => type.id === frame.id)?.dataFlow).toEqual(updated.dataFlow);
+      const metadata = JSON.parse(await readFile(resolve(root, ".protocol", "meta", "metadata.json"), "utf8")) as {
+        dataFlows: Record<string, { producers: string[]; consumers: string[] }>;
+      };
+      expect(metadata.dataFlows[frame.id]).toEqual(updated.dataFlow);
+
+      workspace = await updateDataFlow({ workspaceRoot: root, typeId: frame.id, producers: [], consumers: [] });
+      expect(workspace.types.find((type) => type.id === frame.id)?.dataFlow).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
