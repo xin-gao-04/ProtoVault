@@ -53,6 +53,28 @@ type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; 
 type GraphSimNode = ProtocolGraphNode & { vx: number; vy: number; vz: number; radius: number; screenX: number; screenY: number; screenRadius: number };
 type GraphSimEdge = ProtocolGraphEdge & { source: GraphSimNode; target: GraphSimNode };
 type GraphRiskLevel = "normal" | "warning" | "critical";
+type GraphThemeId = "obsidian" | "tokyo" | "ink";
+type GraphThemePreset = {
+  id: GraphThemeId;
+  name: string;
+  background: [string, string, string];
+  star: string;
+  starBright: string;
+  file: string;
+  struct: string;
+  enum: string;
+  producer: string;
+  consumer: string;
+  outgoing: string;
+  incoming: string;
+  reference: string;
+  contains: string;
+  flow: string;
+  labelText: string;
+  labelActive: string;
+  selected: string;
+  hovered: string;
+};
 type GraphNodeMetrics = {
   inboundReferences: number;
   outboundReferences: number;
@@ -78,6 +100,72 @@ const SUPPORTED_BASE_FIELD_TYPES = [
   "bool",
   "char",
   "std::byte"
+];
+
+const GRAPH_THEMES: GraphThemePreset[] = [
+  {
+    id: "obsidian",
+    name: "Obsidian",
+    background: ["rgba(22, 25, 31, 0.92)", "rgba(12, 14, 18, 0.99)", "rgba(6, 8, 11, 1)"],
+    star: "rgba(164, 174, 188, 0.055)",
+    starBright: "rgba(174, 186, 202, 0.13)",
+    file: "#8b99ab",
+    struct: "#d6dde8",
+    enum: "#d6a84f",
+    producer: "#43b7a7",
+    consumer: "#8b7cf6",
+    outgoing: "86, 188, 170",
+    incoming: "229, 173, 85",
+    reference: "172, 78, 74",
+    contains: "104, 122, 151",
+    flow: "86, 188, 170",
+    labelText: "rgba(205, 214, 226, 0.9)",
+    labelActive: "#f3f7ff",
+    selected: "rgba(229, 173, 85, 0.58)",
+    hovered: "rgba(168, 196, 236, 0.42)"
+  },
+  {
+    id: "tokyo",
+    name: "Tokyo",
+    background: ["rgba(34, 43, 70, 0.82)", "rgba(18, 23, 38, 0.99)", "rgba(9, 12, 22, 1)"],
+    star: "rgba(122, 162, 247, 0.065)",
+    starBright: "rgba(187, 154, 247, 0.14)",
+    file: "#7aa2f7",
+    struct: "#c0caf5",
+    enum: "#e0af68",
+    producer: "#73daca",
+    consumer: "#bb9af7",
+    outgoing: "115, 218, 202",
+    incoming: "224, 175, 104",
+    reference: "247, 118, 142",
+    contains: "86, 95, 137",
+    flow: "115, 218, 202",
+    labelText: "rgba(192, 202, 245, 0.9)",
+    labelActive: "#ffffff",
+    selected: "rgba(224, 175, 104, 0.62)",
+    hovered: "rgba(122, 162, 247, 0.45)"
+  },
+  {
+    id: "ink",
+    name: "简墨",
+    background: ["rgba(238, 230, 211, 0.95)", "rgba(222, 211, 188, 0.98)", "rgba(199, 183, 151, 1)"],
+    star: "rgba(68, 55, 43, 0.035)",
+    starBright: "rgba(68, 55, 43, 0.09)",
+    file: "#5d6d73",
+    struct: "#203336",
+    enum: "#b88439",
+    producer: "#2f7d68",
+    consumer: "#8a4a3c",
+    outgoing: "47, 125, 104",
+    incoming: "178, 75, 54",
+    reference: "136, 61, 49",
+    contains: "88, 98, 91",
+    flow: "47, 125, 104",
+    labelText: "rgba(31, 39, 37, 0.86)",
+    labelActive: "#182523",
+    selected: "rgba(178, 75, 54, 0.62)",
+    hovered: "rgba(47, 125, 104, 0.38)"
+  }
 ];
 
 function App(): React.JSX.Element {
@@ -2840,7 +2928,8 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
     focusNodeId: null as string | null,
     relationDepth: new Map<string, number>(),
     searchQuery: "",
-    searchMatches: new Set<string>()
+    searchMatches: new Set<string>(),
+    theme: GRAPH_THEMES[0]
   });
   const simulationRef = React.useRef<{
     nodes: GraphSimNode[];
@@ -2854,10 +2943,15 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
     panX: number;
     panY: number;
     zoom: number;
+    targetPanX: number;
+    targetPanY: number;
+    targetZoom: number;
   } | null>(null);
   const [hoveredLabel, setHoveredLabel] = React.useState<string | null>(null);
   const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
   const [graphMode, setGraphMode] = React.useState<ProtocolGraphMode>("dependency");
+  const [graphThemeId, setGraphThemeId] = React.useState<GraphThemeId>("obsidian");
+  const graphTheme = GRAPH_THEMES.find((theme) => theme.id === graphThemeId) ?? GRAPH_THEMES[0];
   const graph = React.useMemo(() => buildProtocolGraph(workspace, graphMode), [workspace, graphMode]);
   const focusedNodeId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
   const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
@@ -2872,9 +2966,10 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       focusNodeId: focusedNodeId,
       relationDepth,
       searchQuery: normalizedGraphSearch,
-      searchMatches: graphSearchMatches
+      searchMatches: graphSearchMatches,
+      theme: graphTheme
     };
-  }, [focusedNodeId, graphSearchMatches, normalizedGraphSearch, relationDepth, selectedFilePath, selectedTypeId]);
+  }, [focusedNodeId, graphSearchMatches, graphTheme, normalizedGraphSearch, relationDepth, selectedFilePath, selectedTypeId]);
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -2895,7 +2990,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       const target = byId.get(edge.to);
       return source && target ? [{ ...edge, source, target }] : [];
     });
-    simulationRef.current = { nodes, edges, hovered: null, draggingNode: null, panning: false, lastX: 0, lastY: 0, moved: false, panX: 0, panY: 0, zoom: 1 };
+    simulationRef.current = { nodes, edges, hovered: null, draggingNode: null, panning: false, lastX: 0, lastY: 0, moved: false, panX: 0, panY: 0, zoom: 1, targetPanX: 0, targetPanY: 0, targetZoom: 1 };
     let animationId = 0;
     let lastTime = performance.now();
 
@@ -2905,6 +3000,10 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       const delta = Math.min(32, now - lastTime);
       lastTime = now;
       resizeCanvas(canvas);
+      const smoothing = 1 - Math.pow(0.001, delta / 180);
+      sim.zoom += (sim.targetZoom - sim.zoom) * smoothing;
+      sim.panX += (sim.targetPanX - sim.panX) * smoothing;
+      sim.panY += (sim.targetPanY - sim.panY) * smoothing;
       tickGraph(sim.nodes, sim.edges, delta / 16.67);
       const renderOptions = renderOptionsRef.current;
       drawGraph(canvas, sim.nodes, sim.edges, {
@@ -2917,6 +3016,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
         relationDepth: renderOptions.relationDepth,
         searchQuery: renderOptions.searchQuery,
         searchMatches: renderOptions.searchMatches,
+        theme: renderOptions.theme,
         hoveredId: sim.hovered?.id ?? null,
         time: now
       });
@@ -2988,8 +3088,10 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       sim.draggingNode.vx = 0;
       sim.draggingNode.vy = 0;
     } else if (sim.panning) {
-      sim.panX += dx;
-      sim.panY += dy;
+      sim.targetPanX += dx;
+      sim.targetPanY += dy;
+      sim.panX = sim.targetPanX;
+      sim.panY = sim.targetPanY;
     } else {
       setHover(hitTest(event.clientX, event.clientY));
     }
@@ -3016,12 +3118,21 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
   function handleWheel(event: React.WheelEvent<HTMLCanvasElement>): void {
     event.preventDefault();
     const sim = simulationRef.current;
-    if (!sim) return;
-    const factor = event.deltaY > 0 ? 0.92 : 1.08;
-    sim.zoom = clamp(sim.zoom * factor, 0.45, 2.8);
+    const canvas = canvasRef.current;
+    if (!sim || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left - rect.width / 2;
+    const pointerY = event.clientY - rect.top - rect.height / 2;
+    const beforeX = (pointerX - sim.targetPanX) / sim.targetZoom;
+    const beforeY = (pointerY - sim.targetPanY) / sim.targetZoom;
+    const factor = Math.exp(-event.deltaY * 0.0014);
+    const nextZoom = clamp(sim.targetZoom * factor, 0.38, 3.2);
+    sim.targetZoom = nextZoom;
+    sim.targetPanX = pointerX - beforeX * nextZoom;
+    sim.targetPanY = pointerY - beforeY * nextZoom;
   }
 
-  return <section className="graph-view" aria-label="协议关系图谱">
+  return <section className={`graph-view graph-theme-${graphTheme.id}`} aria-label="协议关系图谱">
     <div className="graph-title">
       <div>
         <p className="eyebrow">GRAPH VIEW</p>
@@ -3033,6 +3144,13 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
           <button className={graphMode === "dependency" ? "active" : ""} onClick={() => setGraphMode("dependency")}>依赖</button>
           <button className={graphMode === "data-flow" ? "active" : ""} onClick={() => setGraphMode("data-flow")}>数据流</button>
         </div>
+        <select
+          aria-label="图谱主题"
+          value={graphThemeId}
+          onChange={(event) => setGraphThemeId(event.target.value as GraphThemeId)}
+        >
+          {GRAPH_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.name}</option>)}
+        </select>
         <input
           aria-label="图谱搜索"
           value={graphSearchQuery}
@@ -3378,6 +3496,7 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
   relationDepth: Map<string, number>;
   searchQuery: string;
   searchMatches: Set<string>;
+  theme: GraphThemePreset;
   hoveredId: string | null;
   time: number;
 }): void {
@@ -3389,12 +3508,12 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
   const gradient = context.createRadialGradient(width * 0.5, height * 0.38, 20, width * 0.5, height * 0.5, Math.max(width, height) * 0.7);
-  gradient.addColorStop(0, "rgba(24, 34, 49, 0.78)");
-  gradient.addColorStop(0.55, "rgba(8, 12, 18, 0.98)");
-  gradient.addColorStop(1, "rgba(5, 8, 12, 1)");
+  gradient.addColorStop(0, options.theme.background[0]);
+  gradient.addColorStop(0.55, options.theme.background[1]);
+  gradient.addColorStop(1, options.theme.background[2]);
   context.fillStyle = gradient;
   context.fillRect(0, 0, width, height);
-  drawGraphBackdrop(context, width, height, options.time);
+  drawGraphBackdrop(context, width, height, options.time, options.theme);
   context.lineCap = "round";
   context.lineJoin = "round";
 
@@ -3417,7 +3536,7 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     const alpha = edgeFocus === "none"
       ? edge.kind === "flow" ? 0.66 : edge.kind === "references" ? 0.5 : 0.18
       : 0.96;
-    const stroke = graphEdgeStroke(edge, edgeFocus, alpha * edgeRelevance);
+    const stroke = graphEdgeStroke(edge, edgeFocus, alpha * edgeRelevance, options.theme);
     const widthScale = edgeFocus === "none" ? 1 : 1.85;
     context.beginPath();
     context.moveTo(source.screenX, source.screenY);
@@ -3441,7 +3560,7 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     const focused = options.focusNodeId === node.id || selected || hovered;
     context.beginPath();
     context.arc(item.x, item.y, item.radius + (selected ? 4 : hovered ? 2 : 0), 0, Math.PI * 2);
-    context.fillStyle = selected ? "rgba(229, 173, 85, 0.16)" : hovered ? "rgba(168, 196, 236, 0.12)" : "rgba(0, 0, 0, 0.22)";
+    context.fillStyle = selected ? options.theme.selected.replace(/,\s*0\.\d+\)$/, ", 0.16)") : hovered ? options.theme.hovered.replace(/,\s*0\.\d+\)$/, ", 0.12)") : "rgba(0, 0, 0, 0.22)";
     context.fill();
     if (node.metrics.layoutRisk !== "normal") {
       context.beginPath();
@@ -3452,18 +3571,18 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     }
     context.beginPath();
     context.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
-    context.fillStyle = graphNodeFill(node);
-    context.shadowColor = selected ? "rgba(229, 173, 85, 0.55)" : "transparent";
+    context.fillStyle = graphNodeFill(node, options.theme);
+    context.shadowColor = selected ? options.theme.selected : "transparent";
     context.shadowBlur = selected ? 10 : 0;
     context.fill();
     context.shadowBlur = 0;
     context.lineWidth = selected ? 2.1 : hovered ? 1.5 : 1;
-    context.strokeStyle = selected ? "#e5ad55" : hovered ? "#a8c4ec" : "rgba(7, 10, 15, 0.92)";
+    context.strokeStyle = selected ? options.theme.selected : hovered ? options.theme.hovered : "rgba(7, 10, 15, 0.92)";
     context.stroke();
     if (focused) {
       context.beginPath();
       context.arc(item.x, item.y, item.radius + 4.5, 0, Math.PI * 2);
-      context.strokeStyle = selected ? "rgba(229, 173, 85, 0.58)" : "rgba(168, 196, 236, 0.42)";
+      context.strokeStyle = selected ? options.theme.selected : options.theme.hovered;
       context.lineWidth = 1.2;
       context.stroke();
     }
@@ -3486,7 +3605,7 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
       context.textBaseline = "top";
       context.lineWidth = 2.25;
       context.strokeStyle = "rgba(5, 8, 12, 0.96)";
-      context.fillStyle = hovered || selected ? "#f3f7ff" : "rgba(205, 214, 226, 0.88)";
+      context.fillStyle = hovered || selected ? options.theme.labelActive : options.theme.labelText;
       const label = node.label.length > 24 ? `${node.label.slice(0, 23)}…` : node.label;
       context.strokeText(label, item.x, item.y + item.radius + 6);
       context.fillText(label, item.x, item.y + item.radius + 6);
@@ -3517,20 +3636,20 @@ function graphEdgeFocus(edge: GraphSimEdge, focusNodeId: string | null): "outgoi
   return "none";
 }
 
-function graphEdgeStroke(edge: GraphSimEdge, focus: "outgoing" | "incoming" | "none", alpha: number): string {
-  if (focus === "outgoing") return `rgba(86, 188, 170, ${alpha})`;
-  if (focus === "incoming") return `rgba(229, 173, 85, ${alpha})`;
-  if (edge.kind === "flow") return `rgba(86, 188, 170, ${alpha})`;
-  if (edge.kind === "references") return `rgba(172, 78, 74, ${alpha})`;
-  return `rgba(104, 122, 151, ${alpha})`;
+function graphEdgeStroke(edge: GraphSimEdge, focus: "outgoing" | "incoming" | "none", alpha: number, theme: GraphThemePreset): string {
+  if (focus === "outgoing") return `rgba(${theme.outgoing}, ${alpha})`;
+  if (focus === "incoming") return `rgba(${theme.incoming}, ${alpha})`;
+  if (edge.kind === "flow") return `rgba(${theme.flow}, ${alpha})`;
+  if (edge.kind === "references") return `rgba(${theme.reference}, ${alpha})`;
+  return `rgba(${theme.contains}, ${alpha})`;
 }
 
-function graphNodeFill(node: GraphSimNode): string {
-  if (node.kind === "file") return "#8b99ab";
-  if (node.kind === "struct") return "#d6dde8";
-  if (node.kind === "enum") return "#d9ad58";
-  if (node.kind === "producer") return "#42c6b0";
-  return "#8b7cf6";
+function graphNodeFill(node: GraphSimNode, theme: GraphThemePreset): string {
+  if (node.kind === "file") return theme.file;
+  if (node.kind === "struct") return theme.struct;
+  if (node.kind === "enum") return theme.enum;
+  if (node.kind === "producer") return theme.producer;
+  return theme.consumer;
 }
 
 function drawGraphArrow(
@@ -3557,14 +3676,14 @@ function drawGraphArrow(
   context.restore();
 }
 
-function drawGraphBackdrop(context: CanvasRenderingContext2D, width: number, height: number, time: number): void {
+function drawGraphBackdrop(context: CanvasRenderingContext2D, width: number, height: number, time: number, theme: GraphThemePreset): void {
   context.save();
   for (let index = 0; index < 48; index += 1) {
     const x = ((index * 97) % Math.max(1, width)) + Math.sin(time / 1800 + index) * 1.5;
     const y = ((index * 53) % Math.max(1, height)) + Math.cos(time / 2200 + index * 0.7) * 1.5;
     context.beginPath();
     context.arc(x, y, index % 9 === 0 ? 1 : 0.5, 0, Math.PI * 2);
-    context.fillStyle = index % 9 === 0 ? "rgba(148, 166, 190, 0.14)" : "rgba(148, 166, 190, 0.06)";
+    context.fillStyle = index % 9 === 0 ? theme.starBright : theme.star;
     context.fill();
   }
   context.restore();
