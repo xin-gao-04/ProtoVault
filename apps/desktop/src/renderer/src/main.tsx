@@ -723,6 +723,20 @@ function App(): React.JSX.Element {
     });
   }
 
+  async function deleteTypeWithConfirm(type: WorkspaceTypeView): Promise<void> {
+    if (!workspace) return;
+    const label = type.kind === "struct" ? "struct" : "enum";
+    if (!window.confirm(`确认删除 ${label}？\n${type.qualifiedName}`)) return;
+    await runWorkspaceAction(async () => {
+      const result = type.kind === "struct"
+        ? await window.protoVault.deleteStruct({ workspaceRoot: workspace.rootPath, typeId: type.id })
+        : await window.protoVault.deleteEnum({ workspaceRoot: workspace.rootPath, typeId: type.id });
+      applyWorkspaceResult(result);
+      setUiNotice(type.kind === "struct" ? `已删除数据结构：${type.name}` : `已删除枚举：${type.name}`);
+      setActiveAction(null);
+    });
+  }
+
   async function addFieldFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "struct") return;
     const nextFieldType = fieldType.trim();
@@ -1601,6 +1615,7 @@ function App(): React.JSX.Element {
           onEditType={(type) => runContextAction(() => editType(type))}
           onEditField={(type, field) => runContextAction(() => { void openEditFieldAction(type, field); })}
           onEditEnumValue={(type, value) => runContextAction(() => { void openEditEnumValueAction(type, value); })}
+          onDeleteType={(type) => runContextAction(() => { void deleteTypeWithConfirm(type); })}
           onDeleteField={(type, field) => runContextAction(() => { void deleteFieldWithConfirm(type, field); })}
           onDeleteEnumValue={(type, value) => runContextAction(() => { void deleteEnumValueWithConfirm(type, value); })}
         />}
@@ -3650,6 +3665,7 @@ function ContextMenu({
   onEditType,
   onEditField,
   onEditEnumValue,
+  onDeleteType,
   onDeleteField,
   onDeleteEnumValue
 }: {
@@ -3664,6 +3680,7 @@ function ContextMenu({
   onEditType(type: WorkspaceTypeView): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
   onEditEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
+  onDeleteType(type: WorkspaceTypeView): void;
   onDeleteField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
   onDeleteEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
 }): React.JSX.Element {
@@ -3684,7 +3701,8 @@ function ContextMenu({
     items.push(
       { label: type.kind === "struct" ? "编辑 Struct" : "编辑 Enum", action: () => onEditType(type) },
       { label: "添加字段", action: () => onAddField(type), disabled: type.kind !== "struct" },
-      { label: "添加枚举项", action: () => onAddEnumValue(type), disabled: type.kind !== "enum" }
+      { label: "添加枚举项", action: () => onAddEnumValue(type), disabled: type.kind !== "enum" },
+      { label: type.kind === "struct" ? "删除 Struct" : "删除 Enum", action: () => onDeleteType(type) }
     );
   }
   if (menu.target.kind === "field") {
