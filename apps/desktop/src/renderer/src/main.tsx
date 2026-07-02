@@ -44,9 +44,11 @@ type ContextMenuState = {
     | { kind: "enum-value"; type: WorkspaceTypeView; value: WorkspaceEnumValueView };
 };
 type ProtocolGraphNode =
-  | { id: string; kind: "file"; label: string; file: WorkspaceFileView; x: number; y: number }
-  | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number };
+  | { id: string; kind: "file"; label: string; file: WorkspaceFileView; x: number; y: number; z: number }
+  | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number; z: number };
 type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; kind: "contains" | "references" };
+type GraphSimNode = ProtocolGraphNode & { vx: number; vy: number; vz: number; radius: number; screenX: number; screenY: number; screenRadius: number };
+type GraphSimEdge = ProtocolGraphEdge & { source: GraphSimNode; target: GraphSimNode };
 
 const SUPPORTED_BASE_FIELD_TYPES = [
   "std::int8_t",
@@ -1247,7 +1249,8 @@ function App(): React.JSX.Element {
     >
       <aside className="rail">
         <div className="mark">PV</div>
-        <button aria-label="协议工作区">◇</button>
+        <button className={centerViewMode === "workspace" ? "active" : ""} aria-label="协议工作区" title="协议工作区" onClick={() => setCenterViewMode("workspace")}>◇</button>
+        <button className={centerViewMode === "graph" ? "active" : ""} aria-label="关系图谱" title="关系图谱" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("graph"); }}>⌬</button>
         <button aria-label="问题面板">!</button>
       </aside>
       <aside className="navigator">
@@ -1460,7 +1463,6 @@ function App(): React.JSX.Element {
       <aside className="inspector">
         <div className="inspector-header">
           <h2>属性</h2>
-          <button className={centerViewMode === "graph" ? "inline-action active" : "inline-action"} disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("graph"); }}>关系图谱</button>
         </div>
         {selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
@@ -2528,61 +2530,189 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
   onOpenNode(node: ProtocolGraphNode): void;
   onClose(): void;
 }): React.JSX.Element {
+  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const simulationRef = React.useRef<{
+    nodes: GraphSimNode[];
+    edges: GraphSimEdge[];
+    hovered: GraphSimNode | null;
+    draggingNode: GraphSimNode | null;
+    panning: boolean;
+    lastX: number;
+    lastY: number;
+    moved: boolean;
+    panX: number;
+    panY: number;
+    zoom: number;
+  } | null>(null);
+  const [hoveredLabel, setHoveredLabel] = React.useState<string | null>(null);
   const graph = React.useMemo(() => buildProtocolGraph(workspace), [workspace]);
-  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const nodes: GraphSimNode[] = graph.nodes.map((node) => ({
+      ...node,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      radius: node.kind === "file" ? 5.5 : node.kind === "struct" ? 8 : 7,
+      screenX: 0,
+      screenY: 0,
+      screenRadius: 0
+    }));
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const edges: GraphSimEdge[] = graph.edges.flatMap((edge) => {
+      const source = byId.get(edge.from);
+      const target = byId.get(edge.to);
+      return source && target ? [{ ...edge, source, target }] : [];
+    });
+    simulationRef.current = { nodes, edges, hovered: null, draggingNode: null, panning: false, lastX: 0, lastY: 0, moved: false, panX: 0, panY: 0, zoom: 1 };
+    let animationId = 0;
+    let lastTime = performance.now();
+
+    function frame(now: number): void {
+      const sim = simulationRef.current;
+      if (!sim || !canvas) return;
+      const delta = Math.min(32, now - lastTime);
+      lastTime = now;
+      resizeCanvas(canvas);
+      tickGraph(sim.nodes, sim.edges, delta / 16.67);
+      drawGraph(canvas, sim.nodes, sim.edges, {
+        panX: sim.panX,
+        panY: sim.panY,
+        zoom: sim.zoom,
+        selectedTypeId,
+        selectedFilePath,
+        hoveredId: sim.hovered?.id ?? null,
+        time: now
+      });
+      animationId = requestAnimationFrame(frame);
+    }
+
+    animationId = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(animationId);
+  }, [graph, selectedFilePath, selectedTypeId]);
+
+  function hitTest(clientX: number, clientY: number): GraphSimNode | null {
+    const canvas = canvasRef.current;
+    const sim = simulationRef.current;
+    if (!canvas || !sim) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    return [...sim.nodes]
+      .sort((a, b) => b.z - a.z)
+      .find((node) => {
+        const radius = Math.max(12, node.screenRadius + 7);
+        return distance(x, y, node.screenX, node.screenY) <= radius;
+      }) ?? null;
+  }
+
+  function setHover(node: GraphSimNode | null): void {
+    const sim = simulationRef.current;
+    if (sim) sim.hovered = node;
+    const next = node ? `${node.kind === "file" ? "Header" : node.kind} · ${node.label}` : null;
+    setHoveredLabel((current) => current === next ? current : next);
+  }
+
+  function inverseProject(clientX: number, clientY: number, node: GraphSimNode): { x: number; y: number } {
+    const canvas = canvasRef.current;
+    const sim = simulationRef.current;
+    if (!canvas || !sim) return { x: node.x, y: node.y };
+    const rect = canvas.getBoundingClientRect();
+    const scale = perspectiveScale(node.z);
+    return {
+      x: (clientX - rect.left - rect.width / 2 - sim.panX) / (sim.zoom * scale),
+      y: (clientY - rect.top - rect.height / 2 - sim.panY) / (sim.zoom * scale)
+    };
+  }
+
+  function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>): void {
+    const canvas = canvasRef.current;
+    const sim = simulationRef.current;
+    if (!canvas || !sim) return;
+    const node = hitTest(event.clientX, event.clientY);
+    sim.draggingNode = node;
+    sim.panning = !node;
+    sim.lastX = event.clientX;
+    sim.lastY = event.clientY;
+    sim.moved = false;
+    if (node) setHover(node);
+    canvas.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>): void {
+    const sim = simulationRef.current;
+    if (!sim) return;
+    const dx = event.clientX - sim.lastX;
+    const dy = event.clientY - sim.lastY;
+    if (Math.abs(dx) + Math.abs(dy) > 2) sim.moved = true;
+    if (sim.draggingNode) {
+      const next = inverseProject(event.clientX, event.clientY, sim.draggingNode);
+      sim.draggingNode.x = next.x;
+      sim.draggingNode.y = next.y;
+      sim.draggingNode.vx = 0;
+      sim.draggingNode.vy = 0;
+    } else if (sim.panning) {
+      sim.panX += dx;
+      sim.panY += dy;
+    } else {
+      setHover(hitTest(event.clientX, event.clientY));
+    }
+    sim.lastX = event.clientX;
+    sim.lastY = event.clientY;
+  }
+
+  function handlePointerUp(event: React.PointerEvent<HTMLCanvasElement>): void {
+    const canvas = canvasRef.current;
+    const sim = simulationRef.current;
+    if (!canvas || !sim) return;
+    const node = sim.draggingNode ?? (!sim.moved ? hitTest(event.clientX, event.clientY) : null);
+    sim.draggingNode = null;
+    sim.panning = false;
+    canvas.releasePointerCapture(event.pointerId);
+    if (node && !sim.moved) onSelectNode(node);
+  }
+
+  function handleDoubleClick(event: React.MouseEvent<HTMLCanvasElement>): void {
+    const node = hitTest(event.clientX, event.clientY);
+    if (node) onOpenNode(node);
+  }
+
+  function handleWheel(event: React.WheelEvent<HTMLCanvasElement>): void {
+    event.preventDefault();
+    const sim = simulationRef.current;
+    if (!sim) return;
+    const factor = event.deltaY > 0 ? 0.92 : 1.08;
+    sim.zoom = clamp(sim.zoom * factor, 0.45, 2.8);
+  }
 
   return <section className="graph-view" aria-label="协议关系图谱">
     <div className="graph-title">
       <div>
         <p className="eyebrow">GRAPH VIEW</p>
         <h2>协议关系图谱</h2>
-        <p>单击节点定位左侧树图，双击节点打开对应 tab。当前为只读查看与跳转模式。</p>
+        <p>Canvas 力导向视图：拖拽节点、滚轮缩放、拖动画布平移；单击定位左侧树图，双击打开对应 tab。</p>
       </div>
       <button className="inline-action" onClick={onClose}>返回工作台</button>
     </div>
     <div className="graph-canvas">
-      <svg viewBox="0 0 1040 620" role="img" aria-label="协议关系图谱画布">
-        <defs>
-          <marker id="graph-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" />
-          </marker>
-        </defs>
-        <g className="graph-edges">
-          {graph.edges.map((edge) => {
-            const from = nodeById.get(edge.from);
-            const to = nodeById.get(edge.to);
-            if (!from || !to) return null;
-            const midX = (from.x + to.x) / 2;
-            const midY = (from.y + to.y) / 2;
-            return <g key={edge.id} className={`graph-edge ${edge.kind}`}>
-              <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} />
-              {edge.kind === "references" && <text x={midX} y={midY - 4}>{edge.label}</text>}
-            </g>;
-          })}
-        </g>
-        <g className="graph-nodes">
-          {graph.nodes.map((node) => {
-            const selected = node.kind === "file" ? node.file.path === selectedFilePath : node.type.id === selectedTypeId;
-            return <g
-              className={`graph-node ${node.kind}${selected ? " selected" : ""}`}
-              data-graph-node-id={node.id}
-              key={node.id}
-              transform={`translate(${node.x} ${node.y})`}
-              tabIndex={0}
-              role="button"
-              aria-label={`${node.kind === "file" ? "Header" : node.kind} ${node.label}`}
-              onClick={() => onSelectNode(node)}
-              onDoubleClick={() => onOpenNode(node)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") onOpenNode(node);
-              }}
-            >
-              <circle r={node.kind === "file" ? 18 : 22} />
-              <text y={node.kind === "file" ? 36 : 42}>{node.label}</text>
-            </g>;
-          })}
-        </g>
-      </svg>
+      <canvas
+        ref={canvasRef}
+        aria-label="协议关系图谱画布"
+        onDoubleClick={handleDoubleClick}
+        onPointerDown={handlePointerDown}
+        onPointerLeave={() => setHover(null)}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onWheel={handleWheel}
+      />
+      <div className="graph-floating-tools" aria-hidden="true">
+        <span>滚轮缩放</span>
+        <span>拖拽节点</span>
+        <span>双击打开</span>
+      </div>
+      {hoveredLabel && <div className="graph-hover-card" role="status">{hoveredLabel}</div>}
     </div>
     <div className="graph-legend">
       <span><i className="file-dot" /> Header</span>
@@ -2590,26 +2720,30 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       <span><i className="enum-dot" /> Enum</span>
       <span>箭头表示字段类型引用</span>
     </div>
+    <div className="graph-node-shortcuts" aria-label="图谱节点索引">
+      {graph.nodes.map((node) => <button
+        key={node.id}
+        aria-label={`图谱节点 ${node.kind} ${node.label}`}
+        onClick={() => onSelectNode(node)}
+        onDoubleClick={() => onOpenNode(node)}
+      >{node.kind === "file" ? "H" : node.kind === "struct" ? "S" : "E"} · {node.label}</button>)}
+    </div>
   </section>;
 }
 
 function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
-  const width = 1040;
-  const height = 620;
-  const centerX = width / 2;
-  const centerY = height / 2;
   const files = workspace.files;
   const types = workspace.types;
-  const fileRadius = 260;
-  const typeRadius = Math.max(95, Math.min(205, 92 + types.length * 4));
+  const fileRadius = 330;
+  const typeRadius = Math.max(115, Math.min(240, 105 + types.length * 4));
   const nodes: ProtocolGraphNode[] = [
     ...files.map((file, index) => {
-      const point = radialPoint(index, Math.max(files.length, 1), fileRadius, centerX, centerY, -Math.PI / 2);
-      return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point };
+      const point = radialPoint(index, Math.max(files.length, 1), fileRadius, 0, 0, -Math.PI / 2);
+      return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point, z: Math.sin(index * 1.9) * 90 };
     }),
     ...types.map((type, index) => {
-      const point = radialPoint(index, Math.max(types.length, 1), typeRadius, centerX, centerY, -Math.PI / 2 + Math.PI / Math.max(types.length, 2));
-      return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point };
+      const point = radialPoint(index, Math.max(types.length, 1), typeRadius, 0, 0, -Math.PI / 2 + Math.PI / Math.max(types.length, 2));
+      return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point, z: Math.cos(index * 1.35) * 70 };
     })
   ];
   const edges: ProtocolGraphEdge[] = [];
@@ -2636,6 +2770,191 @@ function radialPoint(index: number, total: number, radius: number, centerX: numb
     x: Math.round(centerX + Math.cos(angle) * radius),
     y: Math.round(centerY + Math.sin(angle) * radius)
   };
+}
+
+function resizeCanvas(canvas: HTMLCanvasElement): void {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  const width = Math.max(1, Math.floor(rect.width * ratio));
+  const height = Math.max(1, Math.floor(rect.height * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+
+function tickGraph(nodes: GraphSimNode[], edges: GraphSimEdge[], intensity: number): void {
+  const repulsion = 4200;
+  for (const node of nodes) {
+    node.vx += -node.x * 0.0012 * intensity;
+    node.vy += -node.y * 0.0012 * intensity;
+    node.vz += -node.z * 0.0008 * intensity;
+  }
+  for (let index = 0; index < nodes.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < nodes.length; otherIndex += 1) {
+      const a = nodes[index];
+      const b = nodes[otherIndex];
+      const dx = a.x - b.x || 0.01;
+      const dy = a.y - b.y || 0.01;
+      const dz = (a.z - b.z) * 0.35;
+      const squared = Math.max(70, dx * dx + dy * dy + dz * dz);
+      const force = (repulsion / squared) * intensity;
+      const distanceValue = Math.sqrt(squared);
+      const fx = (dx / distanceValue) * force;
+      const fy = (dy / distanceValue) * force;
+      a.vx += fx;
+      a.vy += fy;
+      b.vx -= fx;
+      b.vy -= fy;
+    }
+  }
+  for (const edge of edges) {
+    const source = edge.source;
+    const target = edge.target;
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const dz = target.z - source.z;
+    const distanceValue = Math.max(1, Math.sqrt(dx * dx + dy * dy + dz * dz * 0.25));
+    const desired = edge.kind === "contains" ? 145 : 118;
+    const strength = edge.kind === "contains" ? 0.004 : 0.012;
+    const force = (distanceValue - desired) * strength * intensity;
+    const fx = (dx / distanceValue) * force;
+    const fy = (dy / distanceValue) * force;
+    const fz = (dz / distanceValue) * force * 0.5;
+    source.vx += fx;
+    source.vy += fy;
+    source.vz += fz;
+    target.vx -= fx;
+    target.vy -= fy;
+    target.vz -= fz;
+  }
+  for (const node of nodes) {
+    node.vx *= 0.88;
+    node.vy *= 0.88;
+    node.vz *= 0.9;
+    node.x += node.vx * intensity;
+    node.y += node.vy * intensity;
+    node.z = clamp(node.z + node.vz * intensity, -240, 240);
+  }
+}
+
+function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: GraphSimEdge[], options: {
+  panX: number;
+  panY: number;
+  zoom: number;
+  selectedTypeId: string | null;
+  selectedFilePath: string | null;
+  hoveredId: string | null;
+  time: number;
+}): void {
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  const ratio = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  const width = canvas.width / ratio;
+  const height = canvas.height / ratio;
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  const gradient = context.createRadialGradient(width * 0.5, height * 0.38, 20, width * 0.5, height * 0.5, Math.max(width, height) * 0.7);
+  gradient.addColorStop(0, "rgba(80, 111, 164, 0.16)");
+  gradient.addColorStop(0.55, "rgba(9, 13, 19, 0.92)");
+  gradient.addColorStop(1, "rgba(4, 7, 10, 1)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+  drawGraphBackdrop(context, width, height, options.time);
+
+  const projected = nodes
+    .map((node) => ({ node, ...projectNode(node, width, height, options.panX, options.panY, options.zoom, options.time) }))
+    .sort((a, b) => a.depth - b.depth);
+  for (const item of projected) {
+    item.node.screenX = item.x;
+    item.node.screenY = item.y;
+    item.node.screenRadius = item.radius;
+  }
+
+  for (const edge of edges) {
+    const source = edge.source;
+    const target = edge.target;
+    const alpha = edge.kind === "references" ? 0.58 : 0.25;
+    context.beginPath();
+    context.moveTo(source.screenX, source.screenY);
+    context.lineTo(target.screenX, target.screenY);
+    context.strokeStyle = edge.kind === "references" ? `rgba(172, 78, 74, ${alpha})` : `rgba(104, 122, 151, ${alpha})`;
+    context.lineWidth = edge.kind === "references" ? 1.25 : 0.8;
+    context.stroke();
+  }
+
+  for (const item of projected) {
+    const node = item.node;
+    const selected = node.kind === "file" ? node.file.path === options.selectedFilePath : node.type.id === options.selectedTypeId;
+    const hovered = node.id === options.hoveredId;
+    context.beginPath();
+    context.arc(item.x, item.y, item.radius + (selected ? 4 : hovered ? 2 : 0), 0, Math.PI * 2);
+    context.fillStyle = selected ? "rgba(229, 173, 85, 0.2)" : hovered ? "rgba(168, 196, 236, 0.16)" : "rgba(0, 0, 0, 0.18)";
+    context.fill();
+    context.beginPath();
+    context.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
+    context.fillStyle = node.kind === "file" ? "#b9c6d7" : node.kind === "struct" ? "#cfdae8" : "#e0b879";
+    context.shadowColor = selected ? "rgba(229, 173, 85, 0.85)" : "rgba(185, 211, 244, 0.38)";
+    context.shadowBlur = selected ? 18 : 10;
+    context.fill();
+    context.shadowBlur = 0;
+    if (selected || hovered) {
+      context.lineWidth = selected ? 2.4 : 1.4;
+      context.strokeStyle = selected ? "#e5ad55" : "#a8c4ec";
+      context.stroke();
+    }
+    const labelVisible = hovered || selected || item.scale > 0.88 || node.kind !== "file";
+    if (labelVisible) {
+      context.font = `${Math.max(10, Math.min(14, 11 * item.scale))}px Segoe UI, sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "top";
+      context.lineWidth = 4;
+      context.strokeStyle = "rgba(5, 8, 12, 0.88)";
+      context.fillStyle = hovered || selected ? "#eef4ff" : "rgba(199, 208, 220, 0.86)";
+      const label = node.label.length > 24 ? `${node.label.slice(0, 23)}…` : node.label;
+      context.strokeText(label, item.x, item.y + item.radius + 6);
+      context.fillText(label, item.x, item.y + item.radius + 6);
+    }
+  }
+}
+
+function drawGraphBackdrop(context: CanvasRenderingContext2D, width: number, height: number, time: number): void {
+  context.save();
+  for (let index = 0; index < 90; index += 1) {
+    const x = ((index * 97) % Math.max(1, width)) + Math.sin(time / 1800 + index) * 1.5;
+    const y = ((index * 53) % Math.max(1, height)) + Math.cos(time / 2200 + index * 0.7) * 1.5;
+    context.beginPath();
+    context.arc(x, y, index % 7 === 0 ? 1.2 : 0.65, 0, Math.PI * 2);
+    context.fillStyle = index % 7 === 0 ? "rgba(148, 166, 190, 0.22)" : "rgba(148, 166, 190, 0.1)";
+    context.fill();
+  }
+  context.restore();
+}
+
+function projectNode(node: GraphSimNode, width: number, height: number, panX: number, panY: number, zoom: number, time: number): {
+  x: number;
+  y: number;
+  radius: number;
+  scale: number;
+  depth: number;
+} {
+  const wave = Math.sin(time / 1300 + node.x * 0.006 + node.y * 0.004) * 12;
+  const scale = perspectiveScale(node.z + wave);
+  return {
+    x: width / 2 + node.x * scale * zoom + panX,
+    y: height / 2 + node.y * scale * zoom + panY,
+    radius: Math.max(3.5, node.radius * scale * zoom),
+    scale,
+    depth: node.z + wave
+  };
+}
+
+function perspectiveScale(z: number): number {
+  return clamp(720 / (720 + z), 0.58, 1.52);
+}
+
+function distance(ax: number, ay: number, bx: number, by: number): number {
+  return Math.hypot(ax - bx, ay - by);
 }
 
 function relativeDisplayPath(root: string, file: string): string {

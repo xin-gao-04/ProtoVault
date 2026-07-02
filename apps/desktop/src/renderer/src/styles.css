@@ -12,7 +12,8 @@ input, select, textarea { font: inherit; color: var(--text-normal); }
 .rail, .navigator, .inspector { border-right: 1px solid var(--background-modifier-border); background: var(--background-secondary); }
 .rail { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 16px 8px; }
 .rail button { width: 38px; height: 38px; border: 0; border-radius: 9px; background: transparent; color: var(--text-muted); font-size: 20px; }
-.rail button:hover { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
+.rail button:hover:not(:disabled), .rail button.active { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
+.rail button:disabled { opacity: .35; }
 .mark { display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 18px; border: 1px solid var(--interactive-accent); color: var(--text-accent-hover); font: 700 12px Georgia, serif; transform: rotate(45deg); }
 .mark::first-line { transform: rotate(-45deg); }
 .navigator, .inspector { padding: 22px 18px; }
@@ -225,27 +226,22 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .context-menu button:hover:not(:disabled) { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
 .context-menu button:disabled { opacity: .38; }
 
-.graph-view { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 34px 38px; }
-.graph-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-.graph-title h2 { margin: 3px 0; font: 500 34px/1.1 Georgia, serif; }
-.graph-title p { margin: 5px 0; max-width: 620px; color: var(--text-muted); line-height: 1.6; }
-.graph-canvas { min-width: 720px; overflow: hidden; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: radial-gradient(circle at center, color-mix(in srgb, var(--interactive-accent) 10%, transparent), transparent 38%), color-mix(in srgb, var(--background-primary) 90%, black); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-normal) 4%, transparent), 0 22px 60px #0000002f; }
-.graph-canvas svg { display: block; width: 100%; height: min(68vh, 620px); min-height: 440px; }
-.graph-edge line { stroke: #465066; stroke-width: 1.2; opacity: .55; }
-.graph-edge.contains line { stroke-dasharray: 4 8; }
-.graph-edge.references line { marker-end: url("#graph-arrow"); stroke: var(--interactive-accent); opacity: .68; }
-.graph-edge text { fill: var(--text-faint); font-family: var(--font-interface); font-size: 10px; paint-order: stroke; stroke: var(--background-primary); stroke-width: 3px; }
-.graph-edge marker path, #graph-arrow path { fill: var(--interactive-accent); }
-.graph-node { cursor: pointer; outline: none; }
-.graph-node circle { stroke: var(--background-modifier-border); stroke-width: 2; filter: drop-shadow(0 8px 14px #00000066); transform-box: fill-box; transform-origin: center; transition: transform .16s ease, stroke .16s ease, stroke-width .16s ease; }
-.graph-node text { fill: var(--text-normal); font-family: var(--font-interface); font-size: 12px; font-weight: 650; text-anchor: middle; paint-order: stroke; pointer-events: none; stroke: var(--background-primary); stroke-width: 4px; }
-.graph-node.file circle { fill: #2f3b52; }
-.graph-node.struct circle { fill: #5d3f8f; }
-.graph-node.enum circle { fill: #75502b; }
-.graph-node:hover circle, .graph-node:focus circle { stroke: var(--text-accent-hover); transform: scale(1.08); }
-.graph-node.selected circle { stroke: var(--interactive-accent); stroke-width: 3; }
-.graph-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: var(--text-muted); font-size: 12px; }
+.graph-view { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 0; background: #070b10; }
+.graph-title { z-index: 2; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 54px; padding: 10px 22px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 80%, transparent); background: color-mix(in srgb, var(--background-secondary) 86%, #06090d); }
+.graph-title h2 { margin: 0; font: 700 18px/1.1 var(--font-interface); letter-spacing: .03em; }
+.graph-title p { margin: 4px 0 0; max-width: 720px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.graph-title .eyebrow { margin: 0 0 3px; }
+.graph-canvas { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; border: 0; border-radius: 0; background: #070b10; cursor: grab; }
+.graph-canvas:active { cursor: grabbing; }
+.graph-canvas canvas { display: block; width: 100%; height: 100%; outline: none; }
+.graph-floating-tools { position: absolute; top: 18px; right: 18px; display: grid; gap: 7px; padding: 10px; border: 1px solid rgba(114, 129, 151, .18); border-radius: var(--radius-m); background: rgba(16, 20, 28, .72); color: var(--text-muted); font-size: 11px; backdrop-filter: blur(10px); }
+.graph-floating-tools span { display: block; }
+.graph-hover-card { position: absolute; left: 18px; bottom: 18px; max-width: 360px; overflow: hidden; padding: 8px 10px; border: 1px solid rgba(229, 173, 85, .35); border-radius: var(--radius-m); background: rgba(12, 16, 23, .82); color: #eef4ff; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; backdrop-filter: blur(10px); }
+.graph-legend { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 22px 0; color: var(--text-muted); font-size: 12px; background: #070b10; }
 .graph-legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 999px; vertical-align: middle; }
-.file-dot { background: #2f3b52; }
-.struct-dot { background: #5d3f8f; }
-.enum-dot { background: #75502b; }
+.graph-node-shortcuts { flex: 0 0 auto; display: flex; gap: 6px; max-width: 100%; overflow-x: auto; padding: 10px 22px 16px; background: #070b10; scrollbar-gutter: stable; }
+.graph-node-shortcuts button { flex: 0 0 auto; max-width: 180px; overflow: hidden; padding: 5px 8px; border: 1px solid rgba(114, 129, 151, .2); border-radius: 999px; background: rgba(16, 20, 28, .74); color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.graph-node-shortcuts button:hover { border-color: rgba(229, 173, 85, .5); color: #eef4ff; background: rgba(47, 34, 24, .8); }
+.file-dot { background: #b9c6d7; }
+.struct-dot { background: #cfdae8; }
+.enum-dot { background: #e0b879; }

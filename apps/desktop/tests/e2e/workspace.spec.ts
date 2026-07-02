@@ -35,11 +35,12 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.getByRole("button", { name: "关系图谱" }).click();
     const graph = page.getByRole("region", { name: "协议关系图谱" });
     await expect(graph).toBeVisible();
-    await expect(graph.getByRole("button", { name: "struct RadarTrack" })).toBeVisible();
-    await expect(graph.getByRole("button", { name: "struct Vec3" })).toBeVisible();
-    await graph.getByRole("button", { name: "struct Vec3" }).click();
+    await expect(page.getByLabel("协议关系图谱画布")).toBeVisible();
+    await expect(graph.getByRole("button", { name: "图谱节点 struct RadarTrack" })).toBeVisible();
+    await expect(graph.getByRole("button", { name: "图谱节点 struct Vec3" })).toBeVisible();
+    await graph.getByRole("button", { name: "图谱节点 struct Vec3" }).click();
     await expect(page.getByRole("button", { name: "demo::common::Vec3", exact: true })).toBeVisible();
-    await graph.getByRole("button", { name: "struct RadarTrack" }).dblclick();
+    await graph.getByRole("button", { name: "图谱节点 struct RadarTrack" }).dblclick();
     await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();
     await page.getByRole("button", { name: "关闭 RadarTrack" }).click();
     const treeBox = await page.locator(".tree").evaluate((element) => element.getBoundingClientRect());
