@@ -124,6 +124,13 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.keyboard.press("Escape");
     await expect(trackIdRow.getByRole("textbox", { name: "字段类型", exact: true })).toHaveCount(0);
 
+    const timestampRow = page.getByRole("row", { name: /timestamp/ });
+    await timestampRow.dblclick();
+    await expect(timestampRow.getByLabel("字段名称")).toHaveValue("timestamp");
+    await expect(timestampRow.getByRole("textbox", { name: "字段类型", exact: true })).toHaveValue("demo::common::Timestamp");
+    await page.keyboard.press("Escape");
+    await expect(timestampRow.getByRole("textbox", { name: "字段类型", exact: true })).toHaveCount(0);
+
     await trackIdRow.click({ button: "right" });
     await page.getByRole("menuitem", { name: "编辑字段" }).click();
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
@@ -137,7 +144,8 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
 
     await page.getByRole("button", { name: "折叠类型 demo::radar::RadarTrack", exact: true }).click();
     await expect(page.getByRole("button", { name: "RadarTrack trackId" })).toHaveCount(0);
-    await page.getByRole("button", { name: "展开类型 demo::radar::RadarTrack", exact: true }).click();
+    await page.getByRole("row", { name: /history/ }).click({ modifiers: ["Control"] });
+    await expect(page.getByRole("button", { name: "RadarTrack history" })).toBeVisible();
     await page.getByRole("button", { name: "RadarTrack velocity" }).click();
     await page.keyboard.press("F2");
     actionPanel = page.getByRole("region", { name: "结构化编辑" });
@@ -164,7 +172,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "打开 Header radar-workspace/headers/common/geometry.hpp" })).toBeVisible();
 
     await page.getByRole("button", { name: "demo::radar::RadarTrack", exact: true }).click();
-    await editor.getByRole("button", { name: "demo::common::Timestamp" }).click();
+    await editor.getByText("demo::common::Timestamp").click({ modifiers: ["Control"] });
     await expect(page.getByRole("heading", { name: "Timestamp" })).toBeVisible();
     await page.getByRole("button", { name: "demo::radar::RadarTrack", exact: true }).click();
 
@@ -258,6 +266,28 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByText("注释已同步到 Header 和 .protocol/meta/metadata.json")).toBeVisible();
     await expect(tabStrip.getByRole("button", { name: /^(预览|切换到) CoordinateFrame$/ })).toBeVisible();
     await expect.poll(async () => readFile(geometryHeader, "utf8")).toContain(noteText);
+
+    await page.getByRole("button", { name: "demo::common::Vec3", exact: true }).click();
+    const zRow = editor.getByRole("row", { name: /^z\s+double/ });
+    await zRow.click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "删除字段" })).toBeVisible();
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("确认删除字段");
+      await dialog.accept();
+    });
+    await page.getByRole("menuitem", { name: "删除字段" }).click();
+    await expect(page.getByText("已删除字段：z")).toBeVisible();
+    await expect(editor.getByRole("row", { name: /^z\s+double/ })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Vec3 y" }).click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "删除字段" })).toBeVisible();
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("确认删除字段");
+      await dialog.accept();
+    });
+    await page.getByRole("menuitem", { name: "删除字段" }).click();
+    await expect(page.getByText("已删除字段：y")).toBeVisible();
+    await expect(editor.getByRole("row", { name: /^y\s+double/ })).toHaveCount(0);
   } finally {
     await application.close();
     await writeFile(geometryHeader, originalGeometryHeader, "utf8");

@@ -318,6 +318,32 @@ function App(): React.JSX.Element {
     action();
   }
 
+  function scrollTreeNodeIntoView(nodeId: string): void {
+    window.setTimeout(() => {
+      const escaped = CSS.escape(nodeId);
+      document.querySelector(`[data-tree-node-id="${escaped}"]`)?.scrollIntoView({ block: "center", inline: "nearest" });
+    }, 0);
+  }
+
+  function locateMemberInTree(type: WorkspaceTypeView, memberId: string): void {
+    const path = findTreePath(rawTree, memberId);
+    setExpandedNodeIds((current) => new Set([...current, ...path, `type:${type.id}`]));
+    setSelectedTypeId(type.id);
+    setSelectedFilePath(null);
+    setSelectedMemberId(memberId);
+    scrollTreeNodeIntoView(memberId);
+  }
+
+  async function deleteFieldWithConfirm(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
+    if (!window.confirm(`确认删除字段？\n${type.name}.${field.name}`)) return;
+    await deleteFieldInline(type, field);
+  }
+
+  async function deleteEnumValueWithConfirm(type: WorkspaceTypeView, value: WorkspaceEnumValueView): Promise<void> {
+    if (!window.confirm(`确认删除枚举项？\n${type.name}.${value.name}`)) return;
+    await deleteEnumValueInline(type, value);
+  }
+
   function editFile(file: WorkspaceFileView): void {
     openFileTab(file);
     setHeaderEditRelativePath(file.relativePath);
@@ -1342,6 +1368,7 @@ function App(): React.JSX.Element {
           onSaveStructuralEdit={saveStructuralEdit}
           onJumpToType={(target) => openTypeTab(target)}
           onSelectMember={setSelectedMemberId}
+          onLocateMemberInTree={locateMemberInTree}
           onNoteChange={updateNoteDraft}
           onOpenContextMenu={openContextMenu}
         />}
@@ -1380,6 +1407,8 @@ function App(): React.JSX.Element {
           onEditType={(type) => runContextAction(() => editType(type))}
           onEditField={(type, field) => runContextAction(() => openEditFieldAction(type, field))}
           onEditEnumValue={(type, value) => runContextAction(() => openEditEnumValueAction(type, value))}
+          onDeleteField={(type, field) => runContextAction(() => { void deleteFieldWithConfirm(type, field); })}
+          onDeleteEnumValue={(type, value) => runContextAction(() => { void deleteEnumValueWithConfirm(type, value); })}
         />}
       </section>
       <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
@@ -1464,6 +1493,17 @@ function sortTree(nodes: ProtocolTreeNode[]): ProtocolTreeNode[] {
       return { ...node, children: sortTree(node.children) };
     })
     .sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
+}
+
+function findTreePath(nodes: ProtocolTreeNode[], targetId: string): string[] {
+  for (const node of nodes) {
+    if (node.id === targetId) return [node.id];
+    if ("children" in node) {
+      const childPath = findTreePath(node.children, targetId);
+      if (childPath.length > 0) return [node.id, ...childPath];
+    }
+  }
+  return [];
 }
 
 function filterProtocolTree(nodes: ProtocolTreeNode[], query: string): { nodes: ProtocolTreeNode[]; expandedNodeIds: Set<string>; matchCount: number } {
@@ -1713,7 +1753,7 @@ function TreeNodes({
       if (node.kind === "folder") {
         const expanded = expandedNodeIds.has(node.id);
         return <div className="tree-branch" key={node.id}>
-          <div className="tree-row folder">
+          <div className="tree-row folder" data-tree-node-id={node.id}>
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"}目录 ${node.name}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
             <button className="node-label folder-label" aria-label={`目录 ${node.name}`} onClick={() => onToggleNode(node.id)}><span className="icon folder-icon">■</span><span>{node.name}</span></button>
           </div>
@@ -1723,7 +1763,7 @@ function TreeNodes({
       if (node.kind === "file") {
         const expanded = expandedNodeIds.has(node.id);
         return <div className="tree-branch" key={node.id}>
-          <div className={node.file.path === selectedFilePath ? "tree-row active" : "tree-row"} onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file: node.file })}>
+          <div className={node.file.path === selectedFilePath ? "tree-row active" : "tree-row"} data-tree-node-id={node.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file: node.file })}>
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"} Header ${node.file.relativePath}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
             <button className="node-label" aria-label={`打开 Header ${node.file.relativePath}`} onClick={() => onSelectFile(node.file)} onDoubleClick={() => onPinFile(node.file)}><span className="icon file-icon">H</span><span>{node.name}</span></button>
           </div>
@@ -1733,14 +1773,14 @@ function TreeNodes({
       if (node.kind === "type") {
         const expanded = expandedNodeIds.has(node.id);
         return <div className="tree-branch" key={node.id}>
-          <div className={node.type.id === selectedTypeId && !selectedMemberId ? "tree-row active" : "tree-row"} onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type: node.type })}>
+          <div className={node.type.id === selectedTypeId && !selectedMemberId ? "tree-row active" : "tree-row"} data-tree-node-id={node.id} onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type: node.type })}>
             <button className="disclosure" aria-label={`${expanded ? "折叠" : "展开"}类型 ${node.type.qualifiedName}`} aria-expanded={expanded} onClick={() => onToggleNode(node.id)}>{expanded ? "▾" : "▸"}</button>
             <button className="node-label" aria-label={node.type.qualifiedName} onClick={() => onSelectType(node.type)} onDoubleClick={() => onPinType(node.type)}><span className="icon type-icon">{node.type.kind === "struct" ? "S" : "E"}</span><span>{node.name}</span></button>
           </div>
           {expanded && <TreeNodes nodes={node.children} selectedFilePath={selectedFilePath} selectedTypeId={selectedTypeId} selectedMemberId={selectedMemberId} expandedNodeIds={expandedNodeIds} onToggleNode={onToggleNode} onSelectFile={onSelectFile} onPinFile={onPinFile} onSelectType={onSelectType} onPinType={onPinType} onSelectMember={onSelectMember} onPinMember={onPinMember} onOpenContextMenu={onOpenContextMenu} level={level + 1} />}
         </div>;
       }
-      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)} onDoubleClick={() => onPinMember(node.parent, node.id)} onContextMenu={(event) => node.field ? onOpenContextMenu(event, { kind: "field", type: node.parent, field: node.field }) : node.enumValue ? onOpenContextMenu(event, { kind: "enum-value", type: node.parent, value: node.enumValue }) : undefined}>
+      return <button className={node.id === selectedMemberId ? "tree-row member active" : "tree-row member"} data-tree-node-id={node.id} key={node.id} aria-label={`${node.parent.name} ${node.name}`} onClick={() => onSelectMember(node.parent, node.id)} onDoubleClick={() => onPinMember(node.parent, node.id)} onContextMenu={(event) => node.field ? onOpenContextMenu(event, { kind: "field", type: node.parent, field: node.field }) : node.enumValue ? onOpenContextMenu(event, { kind: "enum-value", type: node.parent, value: node.enumValue }) : undefined}>
         <span className="disclosure-spacer" /><span className="icon field-icon">{node.field ? "f" : "#"}</span><span>{node.name}</span>
         {node.field && <small>{node.field.type}</small>}
         {node.enumValue && <small>{node.enumValue.value ?? "auto"}</small>}
@@ -2105,6 +2145,7 @@ function ProtocolEditor({
   onSaveStructuralEdit,
   onJumpToType,
   onSelectMember,
+  onLocateMemberInTree,
   onNoteChange,
   onOpenContextMenu
 }: {
@@ -2123,6 +2164,7 @@ function ProtocolEditor({
   onSaveStructuralEdit(targetId: string): Promise<boolean>;
   onJumpToType(type: WorkspaceTypeView): void;
   onSelectMember(memberId: string): void;
+  onLocateMemberInTree(type: WorkspaceTypeView, memberId: string): void;
   onNoteChange(targetId: string, value: string, savedValue: string): void;
   onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
 }): React.JSX.Element {
@@ -2226,17 +2268,26 @@ function ProtocolEditor({
     const fieldType = edit?.kind === "field" ? edit.fieldType : field.type;
     const referencedType = resolveWorkspaceTypeReference(workspaceTypes, fieldType, type.id);
     if (!referencedType) return <code>{fieldType}</code>;
-    return <button
+    return <span
       className="type-link"
-      type="button"
-      title={`跳转到 ${referencedType.qualifiedName}`}
+      title={`Ctrl+点击跳转到 ${referencedType.qualifiedName}`}
       onClick={(event) => {
-        event.stopPropagation();
-        onJumpToType(referencedType);
+        if (event.ctrlKey || event.metaKey) {
+          event.stopPropagation();
+          onJumpToType(referencedType);
+        }
       }}
     >
       {fieldType}
-    </button>;
+    </span>;
+  }
+
+  function selectMemberFromTable(event: React.MouseEvent, memberId: string): void {
+    if (event.ctrlKey || event.metaKey) {
+      onLocateMemberInTree(type, memberId);
+      return;
+    }
+    onSelectMember(memberId);
   }
 
   const typeDirty = dirtyNotes[type.id] !== undefined
@@ -2286,7 +2337,7 @@ function ProtocolEditor({
         return <tr
           className={`${field.id === selectedMemberId ? "selected-row" : ""}${dirty ? " dirty-row" : ""}`.trim() || undefined}
           key={field.id}
-          onClick={() => onSelectMember(field.id)}
+          onClick={(event) => selectMemberFromTable(event, field.id)}
           onDoubleClick={() => beginEditField(field)}
           onContextMenu={(event) => onOpenContextMenu(event, { kind: "field", type, field })}
         >
@@ -2321,7 +2372,7 @@ function ProtocolEditor({
         return <tr
           className={`${value.id === selectedMemberId ? "selected-row" : ""}${dirty ? " dirty-row" : ""}`.trim() || undefined}
           key={value.id}
-          onClick={() => onSelectMember(value.id)}
+          onClick={(event) => selectMemberFromTable(event, value.id)}
           onDoubleClick={() => beginEditEnumValue(value)}
           onContextMenu={(event) => onOpenContextMenu(event, { kind: "enum-value", type, value })}
         >
@@ -2529,7 +2580,9 @@ function ContextMenu({
   onEditFile,
   onEditType,
   onEditField,
-  onEditEnumValue
+  onEditEnumValue,
+  onDeleteField,
+  onDeleteEnumValue
 }: {
   menu: ContextMenuState;
   onClose(): void;
@@ -2542,6 +2595,8 @@ function ContextMenu({
   onEditType(type: WorkspaceTypeView): void;
   onEditField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
   onEditEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
+  onDeleteField(type: WorkspaceTypeView, field: WorkspaceFieldView): void;
+  onDeleteEnumValue(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void;
 }): React.JSX.Element {
   const items: Array<{ label: string; action(): void; disabled?: boolean }> = [];
   if (menu.target.kind === "workspace") {
@@ -2567,14 +2622,16 @@ function ContextMenu({
     const { type, field } = menu.target;
     items.push(
       { label: "编辑字段", action: () => onEditField(type, field) },
-      { label: "添加字段", action: () => onAddField(type) }
+      { label: "添加字段", action: () => onAddField(type) },
+      { label: "删除字段", action: () => onDeleteField(type, field) }
     );
   }
   if (menu.target.kind === "enum-value") {
     const { type, value } = menu.target;
     items.push(
       { label: "编辑枚举项", action: () => onEditEnumValue(type, value) },
-      { label: "添加枚举项", action: () => onAddEnumValue(type) }
+      { label: "添加枚举项", action: () => onAddEnumValue(type) },
+      { label: "删除枚举项", action: () => onDeleteEnumValue(type, value) }
     );
   }
 
