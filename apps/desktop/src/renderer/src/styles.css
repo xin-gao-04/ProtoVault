@@ -128,6 +128,7 @@ tr.selected-row { background: #2b251c; box-shadow: inset 3px 0 0 #d4a64f; }
 tr.dirty-row { background: color-mix(in srgb, var(--interactive-accent) 8%, transparent); }
 .inline-action { padding: 4px 8px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--interactive-normal); color: var(--text-muted); font-size: 11px; }
 .inline-action:hover { border-color: var(--interactive-accent); color: var(--text-accent-hover); background: var(--interactive-hover); }
+.inline-action.active { border-color: var(--interactive-accent); color: var(--text-accent-hover); background: var(--interactive-hover); }
 .inline-action.danger { border-color: color-mix(in srgb, var(--color-red) 55%, var(--background-modifier-border)); color: var(--color-red); }
 .inline-action.ghost { opacity: .72; }
 .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -194,6 +195,8 @@ code { color: #e4bc70; font-family: "Cascadia Code", monospace; }
 .problem { color: #df8a7c; font-size: 11px; line-height: 1.5; }
 .break { word-break: break-all; }
 .inspector { min-height: 0; overflow: auto; border-right: 0; border-left: 1px solid #292c34; }
+.inspector-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.inspector-header h2 { margin: 0; }
 dl { display: grid; grid-template-columns: 74px 1fr; gap: 14px 8px; margin-top: 28px; font-size: 12px; }
 dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .inspector-stack { display: grid; gap: 18px; }
@@ -221,3 +224,28 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .context-menu button { width: 100%; padding: 7px 10px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--text-normal); text-align: left; font-size: 12px; }
 .context-menu button:hover:not(:disabled) { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
 .context-menu button:disabled { opacity: .38; }
+
+.graph-view { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 34px 38px; }
+.graph-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.graph-title h2 { margin: 3px 0; font: 500 34px/1.1 Georgia, serif; }
+.graph-title p { margin: 5px 0; max-width: 620px; color: var(--text-muted); line-height: 1.6; }
+.graph-canvas { min-width: 720px; overflow: hidden; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: radial-gradient(circle at center, color-mix(in srgb, var(--interactive-accent) 10%, transparent), transparent 38%), color-mix(in srgb, var(--background-primary) 90%, black); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-normal) 4%, transparent), 0 22px 60px #0000002f; }
+.graph-canvas svg { display: block; width: 100%; height: min(68vh, 620px); min-height: 440px; }
+.graph-edge line { stroke: #465066; stroke-width: 1.2; opacity: .55; }
+.graph-edge.contains line { stroke-dasharray: 4 8; }
+.graph-edge.references line { marker-end: url("#graph-arrow"); stroke: var(--interactive-accent); opacity: .68; }
+.graph-edge text { fill: var(--text-faint); font-family: var(--font-interface); font-size: 10px; paint-order: stroke; stroke: var(--background-primary); stroke-width: 3px; }
+.graph-edge marker path, #graph-arrow path { fill: var(--interactive-accent); }
+.graph-node { cursor: pointer; outline: none; }
+.graph-node circle { stroke: var(--background-modifier-border); stroke-width: 2; filter: drop-shadow(0 8px 14px #00000066); transform-box: fill-box; transform-origin: center; transition: transform .16s ease, stroke .16s ease, stroke-width .16s ease; }
+.graph-node text { fill: var(--text-normal); font-family: var(--font-interface); font-size: 12px; font-weight: 650; text-anchor: middle; paint-order: stroke; pointer-events: none; stroke: var(--background-primary); stroke-width: 4px; }
+.graph-node.file circle { fill: #2f3b52; }
+.graph-node.struct circle { fill: #5d3f8f; }
+.graph-node.enum circle { fill: #75502b; }
+.graph-node:hover circle, .graph-node:focus circle { stroke: var(--text-accent-hover); transform: scale(1.08); }
+.graph-node.selected circle { stroke: var(--interactive-accent); stroke-width: 3; }
+.graph-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: var(--text-muted); font-size: 12px; }
+.graph-legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 999px; vertical-align: middle; }
+.file-dot { background: #2f3b52; }
+.struct-dot { background: #5d3f8f; }
+.enum-dot { background: #75502b; }

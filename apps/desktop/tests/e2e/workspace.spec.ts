@@ -32,6 +32,16 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.getByRole("button", { name: "Diff" }).click();
     await expect(page.getByRole("region", { name: "协议报告" })).toContainText("语义 Diff");
     await page.getByRole("button", { name: "关闭报告" }).click();
+    await page.getByRole("button", { name: "关系图谱" }).click();
+    const graph = page.getByRole("region", { name: "协议关系图谱" });
+    await expect(graph).toBeVisible();
+    await expect(graph.getByRole("button", { name: "struct RadarTrack" })).toBeVisible();
+    await expect(graph.getByRole("button", { name: "struct Vec3" })).toBeVisible();
+    await graph.getByRole("button", { name: "struct Vec3" }).click();
+    await expect(page.getByRole("button", { name: "demo::common::Vec3", exact: true })).toBeVisible();
+    await graph.getByRole("button", { name: "struct RadarTrack" }).dblclick();
+    await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();
+    await page.getByRole("button", { name: "关闭 RadarTrack" }).click();
     const treeBox = await page.locator(".tree").evaluate((element) => element.getBoundingClientRect());
     const dockBox = await page.locator(".workspace-dock").evaluate((element) => element.getBoundingClientRect());
     expect(treeBox.bottom).toBeLessThanOrEqual(dockBox.top + 1);

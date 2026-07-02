@@ -27,6 +27,7 @@ type FieldTypeOption = { group: "workspace" | "base"; value: string; label: stri
 type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; savedFieldName: string; savedFieldType: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
+type CenterViewMode = "workspace" | "graph";
 type WorkspaceReportState =
   | { kind: "lint"; report: WorkspaceLintReport }
   | { kind: "document"; report: GeneratedDocumentReport }
@@ -42,6 +43,10 @@ type ContextMenuState = {
     | { kind: "field"; type: WorkspaceTypeView; field: WorkspaceFieldView }
     | { kind: "enum-value"; type: WorkspaceTypeView; value: WorkspaceEnumValueView };
 };
+type ProtocolGraphNode =
+  | { id: string; kind: "file"; label: string; file: WorkspaceFileView; x: number; y: number }
+  | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number };
+type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; kind: "contains" | "references" };
 
 const SUPPORTED_BASE_FIELD_TYPES = [
   "std::int8_t",
@@ -95,6 +100,7 @@ function App(): React.JSX.Element {
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const [contextMenu, setContextMenu] = React.useState<ContextMenuState | null>(null);
   const [workspaceReport, setWorkspaceReport] = React.useState<WorkspaceReportState | null>(null);
+  const [centerViewMode, setCenterViewMode] = React.useState<CenterViewMode>("workspace");
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const selectedField = selectedType?.fields.find((field) => field.id === selectedMemberId);
@@ -332,6 +338,37 @@ function App(): React.JSX.Element {
     setSelectedFilePath(null);
     setSelectedMemberId(memberId);
     scrollTreeNodeIntoView(memberId);
+  }
+
+  function locateFileInTree(file: WorkspaceFileView): void {
+    const nodeId = `file:${file.path}`;
+    const path = findTreePath(rawTree, nodeId);
+    setExpandedNodeIds((current) => new Set([...current, ...path]));
+    setSelectedFilePath(file.path);
+    setSelectedTypeId(null);
+    setSelectedMemberId(null);
+    scrollTreeNodeIntoView(nodeId);
+  }
+
+  function locateTypeInTree(type: WorkspaceTypeView): void {
+    const nodeId = `type:${type.id}`;
+    const path = findTreePath(rawTree, nodeId);
+    setExpandedNodeIds((current) => new Set([...current, ...path]));
+    setSelectedTypeId(type.id);
+    setSelectedFilePath(null);
+    setSelectedMemberId(null);
+    scrollTreeNodeIntoView(nodeId);
+  }
+
+  function selectGraphNode(node: ProtocolGraphNode): void {
+    if (node.kind === "file") locateFileInTree(node.file);
+    else locateTypeInTree(node.type);
+  }
+
+  function openGraphNode(node: ProtocolGraphNode): void {
+    setCenterViewMode("workspace");
+    if (node.kind === "file") openFileTab(node.file);
+    else openTypeTab(node.type);
   }
 
   async function deleteFieldWithConfirm(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
@@ -1305,6 +1342,14 @@ function App(): React.JSX.Element {
         </article>}
         {workspace && <TabStrip tabs={tabs} previewTab={previewTab} activeTabId={activeTabId} dirtyTabIds={dirtyTabIds} onActivate={activateTab} onClose={closeTab} />}
         {workspace && workspaceReport && <WorkspaceReportPanel report={workspaceReport} workspaceRoot={workspace.rootPath} onClose={() => setWorkspaceReport(null)} />}
+        {workspace && centerViewMode === "graph" && <ProtocolGraphView
+          workspace={workspace}
+          selectedTypeId={selectedTypeId}
+          selectedFilePath={selectedFilePath}
+          onSelectNode={selectGraphNode}
+          onOpenNode={openGraphNode}
+          onClose={() => setCenterViewMode("workspace")}
+        />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -1352,7 +1397,7 @@ function App(): React.JSX.Element {
           onUpdateEnumValue={() => void updateEnumValueFromForm()}
           onDeleteEnumValue={() => void deleteEnumValueFromForm()}
         />}
-        {workspace && selectedType && <ProtocolEditor
+        {workspace && centerViewMode === "workspace" && selectedType && <ProtocolEditor
           type={selectedType}
           workspaceTypes={workspace.types}
           selectedMemberId={selectedMemberId}
@@ -1372,8 +1417,8 @@ function App(): React.JSX.Element {
           onNoteChange={updateNoteDraft}
           onOpenContextMenu={openContextMenu}
         />}
-        {workspace && selectedFile && <SourceViewer file={selectedFile} loading={loading} onSaveContent={saveHeaderContent} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
-        {workspace && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
+        {workspace && centerViewMode === "workspace" && selectedFile && <SourceViewer file={selectedFile} loading={loading} onSaveContent={saveHeaderContent} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
+        {workspace && centerViewMode === "workspace" && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
         {workspace && contextMenu && <ContextMenu
           menu={contextMenu}
           onClose={() => setContextMenu(null)}
@@ -1413,7 +1458,10 @@ function App(): React.JSX.Element {
       </section>
       <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
       <aside className="inspector">
-        <h2>属性</h2>
+        <div className="inspector-header">
+          <h2>属性</h2>
+          <button className={centerViewMode === "graph" ? "inline-action active" : "inline-action"} disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("graph"); }}>关系图谱</button>
+        </div>
         {selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
@@ -2470,6 +2518,124 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
           </div>}
     </>}
   </section>;
+}
+
+function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSelectNode, onOpenNode, onClose }: {
+  workspace: WorkspaceView;
+  selectedTypeId: string | null;
+  selectedFilePath: string | null;
+  onSelectNode(node: ProtocolGraphNode): void;
+  onOpenNode(node: ProtocolGraphNode): void;
+  onClose(): void;
+}): React.JSX.Element {
+  const graph = React.useMemo(() => buildProtocolGraph(workspace), [workspace]);
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+
+  return <section className="graph-view" aria-label="协议关系图谱">
+    <div className="graph-title">
+      <div>
+        <p className="eyebrow">GRAPH VIEW</p>
+        <h2>协议关系图谱</h2>
+        <p>单击节点定位左侧树图，双击节点打开对应 tab。当前为只读查看与跳转模式。</p>
+      </div>
+      <button className="inline-action" onClick={onClose}>返回工作台</button>
+    </div>
+    <div className="graph-canvas">
+      <svg viewBox="0 0 1040 620" role="img" aria-label="协议关系图谱画布">
+        <defs>
+          <marker id="graph-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" />
+          </marker>
+        </defs>
+        <g className="graph-edges">
+          {graph.edges.map((edge) => {
+            const from = nodeById.get(edge.from);
+            const to = nodeById.get(edge.to);
+            if (!from || !to) return null;
+            const midX = (from.x + to.x) / 2;
+            const midY = (from.y + to.y) / 2;
+            return <g key={edge.id} className={`graph-edge ${edge.kind}`}>
+              <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} />
+              {edge.kind === "references" && <text x={midX} y={midY - 4}>{edge.label}</text>}
+            </g>;
+          })}
+        </g>
+        <g className="graph-nodes">
+          {graph.nodes.map((node) => {
+            const selected = node.kind === "file" ? node.file.path === selectedFilePath : node.type.id === selectedTypeId;
+            return <g
+              className={`graph-node ${node.kind}${selected ? " selected" : ""}`}
+              data-graph-node-id={node.id}
+              key={node.id}
+              transform={`translate(${node.x} ${node.y})`}
+              tabIndex={0}
+              role="button"
+              aria-label={`${node.kind === "file" ? "Header" : node.kind} ${node.label}`}
+              onClick={() => onSelectNode(node)}
+              onDoubleClick={() => onOpenNode(node)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onOpenNode(node);
+              }}
+            >
+              <circle r={node.kind === "file" ? 18 : 22} />
+              <text y={node.kind === "file" ? 36 : 42}>{node.label}</text>
+            </g>;
+          })}
+        </g>
+      </svg>
+    </div>
+    <div className="graph-legend">
+      <span><i className="file-dot" /> Header</span>
+      <span><i className="struct-dot" /> Struct</span>
+      <span><i className="enum-dot" /> Enum</span>
+      <span>箭头表示字段类型引用</span>
+    </div>
+  </section>;
+}
+
+function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
+  const width = 1040;
+  const height = 620;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const files = workspace.files;
+  const types = workspace.types;
+  const fileRadius = 260;
+  const typeRadius = Math.max(95, Math.min(205, 92 + types.length * 4));
+  const nodes: ProtocolGraphNode[] = [
+    ...files.map((file, index) => {
+      const point = radialPoint(index, Math.max(files.length, 1), fileRadius, centerX, centerY, -Math.PI / 2);
+      return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point };
+    }),
+    ...types.map((type, index) => {
+      const point = radialPoint(index, Math.max(types.length, 1), typeRadius, centerX, centerY, -Math.PI / 2 + Math.PI / Math.max(types.length, 2));
+      return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point };
+    })
+  ];
+  const edges: ProtocolGraphEdge[] = [];
+  for (const type of types) {
+    const sourceTypeId = `type:${type.id}`;
+    const ownerFile = files.find((file) => file.path === type.file);
+    if (ownerFile) {
+      edges.push({ id: `contains:${ownerFile.path}:${type.id}`, from: `file:${ownerFile.path}`, to: sourceTypeId, label: "contains", kind: "contains" });
+    }
+    if (type.kind !== "struct") continue;
+    for (const field of type.fields) {
+      const normalized = normalizeFieldTypeValue(field.type);
+      const target = normalized ? resolveWorkspaceTypeReference(types, normalized.coreType, type.id) : null;
+      if (!target) continue;
+      edges.push({ id: `ref:${field.id}:${target.id}`, from: sourceTypeId, to: `type:${target.id}`, label: field.name, kind: "references" });
+    }
+  }
+  return { nodes, edges };
+}
+
+function radialPoint(index: number, total: number, radius: number, centerX: number, centerY: number, offset = 0): { x: number; y: number } {
+  const angle = offset + (Math.PI * 2 * index) / total;
+  return {
+    x: Math.round(centerX + Math.cos(angle) * radius),
+    y: Math.round(centerY + Math.sin(angle) * radius)
+  };
 }
 
 function relativeDisplayPath(root: string, file: string): string {
