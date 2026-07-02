@@ -35,10 +35,18 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.getByRole("button", { name: "关系图谱" }).click();
     const graph = page.getByRole("region", { name: "协议关系图谱" });
     await expect(graph).toBeVisible();
+    await expect(page.getByRole("heading", { name: "图谱上下文" })).toBeVisible();
     await expect(page.getByLabel("协议关系图谱画布")).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "图谱搜索" })).toBeVisible();
     await expect(graph.getByRole("button", { name: "图谱节点 struct RadarTrack" })).toBeVisible();
     await expect(graph.getByRole("button", { name: "图谱节点 struct Vec3" })).toBeVisible();
+    await page.getByRole("textbox", { name: "图谱搜索" }).fill("Timestamp");
+    await expect(graph.getByRole("button", { name: "图谱节点 struct Timestamp" })).toBeVisible();
+    await expect(graph.getByRole("button", { name: "图谱节点 struct RadarTrack" })).toBeVisible();
+    await page.getByRole("textbox", { name: "图谱搜索" }).fill("");
     await graph.getByRole("button", { name: "图谱节点 struct Vec3" }).click();
+    await expect(page.getByText("影响力")).toBeVisible();
+    await expect(page.getByText("布局摘要")).toBeVisible();
     await expect(page.getByRole("button", { name: "demo::common::Vec3", exact: true })).toBeVisible();
     await graph.getByRole("button", { name: "图谱节点 struct RadarTrack" }).dblclick();
     await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();

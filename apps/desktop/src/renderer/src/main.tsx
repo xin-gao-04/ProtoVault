@@ -44,11 +44,22 @@ type ContextMenuState = {
     | { kind: "enum-value"; type: WorkspaceTypeView; value: WorkspaceEnumValueView };
 };
 type ProtocolGraphNode =
-  | { id: string; kind: "file"; label: string; file: WorkspaceFileView; x: number; y: number; z: number }
-  | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number; z: number };
+  | { id: string; kind: "file"; label: string; file: WorkspaceFileView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
+  | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number; z: number; metrics: GraphNodeMetrics };
 type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; kind: "contains" | "references" };
 type GraphSimNode = ProtocolGraphNode & { vx: number; vy: number; vz: number; radius: number; screenX: number; screenY: number; screenRadius: number };
 type GraphSimEdge = ProtocolGraphEdge & { source: GraphSimNode; target: GraphSimNode };
+type GraphRiskLevel = "normal" | "warning" | "critical";
+type GraphNodeMetrics = {
+  inboundReferences: number;
+  outboundReferences: number;
+  impactScore: number;
+  diagnosticCount: number;
+  metadataMissingCount: number;
+  layoutRisk: GraphRiskLevel;
+  layoutRiskLabel: string;
+  paddingRatio: number;
+};
 
 const SUPPORTED_BASE_FIELD_TYPES = [
   "std::int8_t",
@@ -124,6 +135,12 @@ function App(): React.JSX.Element {
   );
   const selectedLayout = selectedType?.layout ?? null;
   const rawTree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
+  const graphContext = React.useMemo(() => workspace ? buildProtocolGraph(workspace) : null, [workspace]);
+  const selectedGraphNode = React.useMemo(() => {
+    if (!graphContext) return null;
+    const selectedId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
+    return selectedId ? graphContext.nodes.find((node) => node.id === selectedId) ?? null : null;
+  }, [graphContext, selectedFilePath, selectedTypeId]);
   const treeSearchResult = React.useMemo(() => filterProtocolTree(rawTree, treeSearchQuery), [rawTree, treeSearchQuery]);
   const tree = treeSearchResult.nodes;
   const effectiveExpandedNodeIds = React.useMemo(() => {
@@ -1462,9 +1479,16 @@ function App(): React.JSX.Element {
       <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
       <aside className="inspector">
         <div className="inspector-header">
-          <h2>属性</h2>
+          <h2>{centerViewMode === "graph" ? "图谱上下文" : "属性"}</h2>
         </div>
-        {selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} />
+        {centerViewMode === "graph" && workspace && graphContext ? <GraphInspector
+          workspace={workspace}
+          graph={graphContext}
+          selectedNode={selectedGraphNode}
+          onOpenNode={openGraphNode}
+          onSelectNode={selectGraphNode}
+        />
+          : selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
         {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
@@ -2531,6 +2555,14 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
   onClose(): void;
 }): React.JSX.Element {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const renderOptionsRef = React.useRef({
+    selectedTypeId: null as string | null,
+    selectedFilePath: null as string | null,
+    focusNodeId: null as string | null,
+    relationDepth: new Map<string, number>(),
+    searchQuery: "",
+    searchMatches: new Set<string>()
+  });
   const simulationRef = React.useRef<{
     nodes: GraphSimNode[];
     edges: GraphSimEdge[];
@@ -2545,7 +2577,24 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
     zoom: number;
   } | null>(null);
   const [hoveredLabel, setHoveredLabel] = React.useState<string | null>(null);
+  const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
   const graph = React.useMemo(() => buildProtocolGraph(workspace), [workspace]);
+  const focusedNodeId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
+  const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
+  const normalizedGraphSearch = graphSearchQuery.trim().toLowerCase();
+  const graphSearchMatches = React.useMemo(() => normalizedGraphSearch
+    ? new Set(graph.nodes.filter((node) => graphNodeSearchText(node).includes(normalizedGraphSearch)).map((node) => node.id))
+    : new Set<string>(), [graph.nodes, normalizedGraphSearch]);
+  React.useEffect(() => {
+    renderOptionsRef.current = {
+      selectedTypeId,
+      selectedFilePath,
+      focusNodeId: focusedNodeId,
+      relationDepth,
+      searchQuery: normalizedGraphSearch,
+      searchMatches: graphSearchMatches
+    };
+  }, [focusedNodeId, graphSearchMatches, normalizedGraphSearch, relationDepth, selectedFilePath, selectedTypeId]);
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -2555,7 +2604,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       vx: 0,
       vy: 0,
       vz: 0,
-      radius: node.kind === "file" ? 5.5 : node.kind === "struct" ? 8 : 7,
+      radius: graphNodeRadius(node),
       screenX: 0,
       screenY: 0,
       screenRadius: 0
@@ -2577,12 +2626,17 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       lastTime = now;
       resizeCanvas(canvas);
       tickGraph(sim.nodes, sim.edges, delta / 16.67);
+      const renderOptions = renderOptionsRef.current;
       drawGraph(canvas, sim.nodes, sim.edges, {
         panX: sim.panX,
         panY: sim.panY,
         zoom: sim.zoom,
-        selectedTypeId,
-        selectedFilePath,
+        selectedTypeId: renderOptions.selectedTypeId,
+        selectedFilePath: renderOptions.selectedFilePath,
+        focusNodeId: renderOptions.focusNodeId,
+        relationDepth: renderOptions.relationDepth,
+        searchQuery: renderOptions.searchQuery,
+        searchMatches: renderOptions.searchMatches,
         hoveredId: sim.hovered?.id ?? null,
         time: now
       });
@@ -2591,7 +2645,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
 
     animationId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(animationId);
-  }, [graph, selectedFilePath, selectedTypeId]);
+  }, [graph]);
 
   function hitTest(clientX: number, clientY: number): GraphSimNode | null {
     const canvas = canvasRef.current;
@@ -2694,7 +2748,15 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
         <h2>协议关系图谱</h2>
         <p>Canvas 力导向视图：拖拽节点、滚轮缩放、拖动画布平移；单击定位左侧树图，双击打开对应 tab。</p>
       </div>
-      <button className="inline-action" onClick={onClose}>返回工作台</button>
+      <div className="graph-title-actions">
+        <input
+          aria-label="图谱搜索"
+          value={graphSearchQuery}
+          placeholder="搜索类型 / Header / 字段引用…"
+          onChange={(event) => setGraphSearchQuery(event.target.value)}
+        />
+        <button className="inline-action" onClick={onClose}>返回工作台</button>
+      </div>
     </div>
     <div className="graph-canvas">
       <canvas
@@ -2718,15 +2780,20 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       <span><i className="file-dot" /> Header</span>
       <span><i className="struct-dot" /> Struct</span>
       <span><i className="enum-dot" /> Enum</span>
+      <span><i className="risk-dot warning" /> 布局/质量关注</span>
+      <span><i className="risk-dot critical" /> 高风险</span>
       <span>箭头表示字段类型引用</span>
     </div>
     <div className="graph-node-shortcuts" aria-label="图谱节点索引">
-      {graph.nodes.map((node) => <button
+      {graph.nodes
+        .filter((node) => !normalizedGraphSearch || graphSearchMatches.has(node.id))
+        .sort((a, b) => b.metrics.impactScore - a.metrics.impactScore)
+        .map((node) => <button
         key={node.id}
         aria-label={`图谱节点 ${node.kind} ${node.label}`}
         onClick={() => onSelectNode(node)}
         onDoubleClick={() => onOpenNode(node)}
-      >{node.kind === "file" ? "H" : node.kind === "struct" ? "S" : "E"} · {node.label}</button>)}
+      >{node.kind === "file" ? "H" : node.kind === "struct" ? "S" : "E"} · {node.label} · {node.metrics.impactScore}</button>)}
     </div>
   </section>;
 }
@@ -2736,14 +2803,24 @@ function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNod
   const types = workspace.types;
   const fileRadius = 330;
   const typeRadius = Math.max(115, Math.min(240, 105 + types.length * 4));
+  const emptyMetrics: GraphNodeMetrics = {
+    inboundReferences: 0,
+    outboundReferences: 0,
+    impactScore: 1,
+    diagnosticCount: 0,
+    metadataMissingCount: 0,
+    layoutRisk: "normal",
+    layoutRiskLabel: "无明显风险",
+    paddingRatio: 0
+  };
   const nodes: ProtocolGraphNode[] = [
     ...files.map((file, index) => {
       const point = radialPoint(index, Math.max(files.length, 1), fileRadius, 0, 0, -Math.PI / 2);
-      return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point, z: Math.sin(index * 1.9) * 90 };
+      return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point, z: Math.sin(index * 1.9) * 90, metrics: { ...emptyMetrics } };
     }),
     ...types.map((type, index) => {
       const point = radialPoint(index, Math.max(types.length, 1), typeRadius, 0, 0, -Math.PI / 2 + Math.PI / Math.max(types.length, 2));
-      return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point, z: Math.cos(index * 1.35) * 70 };
+      return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point, z: Math.cos(index * 1.35) * 70, metrics: { ...emptyMetrics } };
     })
   ];
   const edges: ProtocolGraphEdge[] = [];
@@ -2761,7 +2838,110 @@ function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNod
       edges.push({ id: `ref:${field.id}:${target.id}`, from: sourceTypeId, to: `type:${target.id}`, label: field.name, kind: "references" });
     }
   }
+  const inbound = new Map<string, number>();
+  const outbound = new Map<string, number>();
+  for (const edge of edges) {
+    if (edge.kind !== "references") continue;
+    inbound.set(edge.to, (inbound.get(edge.to) ?? 0) + 1);
+    outbound.set(edge.from, (outbound.get(edge.from) ?? 0) + 1);
+  }
+  for (const node of nodes) {
+    if (node.kind === "file") {
+      const containedTypes = types.filter((type) => type.file === node.file.path);
+      const diagnosticCount = diagnosticsForFile(workspace, node.file.path).length;
+      const childImpact = containedTypes.reduce((sum, type) => sum + (inbound.get(`type:${type.id}`) ?? 0) * 3 + (outbound.get(`type:${type.id}`) ?? 0), 0);
+      node.metrics = {
+        inboundReferences: 0,
+        outboundReferences: containedTypes.length,
+        impactScore: Math.max(1, childImpact + containedTypes.length + diagnosticCount * 2),
+        diagnosticCount,
+        metadataMissingCount: containedTypes.reduce((sum, type) => sum + countMissingMetadata(type), 0),
+        layoutRisk: diagnosticCount > 0 ? "warning" : "normal",
+        layoutRiskLabel: diagnosticCount > 0 ? `${diagnosticCount} 个扫描诊断` : "Header 分组",
+        paddingRatio: 0
+      };
+      continue;
+    }
+    const diagnosticCount = diagnosticsForFile(workspace, node.type.file).length;
+    const layoutRisk = riskForType(node.type, diagnosticCount);
+    const inboundReferences = inbound.get(node.id) ?? 0;
+    const outboundReferences = outbound.get(node.id) ?? 0;
+    const riskWeight = layoutRisk.level === "critical" ? 5 : layoutRisk.level === "warning" ? 2 : 0;
+    const metadataMissingCount = countMissingMetadata(node.type);
+    node.metrics = {
+      inboundReferences,
+      outboundReferences,
+      impactScore: Math.max(1, inboundReferences * 3 + outboundReferences + diagnosticCount * 2 + riskWeight + Math.min(metadataMissingCount, 4)),
+      diagnosticCount,
+      metadataMissingCount,
+      layoutRisk: layoutRisk.level,
+      layoutRiskLabel: layoutRisk.label,
+      paddingRatio: layoutRisk.paddingRatio
+    };
+  }
   return { nodes, edges };
+}
+
+function diagnosticsForFile(workspace: WorkspaceView, filePath: string): WorkspaceView["diagnostics"] {
+  const normalized = filePath.replaceAll("\\", "/");
+  return workspace.diagnostics.filter((diagnostic) => diagnostic.file?.replaceAll("\\", "/") === normalized);
+}
+
+function countMissingMetadata(type: WorkspaceTypeView): number {
+  const own = type.note?.trim() ? 0 : 1;
+  if (type.kind === "struct") return own + type.fields.filter((field) => !field.note?.trim()).length;
+  return own + type.values.filter((value) => !value.note?.trim()).length;
+}
+
+function riskForType(type: WorkspaceTypeView, diagnosticCount: number): { level: GraphRiskLevel; label: string; paddingRatio: number } {
+  if (diagnosticCount > 0) return { level: "critical", label: `${diagnosticCount} 个扫描诊断`, paddingRatio: 0 };
+  const layout = type.layout;
+  if (!layout) return { level: "normal", label: "无布局数据", paddingRatio: 0 };
+  if (layout.partial) return { level: "warning", label: "布局部分解析", paddingRatio: layout.size ? layout.paddingBytes / layout.size : 0 };
+  const paddingRatio = layout.size ? layout.paddingBytes / layout.size : 0;
+  if (paddingRatio >= 0.35) return { level: "critical", label: `Padding ${Math.round(paddingRatio * 100)}%`, paddingRatio };
+  if (paddingRatio >= 0.2 || layout.paddingBytes >= 16) return { level: "warning", label: `Padding ${formatBytes(layout.paddingBytes)}`, paddingRatio };
+  return { level: "normal", label: "布局稳定", paddingRatio };
+}
+
+function graphNodeRadius(node: ProtocolGraphNode): number {
+  const base = node.kind === "file" ? 4.8 : node.kind === "struct" ? 6.8 : 6;
+  return clamp(base + Math.sqrt(node.metrics.impactScore) * 1.7, base, node.kind === "file" ? 13 : 19);
+}
+
+function graphNodeSearchText(node: ProtocolGraphNode): string {
+  if (node.kind === "file") return `${node.label} ${node.file.relativePath}`.toLowerCase();
+  const memberText = node.type.kind === "struct"
+    ? node.type.fields.map((field) => `${field.name} ${field.type}`).join(" ")
+    : node.type.values.map((value) => value.name).join(" ");
+  return `${node.label} ${node.type.name} ${node.type.qualifiedName} ${node.type.file} ${memberText}`.toLowerCase();
+}
+
+function buildGraphRelationDepth(edges: ProtocolGraphEdge[], focusNodeId: string | null): Map<string, number> {
+  const depth = new Map<string, number>();
+  if (!focusNodeId) return depth;
+  const neighbors = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    if (edge.kind !== "references") continue;
+    if (!neighbors.has(edge.from)) neighbors.set(edge.from, new Set());
+    if (!neighbors.has(edge.to)) neighbors.set(edge.to, new Set());
+    neighbors.get(edge.from)?.add(edge.to);
+    neighbors.get(edge.to)?.add(edge.from);
+  }
+  depth.set(focusNodeId, 0);
+  const queue = [focusNodeId];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    const currentDepth = depth.get(current) ?? 0;
+    if (currentDepth >= 2) continue;
+    for (const neighbor of neighbors.get(current) ?? []) {
+      if (depth.has(neighbor)) continue;
+      depth.set(neighbor, currentDepth + 1);
+      queue.push(neighbor);
+    }
+  }
+  return depth;
 }
 
 function radialPoint(index: number, total: number, radius: number, centerX: number, centerY: number, offset = 0): { x: number; y: number } {
@@ -2844,6 +3024,10 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
   zoom: number;
   selectedTypeId: string | null;
   selectedFilePath: string | null;
+  focusNodeId: string | null;
+  relationDepth: Map<string, number>;
+  searchQuery: string;
+  searchMatches: Set<string>;
   hoveredId: string | null;
   time: number;
 }): void {
@@ -2874,12 +3058,15 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
   for (const edge of edges) {
     const source = edge.source;
     const target = edge.target;
+    const sourceRelevance = graphNodeRelevance(source, options);
+    const targetRelevance = graphNodeRelevance(target, options);
+    const edgeRelevance = Math.min(sourceRelevance, targetRelevance);
     const alpha = edge.kind === "references" ? 0.58 : 0.25;
     context.beginPath();
     context.moveTo(source.screenX, source.screenY);
     context.lineTo(target.screenX, target.screenY);
-    context.strokeStyle = edge.kind === "references" ? `rgba(172, 78, 74, ${alpha})` : `rgba(104, 122, 151, ${alpha})`;
-    context.lineWidth = edge.kind === "references" ? 1.25 : 0.8;
+    context.strokeStyle = edge.kind === "references" ? `rgba(172, 78, 74, ${alpha * edgeRelevance})` : `rgba(104, 122, 151, ${alpha * edgeRelevance})`;
+    context.lineWidth = (edge.kind === "references" ? 1.25 : 0.8) * (edgeRelevance > 0.9 ? 1.35 : 1);
     context.stroke();
   }
 
@@ -2887,10 +3074,19 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     const node = item.node;
     const selected = node.kind === "file" ? node.file.path === options.selectedFilePath : node.type.id === options.selectedTypeId;
     const hovered = node.id === options.hoveredId;
+    const relevance = graphNodeRelevance(node, options);
+    context.globalAlpha = relevance;
     context.beginPath();
     context.arc(item.x, item.y, item.radius + (selected ? 4 : hovered ? 2 : 0), 0, Math.PI * 2);
     context.fillStyle = selected ? "rgba(229, 173, 85, 0.2)" : hovered ? "rgba(168, 196, 236, 0.16)" : "rgba(0, 0, 0, 0.18)";
     context.fill();
+    if (node.metrics.layoutRisk !== "normal") {
+      context.beginPath();
+      context.arc(item.x, item.y, item.radius + 5, 0, Math.PI * 2);
+      context.strokeStyle = node.metrics.layoutRisk === "critical" ? "rgba(230, 82, 75, 0.92)" : "rgba(229, 173, 85, 0.86)";
+      context.lineWidth = selected ? 2.4 : 1.6;
+      context.stroke();
+    }
     context.beginPath();
     context.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
     context.fillStyle = node.kind === "file" ? "#b9c6d7" : node.kind === "struct" ? "#cfdae8" : "#e0b879";
@@ -2902,6 +3098,18 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
       context.lineWidth = selected ? 2.4 : 1.4;
       context.strokeStyle = selected ? "#e5ad55" : "#a8c4ec";
       context.stroke();
+    }
+    if (node.metrics.diagnosticCount > 0 || node.metrics.metadataMissingCount > 0) {
+      const badgeText = node.metrics.diagnosticCount > 0 ? String(node.metrics.diagnosticCount) : "!";
+      context.beginPath();
+      context.arc(item.x + item.radius * 0.72, item.y - item.radius * 0.72, Math.max(4, item.radius * 0.42), 0, Math.PI * 2);
+      context.fillStyle = node.metrics.diagnosticCount > 0 ? "#e6524b" : "#e5ad55";
+      context.fill();
+      context.fillStyle = "#071016";
+      context.font = `${Math.max(7, item.radius * 0.55)}px Segoe UI, sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(badgeText, item.x + item.radius * 0.72, item.y - item.radius * 0.72);
     }
     const labelVisible = hovered || selected || item.scale > 0.88 || node.kind !== "file";
     if (labelVisible) {
@@ -2915,7 +3123,23 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
       context.strokeText(label, item.x, item.y + item.radius + 6);
       context.fillText(label, item.x, item.y + item.radius + 6);
     }
+    context.globalAlpha = 1;
   }
+}
+
+function graphNodeRelevance(node: GraphSimNode, options: {
+  focusNodeId: string | null;
+  relationDepth: Map<string, number>;
+  searchQuery: string;
+  searchMatches: Set<string>;
+}): number {
+  if (options.searchQuery && !options.searchMatches.has(node.id)) return 0.16;
+  if (!options.focusNodeId) return 1;
+  const depth = options.relationDepth.get(node.id);
+  if (node.id === options.focusNodeId) return 1;
+  if (depth === 1) return 0.95;
+  if (depth === 2) return 0.45;
+  return 0.12;
 }
 
 function drawGraphBackdrop(context: CanvasRenderingContext2D, width: number, height: number, time: number): void {
@@ -3122,6 +3346,109 @@ function ContextMenu({
 
   return <div className="context-menu" role="menu" aria-label="上下文菜单" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.preventDefault()}>
     {items.map((item) => <button key={item.label} role="menuitem" disabled={item.disabled} onClick={() => { item.action(); onClose(); }}>{item.label}</button>)}
+  </div>;
+}
+
+function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNode }: {
+  workspace: WorkspaceView;
+  graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] };
+  selectedNode: ProtocolGraphNode | null;
+  onOpenNode(node: ProtocolGraphNode): void;
+  onSelectNode(node: ProtocolGraphNode): void;
+}): React.JSX.Element {
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const referenceEdges = graph.edges.filter((edge) => edge.kind === "references");
+  const riskNodes = graph.nodes.filter((node) => node.metrics.layoutRisk !== "normal");
+  const diagnosticNodes = graph.nodes.filter((node) => node.metrics.diagnosticCount > 0);
+  const topImpactNodes = [...graph.nodes]
+    .filter((node) => node.kind !== "file")
+    .sort((a, b) => b.metrics.impactScore - a.metrics.impactScore)
+    .slice(0, 5);
+
+  if (!selectedNode) {
+    return <div className="inspector-stack">
+      <dl>
+        <dt>Types</dt><dd>{workspace.types.length}</dd>
+        <dt>引用边</dt><dd>{referenceEdges.length}</dd>
+        <dt>风险节点</dt><dd>{riskNodes.length}</dd>
+        <dt>诊断节点</dt><dd>{diagnosticNodes.length}</dd>
+      </dl>
+      <section className="property-card">
+        <h3>影响力 Top 5</h3>
+        <div className="graph-inspector-list">
+          {topImpactNodes.map((node) => <button key={node.id} onClick={() => onSelectNode(node)} onDoubleClick={() => onOpenNode(node)}>
+            <span>{node.label}</span>
+            <small>impact {node.metrics.impactScore} · in {node.metrics.inboundReferences} / out {node.metrics.outboundReferences}</small>
+          </button>)}
+        </div>
+      </section>
+      <section className="property-card">
+        <h3>使用建议</h3>
+        <p className="readonly-note">单击节点查看一跳/二跳影响范围；双击节点打开 tab。优先检查大节点和带黄/红外环的节点。</p>
+      </section>
+    </div>;
+  }
+
+  const outgoing = referenceEdges.filter((edge) => edge.from === selectedNode.id).map((edge) => nodeById.get(edge.to)).filter(Boolean) as ProtocolGraphNode[];
+  const incoming = referenceEdges.filter((edge) => edge.to === selectedNode.id).map((edge) => nodeById.get(edge.from)).filter(Boolean) as ProtocolGraphNode[];
+  const selectedTypeForLayout = selectedNode.kind === "file" ? null : selectedNode.type;
+  const layout = selectedTypeForLayout?.layout;
+  const declaredTypes = selectedNode.kind === "file"
+    ? graph.nodes.filter((node) => node.kind !== "file" && node.type.file === selectedNode.file.path)
+    : [];
+
+  return <div className="inspector-stack">
+    <dl>
+      <dt>名称</dt><dd>{selectedNode.kind === "file" ? selectedNode.file.relativePath : selectedNode.type.qualifiedName}</dd>
+      <dt>类型</dt><dd>{selectedNode.kind === "file" ? "Header" : selectedNode.kind}</dd>
+      <dt>影响力</dt><dd>{selectedNode.metrics.impactScore}</dd>
+      <dt>被引用</dt><dd>{selectedNode.metrics.inboundReferences}</dd>
+      <dt>引用</dt><dd>{selectedNode.metrics.outboundReferences}</dd>
+      <dt>风险</dt><dd>{selectedNode.metrics.layoutRiskLabel}</dd>
+      <dt>元数据</dt><dd>{selectedNode.metrics.metadataMissingCount === 0 ? "完整" : `缺 ${selectedNode.metrics.metadataMissingCount} 项`}</dd>
+    </dl>
+    {layout && <section className="property-card">
+      <h3>布局摘要</h3>
+      <dl>
+        <dt>Size</dt><dd>{layout.size === undefined ? "未完全解析" : formatBytes(layout.size)}</dd>
+        <dt>Align</dt><dd>{layout.alignment === undefined ? "—" : `${layout.alignment} B`}</dd>
+        <dt>Padding</dt><dd>{formatBytes(layout.paddingBytes)}{layout.size ? ` · ${Math.round(layout.paddingBytes / layout.size * 100)}%` : ""}</dd>
+        <dt>状态</dt><dd>{layout.partial ? "部分解析" : "已完成"}</dd>
+      </dl>
+    </section>}
+    <section className="property-card">
+      <h3>{selectedNode.kind === "file" ? "声明类型" : "影响范围"}</h3>
+      {selectedNode.kind === "file"
+        ? <GraphNodeList nodes={declaredTypes} emptyText="该 Header 暂无协议类型" onSelectNode={onSelectNode} onOpenNode={onOpenNode} />
+        : <>
+            <p className="graph-inspector-caption">依赖我的</p>
+            <GraphNodeList nodes={incoming} emptyText="暂无反向引用" onSelectNode={onSelectNode} onOpenNode={onOpenNode} />
+            <p className="graph-inspector-caption">我依赖的</p>
+            <GraphNodeList nodes={outgoing} emptyText="暂无外部类型引用" onSelectNode={onSelectNode} onOpenNode={onOpenNode} />
+          </>}
+    </section>
+    <section className="property-card">
+      <h3>快捷操作</h3>
+      <div className="graph-inspector-actions">
+        <button className="inline-action" onClick={() => onOpenNode(selectedNode)}>打开 tab</button>
+        <button className="inline-action" onClick={() => onSelectNode(selectedNode)}>定位树图</button>
+      </div>
+    </section>
+  </div>;
+}
+
+function GraphNodeList({ nodes, emptyText, onSelectNode, onOpenNode }: {
+  nodes: ProtocolGraphNode[];
+  emptyText: string;
+  onSelectNode(node: ProtocolGraphNode): void;
+  onOpenNode(node: ProtocolGraphNode): void;
+}): React.JSX.Element {
+  if (nodes.length === 0) return <p className="readonly-note">{emptyText}</p>;
+  return <div className="graph-inspector-list">
+    {nodes.slice(0, 12).map((node) => <button key={node.id} onClick={() => onSelectNode(node)} onDoubleClick={() => onOpenNode(node)}>
+      <span>{node.label}</span>
+      <small>{node.kind} · impact {node.metrics.impactScore}</small>
+    </button>)}
   </div>;
 }
 
