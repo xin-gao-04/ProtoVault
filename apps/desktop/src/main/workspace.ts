@@ -330,6 +330,11 @@ interface WorkspaceMetadata {
   dataFlows: Record<string, { producers: string[]; consumers: string[] }>;
 }
 
+interface SourceNoteScan {
+  notes: Record<string, string>;
+  targetIds: Set<string>;
+}
+
 function metadataPath(root: string): string {
   return join(root, ".protocol", "meta", "metadata.json");
 }
@@ -347,8 +352,13 @@ async function writeMetadata(root: string, metadata: WorkspaceMetadata): Promise
   await atomicWriteFile(metadataPath(root), `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
-function mergeMetadataWithSourceNotes(metadata: WorkspaceMetadata, sourceNotes: Record<string, string>): WorkspaceMetadata {
-  return { schemaVersion: 1, notes: { ...metadata.notes, ...sourceNotes }, dataFlows: metadata.dataFlows };
+function mergeMetadataWithSourceNotes(metadata: WorkspaceMetadata, sourceScan: SourceNoteScan): WorkspaceMetadata {
+  const notes = { ...metadata.notes };
+  for (const targetId of sourceScan.targetIds) {
+    if (sourceScan.notes[targetId]) notes[targetId] = sourceScan.notes[targetId];
+    else delete notes[targetId];
+  }
+  return { schemaVersion: 1, notes, dataFlows: metadata.dataFlows };
 }
 
 function metadataEquals(left: WorkspaceMetadata, right: WorkspaceMetadata): boolean {
@@ -387,8 +397,9 @@ function normalizeFlowTags(value: unknown): string[] {
   return [...new Set(value.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
-async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<Record<string, string>> {
+async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<SourceNoteScan> {
   const notes: Record<string, string> = {};
+  const targetIds = new Set<string>();
   const contentByFile = new Map<string, string[]>();
 
   async function linesFor(file: string): Promise<string[]> {
@@ -409,19 +420,22 @@ async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<Record<st
   }
 
   for (const type of types) {
+    targetIds.add(type.id);
     const typeNote = await noteBefore(type.file, type.location?.line);
     if (typeNote) notes[type.id] = typeNote;
     for (const field of type.fields) {
+      targetIds.add(field.id);
       const fieldNote = await noteBefore(type.file, field.location?.line);
       if (fieldNote) notes[field.id] = fieldNote;
     }
     for (const value of type.values) {
+      targetIds.add(value.id);
       const valueNote = await noteBefore(type.file, value.location?.line);
       if (valueNote) notes[value.id] = valueNote;
     }
   }
 
-  return notes;
+  return { notes, targetIds };
 }
 
 function emitProgress(options: ScanWorkspaceOptions | undefined, progress: WorkspaceScanProgress): void {

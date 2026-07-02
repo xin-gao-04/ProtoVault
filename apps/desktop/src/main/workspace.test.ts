@@ -683,6 +683,13 @@ enum class PacketState : std::uint8_t {
       const headerContent = await readFile(resolve(root, "headers", "annotated.hpp"), "utf8");
       expect(headerContent).toContain("/// @brief 更新后的结构说明");
       expect(headerContent).not.toContain("/** @brief 源码结构注释 */");
+
+      await writeFile(resolve(root, "headers", "annotated.hpp"), headerContent.replace("/// @brief 更新后的结构说明\n", ""), "utf8");
+      const rescannedAfterDelete = await scanWorkspace(root);
+      const packetAfterDelete = rescannedAfterDelete.types.find((type) => type.qualifiedName === "demo::Packet")!;
+      expect(packetAfterDelete.note).toBeUndefined();
+      const metadataAfterDelete = JSON.parse(await readFile(resolve(root, ".protocol", "meta", "metadata.json"), "utf8")) as { notes: Record<string, string> };
+      expect(metadataAfterDelete.notes[packet.id]).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

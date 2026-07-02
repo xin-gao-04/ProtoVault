@@ -112,6 +112,7 @@ function App(): React.JSX.Element {
   const [dirtyNotes, setDirtyNotes] = React.useState<Record<string, string>>({});
   const [dirtyStructuralEdits, setDirtyStructuralEdits] = React.useState<Record<string, DirtyStructuralEdit>>({});
   const [dirtyDataFlows, setDirtyDataFlows] = React.useState<Record<string, DirtyDataFlowEdit>>({});
+  const [sourceDrafts, setSourceDrafts] = React.useState<Record<string, string>>({});
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
   const [previewTab, setPreviewTab] = React.useState<WorkspaceTab | null>(null);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
@@ -130,8 +131,8 @@ function App(): React.JSX.Element {
         ? { id: selectedType.id, label: `${selectedType.kind === "struct" ? "Struct" : "Enum"} ${selectedType.qualifiedName}`, note: selectedType.note ?? "" }
         : null;
   const dirtyTabIds = React.useMemo(
-    () => workspace ? buildDirtyTabIds(workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows) : new Set<string>(),
-    [workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows]
+    () => workspace ? buildDirtyTabIds(workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows, sourceDrafts) : new Set<string>(),
+    [workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows, sourceDrafts]
   );
   const selectedFieldTypeOptions = React.useMemo(
     () => workspace && selectedType ? buildFieldTypeOptions(workspace, selectedType) : buildBaseFieldTypeOptions(),
@@ -169,6 +170,13 @@ function App(): React.JSX.Element {
       : null;
 
     setWorkspace(result);
+    setSourceDrafts((current) => {
+      const filesByPath = new Map(result.files.map((file) => [file.path, file]));
+      return Object.fromEntries(Object.entries(current).filter(([path, draft]) => {
+        const file = filesByPath.get(path);
+        return file && draft !== file.content;
+      }));
+    });
     setSelectedTypeId(nextFile ? null : nextType?.id ?? null);
     setSelectedFilePath(nextFile?.path ?? null);
     setSelectedMemberId(nextMemberId);
@@ -466,7 +474,7 @@ function App(): React.JSX.Element {
       }
       if (activeAction === "add-enum-value") {
         setEnumValueName("Unknown");
-        setEnumValueNumber("");
+        setEnumValueNumber(nextEnumValueNumber(type));
         setEditingEnumValueId(null);
         return;
       }
@@ -586,9 +594,23 @@ function App(): React.JSX.Element {
         expectedHash: file.contentHash
       });
       applyWorkspaceResult(result, { selectFileRelativePath: file.relativePath });
+      setSourceDrafts((current) => {
+        const next = { ...current };
+        delete next[file.path];
+        return next;
+      });
       setUiNotice(result.diagnostics.length > 0
         ? "Header 已保存，但仍存在解析问题；可继续在源码区修复"
         : "Header 源码已保存并重新扫描");
+    });
+  }
+
+  function updateSourceDraft(file: WorkspaceFileView, content: string): void {
+    setSourceDrafts((current) => {
+      const next = { ...current };
+      if (content === file.content) delete next[file.path];
+      else next[file.path] = content;
+      return next;
     });
   }
 
@@ -1087,6 +1109,9 @@ function App(): React.JSX.Element {
   }
 
   async function saveActiveChanges(): Promise<boolean> {
+    if (selectedFile && sourceDrafts[selectedFile.path] !== undefined) {
+      return saveHeaderContent(selectedFile, sourceDrafts[selectedFile.path]);
+    }
     if (selectedMemberId && dirtyStructuralEdits[selectedMemberId]) {
       return saveStructuralEdit(selectedMemberId);
     }
@@ -1256,6 +1281,15 @@ function App(): React.JSX.Element {
 
   function discardDirtyForTab(tabId: string): void {
     if (!workspace) return;
+    if (tabId.startsWith("file:")) {
+      const filePath = tabId.replace(/^file:/, "");
+      setSourceDrafts((current) => {
+        const next = { ...current };
+        delete next[filePath];
+        return next;
+      });
+      return;
+    }
     if (tabId.startsWith("type:")) {
       const typeId = tabId.replace(/^type:/, "");
       const type = workspace.types.find((item) => item.id === typeId);
@@ -1502,8 +1536,10 @@ function App(): React.JSX.Element {
         />}
         {workspace && centerViewMode === "workspace" && selectedFile && <SourceViewer
           file={selectedFile}
+          content={sourceDrafts[selectedFile.path] ?? selectedFile.content}
           diagnostics={workspace.diagnostics.filter((diagnostic) => diagnostic.file && normalizePath(diagnostic.file) === normalizePath(selectedFile.path))}
           loading={loading}
+          onContentChange={(content) => updateSourceDraft(selectedFile, content)}
           onSaveContent={saveHeaderContent}
           onEditHeader={() => openStructuredAction("edit-header")}
           onOpenContextMenu={openContextMenu}
@@ -1788,10 +1824,16 @@ function buildDirtyTabIds(
   workspace: WorkspaceView,
   dirtyNotes: Record<string, string>,
   dirtyStructuralEdits: Record<string, DirtyStructuralEdit>,
-  dirtyDataFlows: Record<string, DirtyDataFlowEdit>
+  dirtyDataFlows: Record<string, DirtyDataFlowEdit>,
+  sourceDrafts: Record<string, string>
 ): Set<string> {
   const dirtyIds = new Set([...Object.keys(dirtyNotes), ...Object.keys(dirtyStructuralEdits), ...Object.keys(dirtyDataFlows)]);
   const tabIds = new Set<string>();
+  for (const file of workspace.files) {
+    if (sourceDrafts[file.path] !== undefined && sourceDrafts[file.path] !== file.content) {
+      tabIds.add(tabForFile(file).id);
+    }
+  }
   for (const type of workspace.types) {
     if (
       dirtyIds.has(type.id)
@@ -3358,28 +3400,25 @@ function normalizePath(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
-function SourceViewer({ file, diagnostics, loading, onSaveContent, onEditHeader, onOpenContextMenu }: {
+function SourceViewer({ file, content, diagnostics, loading, onContentChange, onSaveContent, onEditHeader, onOpenContextMenu }: {
   file: WorkspaceView["files"][number];
+  content: string;
   diagnostics: WorkspaceView["diagnostics"];
   loading: boolean;
+  onContentChange(content: string): void;
   onSaveContent(file: WorkspaceFileView, content: string): Promise<boolean>;
   onEditHeader(): void;
   onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
 }): React.JSX.Element {
-  const [draftContent, setDraftContent] = React.useState(file.content);
-  React.useEffect(() => {
-    setDraftContent(file.content);
-  }, [file.path, file.content]);
-  const dirty = draftContent !== file.content;
+  const dirty = content !== file.content;
 
   async function save(): Promise<void> {
-    const ok = await onSaveContent(file, draftContent);
-    if (ok) setDraftContent(draftContent);
+    await onSaveContent(file, content);
   }
 
   return <div className="source-viewer" onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file })}>
     <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖 · {diagnostics.length} 个源码问题</p></div><div className="editor-actions"><span className={dirty ? "status dirty" : diagnostics.length > 0 ? "status error" : "status"}>{dirty ? "源码未保存" : diagnostics.length > 0 ? "源码需修复" : "源码已同步"}</span><button className="inline-action" disabled={loading || !dirty} onClick={() => void save()}>保存源码</button><button className="inline-action" onClick={onEditHeader}>Header 操作</button></div></div>
-    <CppSourceEditor value={draftContent} diagnostics={diagnostics} onChange={setDraftContent} />
+    <CppSourceEditor value={content} diagnostics={diagnostics} onChange={onContentChange} />
     {diagnostics.length > 0 && <div className="source-diagnostics" role="region" aria-label="源码诊断">
       {diagnostics.map((diagnostic, index) => <button key={index} type="button">
         <strong>{diagnostic.severity.toUpperCase()}</strong>
