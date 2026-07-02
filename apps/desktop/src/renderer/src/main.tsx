@@ -3389,12 +3389,14 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
   const gradient = context.createRadialGradient(width * 0.5, height * 0.38, 20, width * 0.5, height * 0.5, Math.max(width, height) * 0.7);
-  gradient.addColorStop(0, "rgba(80, 111, 164, 0.16)");
-  gradient.addColorStop(0.55, "rgba(9, 13, 19, 0.92)");
-  gradient.addColorStop(1, "rgba(4, 7, 10, 1)");
+  gradient.addColorStop(0, "rgba(24, 34, 49, 0.78)");
+  gradient.addColorStop(0.55, "rgba(8, 12, 18, 0.98)");
+  gradient.addColorStop(1, "rgba(5, 8, 12, 1)");
   context.fillStyle = gradient;
   context.fillRect(0, 0, width, height);
   drawGraphBackdrop(context, width, height, options.time);
+  context.lineCap = "round";
+  context.lineJoin = "round";
 
   const projected = nodes
     .map((node) => ({ node, ...projectNode(node, width, height, options.panX, options.panY, options.zoom, options.time) }))
@@ -3413,15 +3415,15 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     const edgeRelevance = Math.min(sourceRelevance, targetRelevance);
     const edgeFocus = graphEdgeFocus(edge, options.focusNodeId);
     const alpha = edgeFocus === "none"
-      ? edge.kind === "flow" ? 0.72 : edge.kind === "references" ? 0.58 : 0.25
-      : 0.9;
+      ? edge.kind === "flow" ? 0.66 : edge.kind === "references" ? 0.5 : 0.18
+      : 0.96;
     const stroke = graphEdgeStroke(edge, edgeFocus, alpha * edgeRelevance);
     const widthScale = edgeFocus === "none" ? 1 : 1.85;
     context.beginPath();
     context.moveTo(source.screenX, source.screenY);
     context.lineTo(target.screenX, target.screenY);
     context.strokeStyle = stroke;
-    context.lineWidth = (edge.kind === "flow" ? 1.7 : edge.kind === "references" ? 1.25 : 0.8) * (edgeRelevance > 0.9 ? 1.35 : 1) * widthScale;
+    context.lineWidth = (edge.kind === "flow" ? 1.55 : edge.kind === "references" ? 1.1 : 0.7) * (edgeRelevance > 0.9 ? 1.25 : 1) * widthScale;
     context.stroke();
     if (edge.kind !== "contains" || edgeFocus !== "none") {
       drawGraphArrow(context, source.screenX, source.screenY, target.screenX, target.screenY, target.screenRadius + 3, stroke, 7 + context.lineWidth);
@@ -3436,9 +3438,10 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     const hovered = node.id === options.hoveredId;
     const relevance = graphNodeRelevance(node, options);
     context.globalAlpha = relevance;
+    const focused = options.focusNodeId === node.id || selected || hovered;
     context.beginPath();
     context.arc(item.x, item.y, item.radius + (selected ? 4 : hovered ? 2 : 0), 0, Math.PI * 2);
-    context.fillStyle = selected ? "rgba(229, 173, 85, 0.2)" : hovered ? "rgba(168, 196, 236, 0.16)" : "rgba(0, 0, 0, 0.18)";
+    context.fillStyle = selected ? "rgba(229, 173, 85, 0.16)" : hovered ? "rgba(168, 196, 236, 0.12)" : "rgba(0, 0, 0, 0.22)";
     context.fill();
     if (node.metrics.layoutRisk !== "normal") {
       context.beginPath();
@@ -3449,14 +3452,19 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     }
     context.beginPath();
     context.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
-    context.fillStyle = node.kind === "file" ? "#b9c6d7" : node.kind === "struct" ? "#cfdae8" : node.kind === "enum" ? "#e0b879" : "#56bcaa";
-    context.shadowColor = selected ? "rgba(229, 173, 85, 0.85)" : "rgba(185, 211, 244, 0.38)";
-    context.shadowBlur = selected ? 18 : 10;
+    context.fillStyle = graphNodeFill(node);
+    context.shadowColor = selected ? "rgba(229, 173, 85, 0.55)" : "transparent";
+    context.shadowBlur = selected ? 10 : 0;
     context.fill();
     context.shadowBlur = 0;
-    if (selected || hovered) {
-      context.lineWidth = selected ? 2.4 : 1.4;
-      context.strokeStyle = selected ? "#e5ad55" : "#a8c4ec";
+    context.lineWidth = selected ? 2.1 : hovered ? 1.5 : 1;
+    context.strokeStyle = selected ? "#e5ad55" : hovered ? "#a8c4ec" : "rgba(7, 10, 15, 0.92)";
+    context.stroke();
+    if (focused) {
+      context.beginPath();
+      context.arc(item.x, item.y, item.radius + 4.5, 0, Math.PI * 2);
+      context.strokeStyle = selected ? "rgba(229, 173, 85, 0.58)" : "rgba(168, 196, 236, 0.42)";
+      context.lineWidth = 1.2;
       context.stroke();
     }
     if (node.metrics.diagnosticCount > 0 || node.metrics.layoutRisk === "critical") {
@@ -3471,14 +3479,14 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
       context.textBaseline = "middle";
       context.fillText(badgeText, item.x + item.radius * 0.72, item.y - item.radius * 0.72);
     }
-    const labelVisible = hovered || selected || item.scale > 0.88 || node.kind !== "file";
+    const labelVisible = hovered || selected || item.scale > 0.94 || (node.kind !== "file" && relevance > 0.85);
     if (labelVisible) {
-      context.font = `${Math.max(10, Math.min(14, 11 * item.scale))}px Segoe UI, sans-serif`;
+      context.font = `${Math.max(10, Math.min(13, 10.5 * item.scale))}px Segoe UI, sans-serif`;
       context.textAlign = "center";
       context.textBaseline = "top";
-      context.lineWidth = 4;
-      context.strokeStyle = "rgba(5, 8, 12, 0.88)";
-      context.fillStyle = hovered || selected ? "#eef4ff" : "rgba(199, 208, 220, 0.86)";
+      context.lineWidth = 2.25;
+      context.strokeStyle = "rgba(5, 8, 12, 0.96)";
+      context.fillStyle = hovered || selected ? "#f3f7ff" : "rgba(205, 214, 226, 0.88)";
       const label = node.label.length > 24 ? `${node.label.slice(0, 23)}…` : node.label;
       context.strokeText(label, item.x, item.y + item.radius + 6);
       context.fillText(label, item.x, item.y + item.radius + 6);
@@ -3517,6 +3525,14 @@ function graphEdgeStroke(edge: GraphSimEdge, focus: "outgoing" | "incoming" | "n
   return `rgba(104, 122, 151, ${alpha})`;
 }
 
+function graphNodeFill(node: GraphSimNode): string {
+  if (node.kind === "file") return "#8b99ab";
+  if (node.kind === "struct") return "#d6dde8";
+  if (node.kind === "enum") return "#d9ad58";
+  if (node.kind === "producer") return "#42c6b0";
+  return "#8b7cf6";
+}
+
 function drawGraphArrow(
   context: CanvasRenderingContext2D,
   fromX: number,
@@ -3543,12 +3559,12 @@ function drawGraphArrow(
 
 function drawGraphBackdrop(context: CanvasRenderingContext2D, width: number, height: number, time: number): void {
   context.save();
-  for (let index = 0; index < 90; index += 1) {
+  for (let index = 0; index < 48; index += 1) {
     const x = ((index * 97) % Math.max(1, width)) + Math.sin(time / 1800 + index) * 1.5;
     const y = ((index * 53) % Math.max(1, height)) + Math.cos(time / 2200 + index * 0.7) * 1.5;
     context.beginPath();
-    context.arc(x, y, index % 7 === 0 ? 1.2 : 0.65, 0, Math.PI * 2);
-    context.fillStyle = index % 7 === 0 ? "rgba(148, 166, 190, 0.22)" : "rgba(148, 166, 190, 0.1)";
+    context.arc(x, y, index % 9 === 0 ? 1 : 0.5, 0, Math.PI * 2);
+    context.fillStyle = index % 9 === 0 ? "rgba(148, 166, 190, 0.14)" : "rgba(148, 166, 190, 0.06)";
     context.fill();
   }
   context.restore();
