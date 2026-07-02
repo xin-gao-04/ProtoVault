@@ -53,6 +53,8 @@ type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; 
 type GraphSimNode = ProtocolGraphNode & { vx: number; vy: number; vz: number; radius: number; screenX: number; screenY: number; screenRadius: number };
 type GraphSimEdge = ProtocolGraphEdge & { source: GraphSimNode; target: GraphSimNode };
 type GraphRiskLevel = "normal" | "warning" | "critical";
+type AppThemeId = "tokyo" | "obsidian" | "ink";
+type AppThemePreset = { id: AppThemeId; name: string; description: string };
 type GraphThemeId = "obsidian" | "tokyo" | "ink";
 type GraphThemePreset = {
   id: GraphThemeId;
@@ -100,6 +102,12 @@ const SUPPORTED_BASE_FIELD_TYPES = [
   "bool",
   "char",
   "std::byte"
+];
+
+const APP_THEMES: AppThemePreset[] = [
+  { id: "tokyo", name: "Tokyo Night", description: "沿用本地 Obsidian Tokyo Night 变量" },
+  { id: "obsidian", name: "Obsidian Dark", description: "低饱和暗色，接近默认 Obsidian" },
+  { id: "ink", name: "简墨", description: "中国风简洁浅色，宣纸底与朱砂强调" }
 ];
 
 const GRAPH_THEMES: GraphThemePreset[] = [
@@ -184,6 +192,11 @@ function App(): React.JSX.Element {
   const [toolbarCollapsed, setToolbarCollapsed] = React.useState(false);
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [appThemeId, setAppThemeId] = React.useState<AppThemeId>(() => {
+    const stored = window.localStorage.getItem("protovault:app-theme");
+    return APP_THEMES.some((theme) => theme.id === stored) ? stored as AppThemeId : "tokyo";
+  });
   const [scanProgress, setScanProgress] = React.useState<WorkspaceScanProgress | null>(null);
   const [activeAction, setActiveAction] = React.useState<WorkspaceAction | null>(null);
   const [headerRelativePath, setHeaderRelativePath] = React.useState("");
@@ -313,6 +326,13 @@ function App(): React.JSX.Element {
     const timer = window.setTimeout(() => setUiNotice(null), 2800);
     return () => window.clearTimeout(timer);
   }, [uiNotice]);
+
+  React.useEffect(() => {
+    document.body.dataset.appTheme = appThemeId;
+    document.body.classList.toggle("theme-light", appThemeId === "ink");
+    document.body.classList.toggle("theme-dark", appThemeId !== "ink");
+    window.localStorage.setItem("protovault:app-theme", appThemeId);
+  }, [appThemeId]);
 
   React.useEffect(() => {
     function closeMenu(): void {
@@ -1575,8 +1595,27 @@ function App(): React.JSX.Element {
           <div className="workspace-dock-actions">
             <button aria-label="打开本地目录" title="打开本地目录" disabled={loading} onClick={() => void openWorkspace(false)}>▣</button>
             <button aria-label={workspace ? "重新扫描示例" : "加载示例项目"} title={workspace ? "重新扫描示例" : "加载示例项目"} disabled={loading} onClick={() => void openWorkspace(true)}>{loading ? "…" : "↻"}</button>
-            <button aria-label="工作区设置" title="工作区设置" disabled={!workspace} onClick={() => setUiNotice("工作区设置面板将在 P2/P7 接入")}>⚙</button>
+            <button aria-label="工作区设置" title="工作区设置" onClick={() => setSettingsOpen((open) => !open)}>⚙</button>
           </div>
+          {settingsOpen && <div className="workspace-settings-popover" role="dialog" aria-label="工作区设置">
+            <div className="workspace-settings-title">
+              <strong>全局主题</strong>
+              <button aria-label="关闭设置" onClick={() => setSettingsOpen(false)}>×</button>
+            </div>
+            <div className="theme-options">
+              {APP_THEMES.map((theme) => <button
+                key={theme.id}
+                className={theme.id === appThemeId ? "active" : ""}
+                onClick={() => {
+                  setAppThemeId(theme.id);
+                  setUiNotice(`已切换主题：${theme.name}`);
+                }}
+              >
+                <span>{theme.name}</span>
+                <small>{theme.description}</small>
+              </button>)}
+            </div>
+          </div>}
         </div>
       </aside>
       <div
