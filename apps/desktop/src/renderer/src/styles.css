@@ -163,6 +163,21 @@ tr.dirty-row { background: color-mix(in srgb, var(--interactive-accent) 8%, tran
 .field-type-group button:hover { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
 .field-type-group button span { overflow: hidden; font: 12px var(--font-monospace); text-overflow: ellipsis; white-space: nowrap; }
 .field-type-group button small { overflow: hidden; color: var(--text-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.field-type-levels { display: grid; gap: 6px; }
+.field-type-levels button { display: grid; gap: 3px; width: 100%; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--radius-s); background: transparent; color: var(--text-normal); text-align: left; }
+.field-type-levels button:hover { border-color: var(--background-modifier-border); background: var(--background-modifier-hover); color: var(--text-accent-hover); }
+.field-type-levels button span { font-size: 12px; font-weight: 700; }
+.field-type-levels button small { color: var(--text-faint); font-size: 10px; }
+.field-type-back { margin: 0 0 6px; padding: 5px 6px; border: 0; background: transparent; color: var(--text-muted); font-size: 11px; text-align: left; }
+.field-type-back:hover { color: var(--text-accent-hover); }
+.header-include-editor { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: color-mix(in srgb, var(--background-secondary) 72%, transparent); }
+.header-include-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.header-include-title span { color: var(--text-faint); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.header-include-editor p { margin: 0; color: var(--text-faint); font-size: 11px; line-height: 1.45; }
+.header-include-list { display: grid; max-height: 180px; overflow: auto; gap: 4px; padding-right: 2px; }
+.header-include-option { display: flex; align-items: center; gap: 8px; padding: 6px 7px; border-radius: var(--radius-s); color: var(--text-muted); font-size: 12px; }
+.header-include-option:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.header-include-option input { accent-color: var(--interactive-accent); }
 .report-panel { margin: 12px 28px 0; padding: 16px 18px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: color-mix(in srgb, var(--background-secondary) 84%, transparent); box-shadow: 0 12px 36px #0000002b; }
 .report-panel-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .report-panel-title h2 { margin: 2px 0 0; font: 500 24px Georgia, serif; }

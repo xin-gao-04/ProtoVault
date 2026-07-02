@@ -29,6 +29,7 @@ import type {
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateHeaderContentInput,
+  UpdateHeaderIncludesInput,
   UpdateNoteInput,
   WorkspaceDirectoryView,
   WorkspaceDiagnostic,
@@ -213,6 +214,64 @@ function fieldDeclaration(fieldType: string, fieldName: string): string {
   const arrayMatch = fieldType.match(/^(.*?)(\[[0-9]+\])$/);
   if (arrayMatch) return `${arrayMatch[1].trim()} ${fieldName}${arrayMatch[2]};`;
   return `${fieldType} ${fieldName};`;
+}
+
+function normalizeRelativePath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/^\/+/, "");
+}
+
+function includeReferenceForHeader(root: string, headerPath: string): string {
+  return relative(root, headerPath).replaceAll("\\", "/");
+}
+
+function resolveInternalInclude(root: string, sourceHeader: string, includeValue: string, headerByRelativePath: Map<string, string>): string | null {
+  const normalized = normalizeRelativePath(includeValue);
+  const direct = headerByRelativePath.get(normalized);
+  if (direct) return direct;
+  const sibling = normalizeRelativePath(relative(root, resolve(dirname(sourceHeader), includeValue)));
+  return headerByRelativePath.get(sibling) ?? null;
+}
+
+function wouldCreateIncludeCycle(graph: Map<string, Set<string>>, from: string, to: string): boolean {
+  if (from === to) return true;
+  const visited = new Set<string>();
+  const stack = [to];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (current === from) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const next of graph.get(current) ?? []) stack.push(next);
+  }
+  return false;
+}
+
+function rewriteInternalIncludes(content: string, includeReferences: string[], headerByInclude: Map<string, string>): string {
+  const lines = content.split(/\r?\n/);
+  const output: string[] = [];
+  let inserted = false;
+  let lastIncludeIndex = -1;
+  const requested = includeReferences.map((includePath) => `#include "${includePath}"`);
+
+  for (const line of lines) {
+    const match = line.match(/^\s*#\s*include\s*"([^"]+)"\s*$/);
+    if (match && headerByInclude.has(normalizeRelativePath(match[1]))) {
+      if (!inserted) {
+        output.push(...requested);
+        inserted = true;
+      }
+      lastIncludeIndex = output.length - 1;
+      continue;
+    }
+    output.push(line);
+    if (/^\s*#\s*include\b/.test(line)) lastIncludeIndex = output.length - 1;
+  }
+
+  if (!inserted && requested.length > 0) {
+    const insertAt = lastIncludeIndex >= 0 ? lastIncludeIndex + 1 : 0;
+    output.splice(insertAt, 0, ...requested);
+  }
+  return output.join("\n");
 }
 
 function structPattern(structName: string): RegExp {
@@ -1384,6 +1443,45 @@ export async function updateHeaderContent(input: UpdateHeaderContentInput): Prom
     }
   }
   await atomicWriteFile(header, input.content);
+  return scanWorkspace(root);
+}
+
+export async function updateHeaderIncludes(input: UpdateHeaderIncludesInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const header = assertWorkspaceFile(root, input.headerPath);
+  if (!HEADER_EXTENSIONS.has(extname(header).toLowerCase())) throw new Error("只能编辑 Header 依赖。");
+  const discovery = await discoverWorkspace(root);
+  const headerByRelativePath = new Map(discovery.headers.map((item) => [includeReferenceForHeader(root, item), item]));
+  const currentRelativePath = includeReferenceForHeader(root, header);
+  if (!headerByRelativePath.has(currentRelativePath)) throw new Error("当前 Header 不在工作区扫描范围内。");
+
+  const includeReferences = [...new Set(input.includeRelativePaths.map(sanitizeHeaderRelativePath))]
+    .filter((includePath) => includePath !== currentRelativePath)
+    .sort((a, b) => a.localeCompare(b));
+  for (const includePath of includeReferences) {
+    if (!headerByRelativePath.has(includePath)) throw new Error(`未找到可 include 的 Header：${includePath}`);
+  }
+
+  const graph = new Map<string, Set<string>>();
+  for (const candidate of discovery.headers) {
+    const from = includeReferenceForHeader(root, candidate);
+    const content = await fs.readFile(candidate, "utf8");
+    const includes = [...content.matchAll(/^\s*#\s*include\s*"([^"]+)"/gm)]
+      .map((match) => resolveInternalInclude(root, candidate, match[1], headerByRelativePath))
+      .filter((target): target is string => Boolean(target))
+      .map((target) => includeReferenceForHeader(root, target));
+    graph.set(from, new Set(from === currentRelativePath ? includeReferences : includes));
+  }
+  for (const includePath of includeReferences) {
+    if (wouldCreateIncludeCycle(graph, currentRelativePath, includePath)) {
+      throw new Error(`已取消保存：${currentRelativePath} include ${includePath} 会形成循环引用。`);
+    }
+  }
+
+  const content = await fs.readFile(header, "utf8");
+  const nextContent = rewriteInternalIncludes(content, includeReferences, headerByRelativePath);
+  await validateHeaderContent(root, header, nextContent);
+  await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
 

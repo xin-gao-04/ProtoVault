@@ -28,6 +28,7 @@ import {
   updateEnumValue,
   updateField,
   updateHeaderContent,
+  updateHeaderIncludes,
   updateNote
 } from "./workspace";
 
@@ -710,6 +711,55 @@ enum class PacketState : std::uint8_t {
         expectedHash: header.contentHash
       })).rejects.toThrow("外部修改");
       expect(await readFile(header.path, "utf8")).toContain("// external edit");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("updates internal header includes and rejects include cycles", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-includes-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/a.hpp" });
+      await createHeader({ workspaceRoot: root, relativePath: "headers/b.hpp" });
+      await createHeader({ workspaceRoot: root, relativePath: "headers/c.hpp" });
+
+      let workspace = await updateHeaderIncludes({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "a.hpp"),
+        includeRelativePaths: ["headers/b.hpp", "headers/c.hpp"]
+      });
+      const headerA = await readFile(resolve(root, "headers", "a.hpp"), "utf8");
+      expect(headerA).toContain('#include "headers/b.hpp"');
+      expect(headerA).toContain('#include "headers/c.hpp"');
+      expect(workspace.files.find((file) => file.relativePath === "headers/a.hpp")?.includes).toEqual(expect.arrayContaining([
+        "cstdint",
+        "headers/b.hpp",
+        "headers/c.hpp"
+      ]));
+
+      workspace = await updateHeaderIncludes({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "a.hpp"),
+        includeRelativePaths: ["headers/b.hpp"]
+      });
+      expect(workspace.files.find((file) => file.relativePath === "headers/a.hpp")?.includes).toEqual(expect.arrayContaining(["headers/b.hpp"]));
+      expect(workspace.files.find((file) => file.relativePath === "headers/a.hpp")?.includes).not.toContain("headers/c.hpp");
+
+      await updateHeaderIncludes({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "a.hpp"),
+        includeRelativePaths: []
+      });
+      await updateHeaderIncludes({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "b.hpp"),
+        includeRelativePaths: ["headers/a.hpp"]
+      });
+      await expect(updateHeaderIncludes({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "a.hpp"),
+        includeRelativePaths: ["headers/b.hpp"]
+      })).rejects.toThrow("循环引用");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

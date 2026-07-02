@@ -23,6 +23,7 @@ import type {
   UpdateEnumValueInput,
   UpdateFieldInput,
   UpdateHeaderContentInput,
+  UpdateHeaderIncludesInput,
   UpdateNoteInput,
   WorkspaceScanProgress,
   WorkspaceLintReport,
@@ -41,6 +42,7 @@ export interface ProtoVaultDesktopApi {
   renameHeader(input: RenameHeaderInput): Promise<WorkspaceView>;
   deleteHeader(input: DeleteHeaderInput): Promise<WorkspaceView>;
   updateHeaderContent(input: UpdateHeaderContentInput): Promise<WorkspaceView>;
+  updateHeaderIncludes(input: UpdateHeaderIncludesInput): Promise<WorkspaceView>;
   renameStruct(input: RenameStructInput): Promise<WorkspaceView>;
   deleteStruct(input: DeleteStructInput): Promise<WorkspaceView>;
   renameEnum(input: RenameEnumInput): Promise<WorkspaceView>;
@@ -75,6 +77,7 @@ contextBridge.exposeInMainWorld("protoVault", {
   renameHeader: (input) => ipcRenderer.invoke("protocol:rename-header", input),
   deleteHeader: (input) => ipcRenderer.invoke("protocol:delete-header", input),
   updateHeaderContent: (input) => ipcRenderer.invoke("protocol:update-header-content", input),
+  updateHeaderIncludes: (input) => ipcRenderer.invoke("protocol:update-header-includes", input),
   renameStruct: (input) => ipcRenderer.invoke("protocol:rename-struct", input),
   deleteStruct: (input) => ipcRenderer.invoke("protocol:delete-struct", input),
   renameEnum: (input) => ipcRenderer.invoke("protocol:rename-enum", input),

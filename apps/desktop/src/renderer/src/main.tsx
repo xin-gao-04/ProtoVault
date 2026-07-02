@@ -23,7 +23,7 @@ type ProtocolTreeNode =
 
 type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit-header" | "edit-struct" | "edit-enum" | "add-field" | "edit-field" | "add-enum-value" | "edit-enum-value";
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
-type FieldTypeOption = { group: "workspace" | "base"; value: string; label: string; detail?: string };
+type FieldTypeOption = { group: "composite" | "base"; value: string; label: string; detail?: string };
 type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; savedFieldName: string; savedFieldType: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
@@ -101,6 +101,7 @@ function App(): React.JSX.Element {
   const [enumName, setEnumName] = React.useState("NewEnum");
   const [enumHeaderPath, setEnumHeaderPath] = React.useState("");
   const [headerEditRelativePath, setHeaderEditRelativePath] = React.useState("");
+  const [headerIncludePaths, setHeaderIncludePaths] = React.useState<string[]>([]);
   const [structEditName, setStructEditName] = React.useState("");
   const [enumEditName, setEnumEditName] = React.useState("");
   const [fieldType, setFieldType] = React.useState("std::uint32_t");
@@ -293,6 +294,7 @@ function App(): React.JSX.Element {
       setSelectedTypeId(null);
       setSelectedMemberId(null);
       setHeaderEditRelativePath(file.relativePath);
+      setHeaderIncludePaths(internalIncludeRelativePaths(workspace, file));
     }
     if (action === "edit-struct") {
       if (!selectedType || selectedType.kind !== "struct") return;
@@ -420,6 +422,7 @@ function App(): React.JSX.Element {
   function editFile(file: WorkspaceFileView): void {
     openFileTab(file);
     setHeaderEditRelativePath(file.relativePath);
+    if (workspace) setHeaderIncludePaths(internalIncludeRelativePaths(workspace, file));
     setActiveAction("edit-header");
   }
 
@@ -446,6 +449,7 @@ function App(): React.JSX.Element {
       return;
     }
     setHeaderEditRelativePath(file.relativePath);
+    if (workspace) setHeaderIncludePaths(internalIncludeRelativePaths(workspace, file));
     setEditingFieldId(null);
     setEditingEnumValueId(null);
     setActiveAction("edit-header");
@@ -581,6 +585,21 @@ function App(): React.JSX.Element {
       applyWorkspaceResult(result);
       setUiNotice(`已删除 Header：${selectedFile.relativePath}`);
       setActiveAction(null);
+    });
+  }
+
+  async function updateHeaderIncludesFromForm(): Promise<void> {
+    if (!workspace || !selectedFile) return;
+    await runWorkspaceAction(async () => {
+      const result = await window.protoVault.updateHeaderIncludes({
+        workspaceRoot: workspace.rootPath,
+        headerPath: selectedFile.path,
+        includeRelativePaths: headerIncludePaths
+      });
+      applyWorkspaceResult(result, { selectFileRelativePath: selectedFile.relativePath });
+      const nextFile = result.files.find((file) => file.relativePath === selectedFile.relativePath);
+      if (nextFile) setHeaderIncludePaths(internalIncludeRelativePaths(result, nextFile));
+      setUiNotice("Header 依赖已更新");
     });
   }
 
@@ -1470,10 +1489,12 @@ function App(): React.JSX.Element {
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
+          selectedFile={selectedFile}
           selectedType={selectedType}
           loading={loading}
           headerRelativePath={headerRelativePath}
           headerEditRelativePath={headerEditRelativePath}
+          headerIncludePaths={headerIncludePaths}
           structHeaderPath={structHeaderPath}
           structName={structName}
           structEditName={structEditName}
@@ -1487,6 +1508,7 @@ function App(): React.JSX.Element {
           enumValueNumber={enumValueNumber}
           onHeaderRelativePathChange={setHeaderRelativePath}
           onHeaderEditRelativePathChange={setHeaderEditRelativePath}
+          onHeaderIncludePathsChange={setHeaderIncludePaths}
           onStructHeaderPathChange={setStructHeaderPath}
           onStructNameChange={setStructName}
           onStructEditNameChange={setStructEditName}
@@ -1503,6 +1525,7 @@ function App(): React.JSX.Element {
           onCreateEnum={() => void createEnumFromForm()}
           onRenameHeader={() => void renameHeaderFromForm()}
           onDeleteHeader={() => void deleteHeaderFromForm()}
+          onUpdateHeaderIncludes={() => void updateHeaderIncludesFromForm()}
           onRenameStruct={() => void renameStructFromForm()}
           onDeleteStruct={() => void deleteStructFromForm()}
           onRenameEnum={() => void renameEnumFromForm()}
@@ -1762,16 +1785,62 @@ function buildBaseFieldTypeOptions(): FieldTypeOption[] {
 
 function buildFieldTypeOptions(workspace: WorkspaceView, currentType: WorkspaceTypeView): FieldTypeOption[] {
   const options = new Map<string, FieldTypeOption>();
+  const visibleFiles = visibleHeaderPathsForType(workspace, currentType);
   for (const type of workspace.types) {
     if (type.id === currentType.id) continue;
+    if (!visibleFiles.has(type.file)) continue;
     const detail = `${type.kind} · ${type.qualifiedName}`;
-    options.set(type.qualifiedName, { group: "workspace", value: type.qualifiedName, label: type.qualifiedName, detail });
-    if (!options.has(type.name)) options.set(type.name, { group: "workspace", value: type.name, label: type.name, detail });
+    options.set(type.qualifiedName, { group: "composite", value: type.qualifiedName, label: type.qualifiedName, detail });
+    if (!options.has(type.name)) options.set(type.name, { group: "composite", value: type.name, label: type.name, detail });
   }
   return [
     ...[...options.values()].sort((a, b) => a.value.localeCompare(b.value)),
     ...buildBaseFieldTypeOptions()
   ];
+}
+
+function internalIncludeRelativePaths(workspace: WorkspaceView, file: WorkspaceFileView): string[] {
+  const filesByRelativePath = new Map(workspace.files.map((item) => [item.relativePath, item]));
+  return file.includes.flatMap((includePath) => {
+    const resolved = resolveIncludeFile(workspace, file, includePath);
+    return resolved && filesByRelativePath.has(resolved.relativePath) ? [resolved.relativePath] : [];
+  }).filter((value, index, values) => values.indexOf(value) === index).sort((a, b) => a.localeCompare(b));
+}
+
+function visibleHeaderPathsForType(workspace: WorkspaceView, currentType: WorkspaceTypeView): Set<string> {
+  const currentFile = workspace.files.find((file) => file.path === currentType.file);
+  const visible = new Set<string>([currentType.file]);
+  if (!currentFile) return visible;
+  const stack = [...internalIncludeRelativePaths(workspace, currentFile)];
+  const byRelativePath = new Map(workspace.files.map((file) => [file.relativePath, file]));
+  while (stack.length > 0) {
+    const relativePath = stack.pop()!;
+    const file = byRelativePath.get(relativePath);
+    if (!file || visible.has(file.path)) continue;
+    visible.add(file.path);
+    stack.push(...internalIncludeRelativePaths(workspace, file));
+  }
+  return visible;
+}
+
+function resolveIncludeFile(workspace: WorkspaceView, sourceFile: WorkspaceFileView, includePath: string): WorkspaceFileView | null {
+  const normalized = includePath.replaceAll("\\", "/").replace(/^\/+/, "");
+  const byRelativePath = new Map(workspace.files.map((file) => [file.relativePath, file]));
+  const direct = byRelativePath.get(normalized);
+  if (direct) return direct;
+  const sourceDir = sourceFile.relativePath.includes("/") ? sourceFile.relativePath.slice(0, sourceFile.relativePath.lastIndexOf("/")) : "";
+  const sibling = normalizeRelativeSegments(`${sourceDir}/${normalized}`);
+  return byRelativePath.get(sibling) ?? null;
+}
+
+function normalizeRelativeSegments(path: string): string {
+  const parts: string[] = [];
+  for (const segment of path.replaceAll("\\", "/").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join("/");
 }
 
 function normalizeFieldTypeValue(value: string): { coreType: string; arraySuffix: string } | null {
@@ -1994,10 +2063,12 @@ function TreeNodes({
 function StructuredActionPanel({
   action,
   workspace,
+  selectedFile,
   selectedType,
   loading,
   headerRelativePath,
   headerEditRelativePath,
+  headerIncludePaths,
   structHeaderPath,
   structName,
   structEditName,
@@ -2011,6 +2082,7 @@ function StructuredActionPanel({
   enumValueNumber,
   onHeaderRelativePathChange,
   onHeaderEditRelativePathChange,
+  onHeaderIncludePathsChange,
   onStructHeaderPathChange,
   onStructNameChange,
   onStructEditNameChange,
@@ -2027,6 +2099,7 @@ function StructuredActionPanel({
   onCreateEnum,
   onRenameHeader,
   onDeleteHeader,
+  onUpdateHeaderIncludes,
   onRenameStruct,
   onDeleteStruct,
   onRenameEnum,
@@ -2040,10 +2113,12 @@ function StructuredActionPanel({
 }: {
   action: WorkspaceAction;
   workspace: WorkspaceView;
+  selectedFile?: WorkspaceFileView;
   selectedType?: WorkspaceTypeView;
   loading: boolean;
   headerRelativePath: string;
   headerEditRelativePath: string;
+  headerIncludePaths: string[];
   structHeaderPath: string;
   structName: string;
   structEditName: string;
@@ -2057,6 +2132,7 @@ function StructuredActionPanel({
   enumValueNumber: string;
   onHeaderRelativePathChange(value: string): void;
   onHeaderEditRelativePathChange(value: string): void;
+  onHeaderIncludePathsChange(value: string[]): void;
   onStructHeaderPathChange(value: string): void;
   onStructNameChange(value: string): void;
   onStructEditNameChange(value: string): void;
@@ -2073,6 +2149,7 @@ function StructuredActionPanel({
   onCreateEnum(): void;
   onRenameHeader(): void;
   onDeleteHeader(): void;
+  onUpdateHeaderIncludes(): void;
   onRenameStruct(): void;
   onDeleteStruct(): void;
   onRenameEnum(): void;
@@ -2113,6 +2190,18 @@ function StructuredActionPanel({
                 : action === "edit-enum-value"
                   ? `修改或删除当前 enum ${selectedType?.name ?? ""} 中的枚举项。`
                   : `修改或删除当前 struct ${selectedType?.name ?? ""} 中的字段。`;
+  const includeCandidates = selectedFile
+    ? workspace.files.filter((file) => file.path !== selectedFile.path).sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+    : [];
+  const selectedIncludeSet = new Set(headerIncludePaths);
+
+  function toggleHeaderInclude(relativePath: string): void {
+    if (selectedIncludeSet.has(relativePath)) {
+      onHeaderIncludePathsChange(headerIncludePaths.filter((item) => item !== relativePath));
+    } else {
+      onHeaderIncludePathsChange([...headerIncludePaths, relativePath].sort((a, b) => a.localeCompare(b)));
+    }
+  }
 
   return <section className="action-panel" aria-label="结构化编辑">
     <div className="action-panel-title">
@@ -2163,6 +2252,25 @@ function StructuredActionPanel({
         <input value={headerEditRelativePath} onChange={(event) => onHeaderEditRelativePathChange(event.target.value)} placeholder="headers/protocol.hpp" autoFocus />
       </label>
       <small>重命名不会自动更新其他 Header 的 include 路径。</small>
+      <div className="header-include-editor">
+        <div className="header-include-title">
+          <span>依赖 Header</span>
+          <button type="button" className="inline-action" disabled={loading || !selectedFile} onClick={onUpdateHeaderIncludes}>保存依赖</button>
+        </div>
+        <p>只管理工作区内的双引号 include；保存时会检查循环引用。</p>
+        <div className="header-include-list">
+          {includeCandidates.length === 0
+            ? <small>当前没有可选 Header。</small>
+            : includeCandidates.map((file) => <label key={file.path} className="header-include-option">
+                <input
+                  type="checkbox"
+                  checked={selectedIncludeSet.has(file.relativePath)}
+                  onChange={() => toggleHeaderInclude(file.relativePath)}
+                />
+                <span>{file.relativePath}</span>
+              </label>)}
+        </div>
+      </div>
       <div className="form-actions">
         <button type="submit" disabled={loading}>保存修改</button>
         <button type="button" className="danger" disabled={loading} onClick={onDeleteHeader}>删除 Header</button>
@@ -2255,13 +2363,14 @@ function FieldTypeInput({ label, value, options, onChange, autoFocus = false, co
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const [showAll, setShowAll] = React.useState(false);
+  const [activeGroup, setActiveGroup] = React.useState<"base" | "composite" | null>(null);
   const rootRef = React.useRef<HTMLLabelElement>(null);
   const query = value.trim().toLowerCase();
   const visibleOptions = React.useMemo(() => {
     if (showAll || !query) return options;
     return options.filter((option) => `${option.value} ${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query));
   }, [options, query, showAll]);
-  const workspaceOptions = visibleOptions.filter((option) => option.group === "workspace");
+  const compositeOptions = visibleOptions.filter((option) => option.group === "composite");
   const baseOptions = visibleOptions.filter((option) => option.group === "base");
 
   React.useEffect(() => {
@@ -2276,6 +2385,7 @@ function FieldTypeInput({ label, value, options, onChange, autoFocus = false, co
     onChange(option.value);
     setOpen(false);
     setShowAll(false);
+    setActiveGroup(null);
   }
 
   return <label className={compact ? "field-type-input compact" : "field-type-input"} ref={rootRef}>
@@ -2288,11 +2398,13 @@ function FieldTypeInput({ label, value, options, onChange, autoFocus = false, co
         onFocus={() => {
           setOpen(true);
           setShowAll(true);
+          setActiveGroup(null);
         }}
         onChange={(event) => {
           onChange(event.target.value);
           setOpen(true);
           setShowAll(false);
+          setActiveGroup(null);
         }}
         placeholder="std::uint32_t"
         autoFocus={autoFocus}
@@ -2300,10 +2412,27 @@ function FieldTypeInput({ label, value, options, onChange, autoFocus = false, co
       <button type="button" className="field-type-index-button" aria-label={`${label} 类型索引`} onClick={() => {
         setOpen((current) => current && showAll ? false : true);
         setShowAll(true);
+        setActiveGroup(null);
       }}>⌄</button>
       {open && <div className="field-type-menu" role="listbox" aria-label={`${label} 候选类型`}>
-        <FieldTypeGroup title="工作区类型" emptyText="没有匹配的工作区类型" options={workspaceOptions} onSelect={selectOption} />
-        <FieldTypeGroup title="基础支持类型" emptyText="没有匹配的基础类型" options={baseOptions} onSelect={selectOption} />
+        {!activeGroup && <div className="field-type-levels">
+          <button type="button" onClick={() => setActiveGroup("base")}>
+            <span>基础类型</span>
+            <small>{baseOptions.length} 个可选类型</small>
+          </button>
+          <button type="button" onClick={() => setActiveGroup("composite")}>
+            <span>组合类型</span>
+            <small>{compositeOptions.length} 个当前 Header 可见类型</small>
+          </button>
+        </div>}
+        {activeGroup === "base" && <>
+          <button type="button" className="field-type-back" onClick={() => setActiveGroup(null)}>← 类型分类</button>
+          <FieldTypeGroup title="基础支持类型" emptyText="没有匹配的基础类型" options={baseOptions} onSelect={selectOption} />
+        </>}
+        {activeGroup === "composite" && <>
+          <button type="button" className="field-type-back" onClick={() => setActiveGroup(null)}>← 类型分类</button>
+          <FieldTypeGroup title="组合类型" emptyText="当前 Header 依赖范围内没有匹配的组合类型" options={compositeOptions} onSelect={selectOption} />
+        </>}
       </div>}
     </div>
   </label>;

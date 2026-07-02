@@ -134,6 +134,12 @@ export interface UpdateHeaderContentInput {
   expectedHash?: string;
 }
 
+export interface UpdateHeaderIncludesInput {
+  workspaceRoot: string;
+  headerPath: string;
+  includeRelativePaths: string[];
+}
+
 export interface RenameStructInput {
   workspaceRoot: string;
   typeId: string;
