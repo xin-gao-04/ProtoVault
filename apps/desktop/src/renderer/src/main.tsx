@@ -389,11 +389,14 @@ function App(): React.JSX.Element {
     else setUiNotice(`${node.kind === "producer" ? "生产节点" : "消费节点"}：${node.label}`);
   }
 
-  function openGraphNode(node: ProtocolGraphNode): void {
-    setCenterViewMode("workspace");
-    if (node.kind === "file") openFileTab(node.file);
-    else if (node.kind === "struct" || node.kind === "enum") openTypeTab(node.type);
-    else setCenterViewMode("graph");
+  async function openGraphNode(node: ProtocolGraphNode): Promise<void> {
+    if (node.kind === "file") {
+      if (await openFileTab(node.file)) setCenterViewMode("workspace");
+    } else if (node.kind === "struct" || node.kind === "enum") {
+      if (await openTypeTab(node.type)) setCenterViewMode("workspace");
+    } else {
+      setCenterViewMode("graph");
+    }
   }
 
   async function deleteFieldWithConfirm(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
@@ -988,9 +991,9 @@ function App(): React.JSX.Element {
     });
   }
 
-  async function updateDataFlowForType(type: WorkspaceTypeView, producers: string[], consumers: string[]): Promise<void> {
-    if (!workspace) return;
-    await runWorkspaceAction(async () => {
+  async function updateDataFlowForType(type: WorkspaceTypeView, producers: string[], consumers: string[]): Promise<boolean> {
+    if (!workspace) return false;
+    return runWorkspaceAction(async () => {
       const result = await window.protoVault.updateDataFlow({ workspaceRoot: workspace.rootPath, typeId: type.id, producers, consumers });
       setWorkspace(result);
       setDirtyDataFlows((current) => {
@@ -1076,39 +1079,30 @@ function App(): React.JSX.Element {
     });
   }
 
-  async function saveActiveChanges(): Promise<void> {
+  async function saveActiveChanges(): Promise<boolean> {
     if (selectedMemberId && dirtyStructuralEdits[selectedMemberId]) {
-      await saveStructuralEdit(selectedMemberId);
-      return;
+      return saveStructuralEdit(selectedMemberId);
     }
     if (selectedNoteTarget && dirtyNotes[selectedNoteTarget.id] !== undefined) {
-      await saveNoteTarget(selectedNoteTarget.id);
-      return;
+      return saveNoteTarget(selectedNoteTarget.id);
     }
     if (selectedType && dirtyDataFlows[selectedType.id]) {
       const edit = dirtyDataFlows[selectedType.id];
-      await updateDataFlowForType(selectedType, edit.producers, edit.consumers);
-      return;
+      return updateDataFlowForType(selectedType, edit.producers, edit.consumers);
     }
     if (selectedType) {
       const memberIds = new Set([...selectedType.fields.map((field) => field.id), ...selectedType.values.map((value) => value.id), selectedType.id]);
       const structuralTarget = Object.keys(dirtyStructuralEdits).find((id) => memberIds.has(id));
       if (structuralTarget) {
-        await saveStructuralEdit(structuralTarget);
-        return;
+        return saveStructuralEdit(structuralTarget);
       }
       const noteTarget = Object.keys(dirtyNotes).find((id) => memberIds.has(id));
       if (noteTarget) {
-        await saveNoteTarget(noteTarget);
-        return;
-      }
-      const dataFlowTarget = dirtyDataFlows[selectedType.id];
-      if (dataFlowTarget) {
-        await updateDataFlowForType(selectedType, dataFlowTarget.producers, dataFlowTarget.consumers);
-        return;
+        return saveNoteTarget(noteTarget);
       }
     }
     setUiNotice("没有需要保存的改动");
+    return false;
   }
 
   function activateDocumentTab(tab: WorkspaceTab): void {
@@ -1125,8 +1119,16 @@ function App(): React.JSX.Element {
     }
   }
 
-  function previewFileTab(file: WorkspaceFileView): void {
+  async function ensureCanNavigateToTab(nextTabId: string): Promise<boolean> {
+    if (!activeTabHasDirtyChanges(nextTabId)) return true;
+    const shouldSave = window.confirm("当前标签页存在未保存改动。\n确定：保存并切换\n取消：留在当前标签页");
+    if (!shouldSave) return false;
+    return saveActiveChanges();
+  }
+
+  async function previewFileTab(file: WorkspaceFileView): Promise<boolean> {
     const tab = tabForFile(file);
+    if (!(await ensureCanNavigateToTab(tab.id))) return false;
     if (tabs.some((item) => item.id === tab.id)) {
       setActiveTabId(tab.id);
       setSelectedFilePath(file.path);
@@ -1141,10 +1143,12 @@ function App(): React.JSX.Element {
       setSelectedMemberId(null);
       syncActionForFileSelection(file);
     }
+    return true;
   }
 
-  function previewTypeTab(type: WorkspaceTypeView, memberId: string | null = null): void {
+  async function previewTypeTab(type: WorkspaceTypeView, memberId: string | null = null): Promise<boolean> {
     const tab = tabForType(type);
+    if (!(await ensureCanNavigateToTab(tab.id))) return false;
     if (tabs.some((item) => item.id === tab.id)) {
       setActiveTabId(tab.id);
       setSelectedTypeId(type.id);
@@ -1161,10 +1165,12 @@ function App(): React.JSX.Element {
       setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
       syncActionForTypeSelection(type, memberId);
     }
+    return true;
   }
 
-  function openFileTab(file: WorkspaceFileView): void {
+  async function openFileTab(file: WorkspaceFileView): Promise<boolean> {
     const tab = tabForFile(file);
+    if (!(await ensureCanNavigateToTab(tab.id))) return false;
     setTabs((current) => upsertTab(current, tab));
     setPreviewTab((current) => current?.id === tab.id ? null : current);
     setActiveTabId(tab.id);
@@ -1172,10 +1178,12 @@ function App(): React.JSX.Element {
     setSelectedTypeId(null);
     setSelectedMemberId(null);
     syncActionForFileSelection(file);
+    return true;
   }
 
-  function openTypeTab(type: WorkspaceTypeView, memberId: string | null = null): void {
+  async function openTypeTab(type: WorkspaceTypeView, memberId: string | null = null): Promise<boolean> {
     const tab = tabForType(type);
+    if (!(await ensureCanNavigateToTab(tab.id))) return false;
     setTabs((current) => upsertTab(current, tab));
     setPreviewTab((current) => current?.id === tab.id ? null : current);
     setActiveTabId(tab.id);
@@ -1184,6 +1192,7 @@ function App(): React.JSX.Element {
     setSelectedMemberId(memberId);
     setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
     syncActionForTypeSelection(type, memberId);
+    return true;
   }
 
   function activeTabHasDirtyChanges(nextTabId?: string): boolean {
@@ -1191,9 +1200,7 @@ function App(): React.JSX.Element {
   }
 
   async function activateTab(tab: WorkspaceTab): Promise<void> {
-    if (activeTabHasDirtyChanges(tab.id) && window.confirm("当前标签页存在未保存改动，是否先保存再切换？")) {
-      await saveActiveChanges();
-    }
+    if (!(await ensureCanNavigateToTab(tab.id))) return;
     activateDocumentTab(tab);
   }
 
@@ -1253,16 +1260,16 @@ function App(): React.JSX.Element {
     }
   }
 
-  function openEditFieldAction(type: WorkspaceTypeView, field: WorkspaceFieldView): void {
-    openTypeTab(type, field.id);
+  async function openEditFieldAction(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
+    if (!(await openTypeTab(type, field.id))) return;
     setFieldType(field.type);
     setFieldName(field.name);
     setEditingFieldId(field.id);
     setActiveAction("edit-field");
   }
 
-  function openEditEnumValueAction(type: WorkspaceTypeView, value: WorkspaceEnumValueView): void {
-    openTypeTab(type, value.id);
+  async function openEditEnumValueAction(type: WorkspaceTypeView, value: WorkspaceEnumValueView): Promise<void> {
+    if (!(await openTypeTab(type, value.id))) return;
     setEnumValueName(value.name);
     setEnumValueNumber(value.value === undefined ? "" : String(value.value));
     setEditingEnumValueId(value.id);
@@ -1519,8 +1526,8 @@ function App(): React.JSX.Element {
           })}
           onEditFile={(file) => runContextAction(() => editFile(file))}
           onEditType={(type) => runContextAction(() => editType(type))}
-          onEditField={(type, field) => runContextAction(() => openEditFieldAction(type, field))}
-          onEditEnumValue={(type, value) => runContextAction(() => openEditEnumValueAction(type, value))}
+          onEditField={(type, field) => runContextAction(() => { void openEditFieldAction(type, field); })}
+          onEditEnumValue={(type, value) => runContextAction(() => { void openEditEnumValueAction(type, value); })}
           onDeleteField={(type, field) => runContextAction(() => { void deleteFieldWithConfirm(type, field); })}
           onDeleteEnumValue={(type, value) => runContextAction(() => { void deleteEnumValueWithConfirm(type, value); })}
         />}
