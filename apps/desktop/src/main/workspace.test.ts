@@ -610,6 +610,30 @@ enum class Broken : std::uint8_t {
     }
   }, 30_000);
 
+  it("rejects invalid generated fields before writing the header", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-add-field-guard-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/guard.hpp" });
+      const workspace = await createStruct({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "guard.hpp"),
+        structName: "GuardedPacket"
+      });
+      const type = workspace.types.find((item) => item.qualifiedName === "protovault::GuardedPacket")!;
+      const headerPath = resolve(root, "headers", "guard.hpp");
+      const before = await readFile(headerPath, "utf8");
+      await expect(addField({
+        workspaceRoot: root,
+        typeId: type.id,
+        fieldType: "MissingType",
+        fieldName: "broken"
+      })).rejects.toThrow("已取消写入");
+      await expect(readFile(headerPath, "utf8")).resolves.toBe(before);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("imports controlled notes from header comments during scan", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "protovault-source-notes-"));
     try {

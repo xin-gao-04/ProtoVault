@@ -31,6 +31,7 @@ import type {
   UpdateHeaderContentInput,
   UpdateNoteInput,
   WorkspaceDirectoryView,
+  WorkspaceDiagnostic,
   WorkspaceEnumValueView,
   WorkspaceFieldLayoutView,
   WorkspaceFileView,
@@ -723,6 +724,36 @@ async function validateHeaderContent(root: string, header: string, content: stri
   }
 }
 
+function diagnosticFromError(file: string | undefined, error: unknown): WorkspaceDiagnostic {
+  const message = error instanceof Error ? error.message : String(error);
+  const parsed = parseClangDiagnostic(message, file);
+  return {
+    severity: parsed?.severity ?? "error",
+    file: parsed?.file ?? file,
+    line: parsed?.line,
+    column: parsed?.column,
+    message
+  };
+}
+
+function parseClangDiagnostic(message: string, fallbackFile?: string): WorkspaceDiagnostic | null {
+  const normalizedFallback = fallbackFile?.replaceAll("\\", "/");
+  const lines = message.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^(.+?):(\d+):(\d+):\s*(error|warning):\s*(.+)$/);
+    if (!match) continue;
+    const file = match[1].replaceAll("\\", "/");
+    return {
+      severity: match[4] === "warning" ? "warning" : "error",
+      file: normalizedFallback && file.endsWith(basename(normalizedFallback)) ? fallbackFile : match[1],
+      line: Number(match[2]),
+      column: Number(match[3]),
+      message: match[5]
+    };
+  }
+  return null;
+}
+
 async function readFileView(path: string, root: string): Promise<WorkspaceFileView> {
   const content = await fs.readFile(path, "utf8");
   const includes = [...content.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm)].map((match) => match[1]);
@@ -813,7 +844,7 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
           return await scanHeader(clang, header, root, includeRoots, contentByHeader.get(header) ?? await fs.readFile(header, "utf8"));
         }
         catch (error) {
-          diagnostics.push({ severity: "error", file: header, message: error instanceof Error ? error.message : String(error) });
+          diagnostics.push(diagnosticFromError(header, error));
           return [];
         } finally {
           parsedHeaders += 1;
@@ -829,7 +860,7 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
       const deduplicated = new Map(batches.flat().map((type) => [type.id, type]));
       types = applyMemoryLayouts([...deduplicated.values()].sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName)));
     } catch (error) {
-      diagnostics.push({ severity: "error", message: error instanceof Error ? error.message : String(error) });
+      diagnostics.push(diagnosticFromError(undefined, error));
     }
   }
 
@@ -1274,6 +1305,7 @@ export async function createStruct(input: CreateStructInput): Promise<WorkspaceV
   const nextContent = namespaceMarker?.index !== undefined
     ? `${content.slice(0, namespaceMarker.index)}${insertion}${content.slice(namespaceMarker.index)}`
     : `${content.trimEnd()}\n${insertion}\n`;
+  await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
@@ -1289,6 +1321,7 @@ export async function createEnum(input: CreateEnumInput): Promise<WorkspaceView>
   const nextContent = namespaceMarker?.index !== undefined
     ? `${content.slice(0, namespaceMarker.index)}${insertion}${content.slice(namespaceMarker.index)}`
     : `${content.trimEnd()}\n${insertion}\n`;
+  await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
@@ -1422,6 +1455,7 @@ export async function addField(input: AddFieldInput): Promise<WorkspaceView> {
   const body = match[2].trimEnd();
   const nextBody = `${body}\n  ${fieldDeclaration(fieldType, fieldName)}`;
   const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
+  await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
@@ -1463,7 +1497,9 @@ export async function updateField(input: UpdateFieldInput): Promise<WorkspaceVie
   void workspace;
   const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "  ";
   lines[lineIndex] = `${indent}${fieldDeclaration(fieldType, fieldName)}`;
-  await atomicWriteFile(header, lines.join("\n"));
+  const nextContent = lines.join("\n");
+  await validateHeaderContent(root, header, nextContent);
+  await atomicWriteFile(header, nextContent);
   return scanWorkspace(root);
 }
 

@@ -1493,7 +1493,14 @@ function App(): React.JSX.Element {
           onNoteChange={updateNoteDraft}
           onOpenContextMenu={openContextMenu}
         />}
-        {workspace && centerViewMode === "workspace" && selectedFile && <SourceViewer file={selectedFile} loading={loading} onSaveContent={saveHeaderContent} onEditHeader={() => openStructuredAction("edit-header")} onOpenContextMenu={openContextMenu} />}
+        {workspace && centerViewMode === "workspace" && selectedFile && <SourceViewer
+          file={selectedFile}
+          diagnostics={workspace.diagnostics.filter((diagnostic) => diagnostic.file && normalizePath(diagnostic.file) === normalizePath(selectedFile.path))}
+          loading={loading}
+          onSaveContent={saveHeaderContent}
+          onEditHeader={() => openStructuredAction("edit-header")}
+          onOpenContextMenu={openContextMenu}
+        />}
         {workspace && centerViewMode === "workspace" && !selectedType && !selectedFile && <div className="scan-empty">已发现 {workspace.files.length} 个 Header，但尚未解析到协议类型。</div>}
         {workspace && contextMenu && <ContextMenu
           menu={contextMenu}
@@ -3333,8 +3340,13 @@ function relativeDisplayPath(root: string, file: string): string {
   return normalizedFile.startsWith(`${normalizedRoot}/`) ? normalizedFile.slice(normalizedRoot.length + 1) : normalizedFile;
 }
 
-function SourceViewer({ file, loading, onSaveContent, onEditHeader, onOpenContextMenu }: {
+function normalizePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+function SourceViewer({ file, diagnostics, loading, onSaveContent, onEditHeader, onOpenContextMenu }: {
   file: WorkspaceView["files"][number];
+  diagnostics: WorkspaceView["diagnostics"];
   loading: boolean;
   onSaveContent(file: WorkspaceFileView, content: string): Promise<boolean>;
   onEditHeader(): void;
@@ -3352,16 +3364,25 @@ function SourceViewer({ file, loading, onSaveContent, onEditHeader, onOpenContex
   }
 
   return <div className="source-viewer" onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file })}>
-    <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖</p></div><div className="editor-actions"><span className={dirty ? "status dirty" : "status"}>{dirty ? "源码未保存" : "源码已同步"}</span><button className="inline-action" disabled={loading || !dirty} onClick={() => void save()}>保存源码</button><button className="inline-action" onClick={onEditHeader}>Header 操作</button></div></div>
-    <CppSourceEditor value={draftContent} onChange={setDraftContent} />
+    <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖 · {diagnostics.length} 个源码问题</p></div><div className="editor-actions"><span className={dirty ? "status dirty" : diagnostics.length > 0 ? "status error" : "status"}>{dirty ? "源码未保存" : diagnostics.length > 0 ? "源码需修复" : "源码已同步"}</span><button className="inline-action" disabled={loading || !dirty} onClick={() => void save()}>保存源码</button><button className="inline-action" onClick={onEditHeader}>Header 操作</button></div></div>
+    <CppSourceEditor value={draftContent} diagnostics={diagnostics} onChange={setDraftContent} />
+    {diagnostics.length > 0 && <div className="source-diagnostics" role="region" aria-label="源码诊断">
+      {diagnostics.map((diagnostic, index) => <button key={index} type="button">
+        <strong>{diagnostic.severity.toUpperCase()}</strong>
+        <span>{diagnostic.line ? `${diagnostic.line}:${diagnostic.column ?? 1}` : "—"}</span>
+        <small>{diagnostic.message.split(/\r?\n/).find((line) => /(?:error|warning):/.test(line)) ?? diagnostic.message}</small>
+      </button>)}
+    </div>}
   </div>;
 }
 
-function CppSourceEditor({ value, onChange }: {
+function CppSourceEditor({ value, diagnostics, onChange }: {
   value: string;
+  diagnostics: WorkspaceView["diagnostics"];
   onChange(value: string): void;
 }): React.JSX.Element {
   const highlightRef = React.useRef<HTMLPreElement>(null);
+  const diagnosticLines = React.useMemo(() => new Set(diagnostics.map((diagnostic) => diagnostic.line).filter((line): line is number => typeof line === "number")), [diagnostics]);
 
   function syncScroll(event: React.UIEvent<HTMLTextAreaElement>): void {
     const target = event.currentTarget;
@@ -3371,7 +3392,7 @@ function CppSourceEditor({ value, onChange }: {
   }
 
   return <div className="source-editor-shell">
-    <pre className="source-highlight" aria-hidden="true" ref={highlightRef}><code>{highlightCpp(value)}</code></pre>
+    <pre className="source-highlight" aria-hidden="true" ref={highlightRef}><code>{highlightCppLines(value, diagnosticLines)}</code></pre>
     <textarea
       className="source-editor source-editor-input"
       aria-label="Header 源码"
@@ -3412,6 +3433,17 @@ function highlightCpp(source: string): React.ReactNode[] {
   }
   if (cursor < source.length) nodes.push(source.slice(cursor));
   return nodes;
+}
+
+function highlightCppLines(source: string, diagnosticLines: Set<number>): React.ReactNode[] {
+  const lines = source.split("\n");
+  return lines.map((line, index) => {
+    const lineNumber = index + 1;
+    const className = diagnosticLines.has(lineNumber) ? "source-line source-line-error" : "source-line";
+    return <span className={className} data-line={lineNumber} key={lineNumber}>
+      {line ? highlightCpp(line) : "\u200B"}
+    </span>;
+  });
 }
 
 function cppTokenClass(token: string): string | null {

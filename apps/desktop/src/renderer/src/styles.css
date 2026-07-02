@@ -121,6 +121,7 @@ input, select, textarea { font: inherit; color: var(--text-normal); }
 .editor-actions { display: flex; align-items: center; gap: 8px; }
 .status { padding: 6px 10px; border: 1px solid #315a41; border-radius: 12px; color: #73c590; font-size: 11px; }
 .status.dirty { border-color: color-mix(in srgb, var(--interactive-accent) 60%, #315a41); color: var(--text-accent-hover); }
+.status.error { border-color: color-mix(in srgb, var(--color-red) 70%, #315a41); color: var(--color-red); }
 .table-scroll { max-width: 100%; overflow: auto; border-radius: var(--radius-m); }
 table { width: 100%; min-width: 720px; border-collapse: collapse; background: #191b21cc; font-size: 13px; }
 th, td { padding: 12px 15px; border-bottom: 1px solid #2b2e36; text-align: left; }
@@ -190,6 +191,13 @@ code { color: #e4bc70; font-family: "Cascadia Code", monospace; }
 .cpp-string { color: #a31515; }
 .cpp-preprocessor { color: #800080; }
 .cpp-number { color: #098658; }
+.source-line { display: block; min-height: 1.65em; }
+.source-line-error { background: color-mix(in srgb, #ff0000 10%, transparent); text-decoration-line: underline; text-decoration-style: wavy; text-decoration-color: #c42b1c; text-decoration-thickness: 1.5px; }
+.source-diagnostics { display: grid; gap: 7px; margin-top: 12px; }
+.source-diagnostics button { display: grid; grid-template-columns: 72px 54px minmax(0, 1fr); align-items: start; gap: 8px; width: 100%; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--color-red) 45%, var(--background-modifier-border)); border-radius: var(--radius-m); background: color-mix(in srgb, var(--color-red) 8%, var(--background-primary)); color: var(--text-normal); text-align: left; }
+.source-diagnostics strong { color: var(--color-red); font-size: 10px; letter-spacing: .08em; }
+.source-diagnostics span { color: var(--text-accent-hover); font-family: var(--font-monospace); font-size: 11px; }
+.source-diagnostics small { overflow: hidden; color: var(--text-muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .scan-empty { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 80px; color: #8f95a2; }
 .problems { margin-top: 48px; border-top: 1px solid #292c34; padding-top: 18px; }
 .ok { color: #70bb89; font-size: 12px; }

@@ -79,8 +79,16 @@ export interface WorkspaceView {
   directories: WorkspaceDirectoryView[];
   files: WorkspaceFileView[];
   types: WorkspaceTypeView[];
-  diagnostics: Array<{ severity: "error" | "warning"; message: string; file?: string }>;
+  diagnostics: WorkspaceDiagnostic[];
   scanner: string;
+}
+
+export interface WorkspaceDiagnostic {
+  severity: "error" | "warning";
+  message: string;
+  file?: string;
+  line?: number;
+  column?: number;
 }
 
 export interface WorkspaceScanProgress {
