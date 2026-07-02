@@ -231,6 +231,14 @@ function enumValueDeclaration(valueName: string, value?: number): string {
   return `${valueName}${value === undefined ? "" : ` = ${value}`},`;
 }
 
+function nextEnumValue(type: WorkspaceTypeView): number {
+  const numericValues = type.values
+    .map((value) => value.value)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (numericValues.length === 0) return 0;
+  return Math.max(...numericValues) + 1;
+}
+
 function ensureEnumBodyTrailingComma(body: string): string {
   const lines = body.trimEnd().split(/\r?\n/);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -1550,7 +1558,8 @@ export async function addEnumValue(input: AddEnumValueInput): Promise<WorkspaceV
   const match = pattern.exec(content);
   if (!match) throw new Error(`无法在 Header 中定位 enum ${targetType.name} 的受控编辑区域。`);
   const body = ensureEnumBodyTrailingComma(match[2]);
-  const nextBody = `${body}\n  ${enumValueDeclaration(valueName, input.value)}`;
+  const explicitValue = input.value ?? nextEnumValue(targetType);
+  const nextBody = `${body}\n  ${enumValueDeclaration(valueName, explicitValue)}`;
   const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
   await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);

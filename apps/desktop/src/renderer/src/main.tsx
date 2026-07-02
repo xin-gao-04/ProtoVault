@@ -300,7 +300,7 @@ function App(): React.JSX.Element {
     }
     if (action === "add-enum-value") {
       setEnumValueName("Unknown");
-      setEnumValueNumber("");
+      setEnumValueNumber(selectedType?.kind === "enum" ? nextEnumValueNumber(selectedType) : "0");
       setEditingEnumValueId(null);
     }
     setActiveAction(action);
@@ -808,6 +808,13 @@ function App(): React.JSX.Element {
     const parsed = Number(trimmed);
     if (!Number.isInteger(parsed)) throw new Error("枚举值必须是整数，或留空使用自动编号");
     return parsed;
+  }
+
+  function nextEnumValueNumber(type: WorkspaceTypeView): string {
+    const values = type.values
+      .map((value) => value.value)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    return String(values.length === 0 ? 0 : Math.max(...values) + 1);
   }
 
   async function addEnumValueFromForm(): Promise<void> {
@@ -1527,7 +1534,7 @@ function App(): React.JSX.Element {
           onAddEnumValue={(type) => runContextAction(() => {
             openTypeTab(type);
             setEnumValueName("Unknown");
-            setEnumValueNumber("");
+            setEnumValueNumber(nextEnumValueNumber(type));
             setEditingEnumValueId(null);
             setActiveAction("add-enum-value");
           })}
@@ -2361,7 +2368,14 @@ function ProtocolEditor({
     setAddingEnumValue(true);
     setEditingEnumValueId(null);
     setDraftEnumValueName(`Value${type.values.length + 1}`);
-    setDraftEnumValueNumber("");
+    setDraftEnumValueNumber(nextInlineEnumValueNumber(type));
+  }
+
+  function nextInlineEnumValueNumber(enumType: WorkspaceTypeView): string {
+    const values = enumType.values
+      .map((value) => value.value)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    return String(values.length === 0 ? 0 : Math.max(...values) + 1);
   }
 
   function beginEditEnumValue(value: WorkspaceEnumValueView): void {

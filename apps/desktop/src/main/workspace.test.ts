@@ -476,13 +476,13 @@ enum class QualityLevel : std::uint8_t {
 
       const updated = await readFile(resolve(root, "headers", "quality.hpp"), "utf8");
       expect(updated).toContain("High = 3,");
-      expect(updated).toContain("VeryHigh,");
+      expect(updated).toContain("VeryHigh = 4,");
       expect(workspace.diagnostics).toEqual([]);
-      expect(workspace.types.find((type) => type.qualifiedName === "demo::QualityLevel")?.values.map((value) => value.name)).toEqual([
-        "Low",
-        "Medium",
-        "High",
-        "VeryHigh"
+      expect(workspace.types.find((type) => type.qualifiedName === "demo::QualityLevel")?.values.map((value) => [value.name, value.value])).toEqual([
+        ["Low", 1],
+        ["Medium", 2],
+        ["High", 3],
+        ["VeryHigh", 4]
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
