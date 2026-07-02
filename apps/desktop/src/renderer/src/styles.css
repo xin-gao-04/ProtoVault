@@ -271,6 +271,9 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .risk-dot.warning { border: 1px solid #e5ad55; background: transparent; }
 .risk-dot.critical { border: 1px solid #e6524b; background: transparent; }
 .producer-dot { background: #56bcaa; }
+.edge-dot { width: 18px !important; height: 3px !important; border-radius: 999px !important; transform: translateY(-2px); }
+.edge-dot.outgoing { background: #56bcaa; }
+.edge-dot.incoming { background: #e5ad55; }
 .graph-node-shortcuts { flex: 0 0 auto; display: flex; gap: 6px; max-width: 100%; overflow-x: auto; padding: 10px 22px 16px; background: #070b10; scrollbar-gutter: stable; }
 .graph-node-shortcuts button { flex: 0 0 auto; max-width: 180px; overflow: hidden; padding: 5px 8px; border: 1px solid rgba(114, 129, 151, .2); border-radius: 999px; background: rgba(16, 20, 28, .74); color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .graph-node-shortcuts button:hover { border-color: rgba(229, 173, 85, .5); color: #eef4ff; background: rgba(47, 34, 24, .8); }

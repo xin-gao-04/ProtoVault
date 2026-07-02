@@ -3067,7 +3067,8 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
       {graphMode === "data-flow" && <span><i className="producer-dot" /> 生产/消费节点</span>}
       <span><i className="risk-dot warning" /> 布局/质量关注</span>
       <span><i className="risk-dot critical" /> 高风险</span>
-      <span>箭头表示字段类型引用</span>
+      <span><i className="edge-dot outgoing" /> 选中节点向外引用/包含</span>
+      <span><i className="edge-dot incoming" /> 其他节点指向当前节点</span>
     </div>
     <div className="graph-node-shortcuts" aria-label="图谱节点索引">
       {graph.nodes
@@ -3410,15 +3411,21 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
     const sourceRelevance = graphNodeRelevance(source, options);
     const targetRelevance = graphNodeRelevance(target, options);
     const edgeRelevance = Math.min(sourceRelevance, targetRelevance);
-    const alpha = edge.kind === "flow" ? 0.72 : edge.kind === "references" ? 0.58 : 0.25;
+    const edgeFocus = graphEdgeFocus(edge, options.focusNodeId);
+    const alpha = edgeFocus === "none"
+      ? edge.kind === "flow" ? 0.72 : edge.kind === "references" ? 0.58 : 0.25
+      : 0.9;
+    const stroke = graphEdgeStroke(edge, edgeFocus, alpha * edgeRelevance);
+    const widthScale = edgeFocus === "none" ? 1 : 1.85;
     context.beginPath();
     context.moveTo(source.screenX, source.screenY);
     context.lineTo(target.screenX, target.screenY);
-    context.strokeStyle = edge.kind === "flow"
-      ? `rgba(86, 188, 170, ${alpha * edgeRelevance})`
-      : edge.kind === "references" ? `rgba(172, 78, 74, ${alpha * edgeRelevance})` : `rgba(104, 122, 151, ${alpha * edgeRelevance})`;
-    context.lineWidth = (edge.kind === "flow" ? 1.7 : edge.kind === "references" ? 1.25 : 0.8) * (edgeRelevance > 0.9 ? 1.35 : 1);
+    context.strokeStyle = stroke;
+    context.lineWidth = (edge.kind === "flow" ? 1.7 : edge.kind === "references" ? 1.25 : 0.8) * (edgeRelevance > 0.9 ? 1.35 : 1) * widthScale;
     context.stroke();
+    if (edge.kind !== "contains" || edgeFocus !== "none") {
+      drawGraphArrow(context, source.screenX, source.screenY, target.screenX, target.screenY, target.screenRadius + 3, stroke, 7 + context.lineWidth);
+    }
   }
 
   for (const item of projected) {
@@ -3452,11 +3459,11 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
       context.strokeStyle = selected ? "#e5ad55" : "#a8c4ec";
       context.stroke();
     }
-    if (node.metrics.diagnosticCount > 0 || node.metrics.metadataMissingCount > 0) {
+    if (node.metrics.diagnosticCount > 0 || node.metrics.layoutRisk === "critical") {
       const badgeText = node.metrics.diagnosticCount > 0 ? String(node.metrics.diagnosticCount) : "!";
       context.beginPath();
       context.arc(item.x + item.radius * 0.72, item.y - item.radius * 0.72, Math.max(4, item.radius * 0.42), 0, Math.PI * 2);
-      context.fillStyle = node.metrics.diagnosticCount > 0 ? "#e6524b" : "#e5ad55";
+      context.fillStyle = node.metrics.diagnosticCount > 0 ? "#e6524b" : "#d46a58";
       context.fill();
       context.fillStyle = "#071016";
       context.font = `${Math.max(7, item.radius * 0.55)}px Segoe UI, sans-serif`;
@@ -3493,6 +3500,45 @@ function graphNodeRelevance(node: GraphSimNode, options: {
   if (depth === 1) return 0.95;
   if (depth === 2) return 0.45;
   return 0.12;
+}
+
+function graphEdgeFocus(edge: GraphSimEdge, focusNodeId: string | null): "outgoing" | "incoming" | "none" {
+  if (!focusNodeId) return "none";
+  if (edge.from === focusNodeId) return "outgoing";
+  if (edge.to === focusNodeId) return "incoming";
+  return "none";
+}
+
+function graphEdgeStroke(edge: GraphSimEdge, focus: "outgoing" | "incoming" | "none", alpha: number): string {
+  if (focus === "outgoing") return `rgba(86, 188, 170, ${alpha})`;
+  if (focus === "incoming") return `rgba(229, 173, 85, ${alpha})`;
+  if (edge.kind === "flow") return `rgba(86, 188, 170, ${alpha})`;
+  if (edge.kind === "references") return `rgba(172, 78, 74, ${alpha})`;
+  return `rgba(104, 122, 151, ${alpha})`;
+}
+
+function drawGraphArrow(
+  context: CanvasRenderingContext2D,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  targetInset: number,
+  color: string,
+  size: number
+): void {
+  const angle = Math.atan2(toY - fromY, toX - fromX);
+  const tipX = toX - Math.cos(angle) * targetInset;
+  const tipY = toY - Math.sin(angle) * targetInset;
+  context.save();
+  context.beginPath();
+  context.moveTo(tipX, tipY);
+  context.lineTo(tipX - Math.cos(angle - Math.PI / 6) * size, tipY - Math.sin(angle - Math.PI / 6) * size);
+  context.lineTo(tipX - Math.cos(angle + Math.PI / 6) * size, tipY - Math.sin(angle + Math.PI / 6) * size);
+  context.closePath();
+  context.fillStyle = color;
+  context.fill();
+  context.restore();
 }
 
 function drawGraphBackdrop(context: CanvasRenderingContext2D, width: number, height: number, time: number): void {
