@@ -179,6 +179,9 @@ function App(): React.JSX.Element {
   const [treeSearchQuery, setTreeSearchQuery] = React.useState("");
   const [navigatorWidth, setNavigatorWidth] = React.useState(340);
   const [inspectorWidth, setInspectorWidth] = React.useState(260);
+  const [navigatorCollapsed, setNavigatorCollapsed] = React.useState(false);
+  const [inspectorCollapsed, setInspectorCollapsed] = React.useState(false);
+  const [toolbarCollapsed, setToolbarCollapsed] = React.useState(false);
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [scanProgress, setScanProgress] = React.useState<WorkspaceScanProgress | null>(null);
@@ -1479,9 +1482,32 @@ function App(): React.JSX.Element {
 
   return (
     <main
-      className="shell"
-      style={{ gridTemplateColumns: `56px ${navigatorWidth}px 6px minmax(420px, 1fr) 6px ${inspectorWidth}px` }}
+      className={[
+        "shell",
+        navigatorCollapsed ? "navigator-collapsed" : "",
+        inspectorCollapsed ? "inspector-collapsed" : "",
+        toolbarCollapsed ? "toolbar-collapsed" : ""
+      ].filter(Boolean).join(" ")}
+      style={{ gridTemplateColumns: `56px ${navigatorCollapsed ? 0 : navigatorWidth}px ${navigatorCollapsed ? 0 : 6}px minmax(420px, 1fr) ${inspectorCollapsed ? 0 : 6}px ${inspectorCollapsed ? 0 : inspectorWidth}px` }}
     >
+      <button
+        className="pane-toggle pane-toggle-left"
+        style={{ left: navigatorCollapsed ? 56 : 56 + navigatorWidth + 6 }}
+        aria-label={navigatorCollapsed ? "展开左侧树图" : "隐藏左侧树图"}
+        title={navigatorCollapsed ? "展开左侧树图" : "隐藏左侧树图"}
+        onClick={() => setNavigatorCollapsed((value) => !value)}
+      >
+        {navigatorCollapsed ? "›" : "‹"}
+      </button>
+      <button
+        className="pane-toggle pane-toggle-right"
+        style={{ right: inspectorCollapsed ? 0 : inspectorWidth + 6 }}
+        aria-label={inspectorCollapsed ? "展开右侧属性栏" : "隐藏右侧属性栏"}
+        title={inspectorCollapsed ? "展开右侧属性栏" : "隐藏右侧属性栏"}
+        onClick={() => setInspectorCollapsed((value) => !value)}
+      >
+        {inspectorCollapsed ? "‹" : "›"}
+      </button>
       <aside className="rail">
         <div className="mark">PV</div>
         <button className={centerViewMode === "workspace" ? "active" : ""} aria-label="协议工作区" title="协议工作区" onClick={() => setCenterViewMode("workspace")}>◇</button>
@@ -1553,9 +1579,20 @@ function App(): React.JSX.Element {
           </div>
         </div>
       </aside>
-      <div className="resize-handle" role="separator" aria-label="调整左侧树栏宽度" onPointerDown={(event) => startResize("navigator", event)} />
+      <div
+        className={navigatorCollapsed ? "resize-handle collapsed" : "resize-handle"}
+        role="separator"
+        aria-label="调整左侧树栏宽度"
+        onPointerDown={(event) => { if (!navigatorCollapsed) startResize("navigator", event); }}
+      />
       <section className="workspace">
-        <header className="workspace-toolbar">
+        {toolbarCollapsed && <button
+          className="toolbar-restore"
+          aria-label="展开顶部工作栏"
+          title="展开顶部工作栏"
+          onClick={() => setToolbarCollapsed(false)}
+        >⌄</button>}
+        {!toolbarCollapsed && <header className="workspace-toolbar">
           <div className="workspace-context">
             <span>{selectedFile?.relativePath ?? selectedType?.qualifiedName ?? "欢迎"}</span>
             <small>{workspace ? `${workspace.name} · ${workspace.files.length} Headers · ${workspace.types.length} Types` : "尚未打开协议工作区"}</small>
@@ -1569,8 +1606,9 @@ function App(): React.JSX.Element {
             </>}
             {uiNotice && <small className="notice" role="status">{uiNotice}</small>}
             <small className="health">{health}</small>
+            <button className="inline-action icon-only" aria-label="隐藏顶部工作栏" title="隐藏顶部工作栏" onClick={() => setToolbarCollapsed(true)}>⌃</button>
           </div>
-        </header>
+        </header>}
         {(loading || scanProgress?.phase === "done") && scanProgress && <ScanProgressBar progress={scanProgress} active={loading} />}
         {!workspace && <article>
           <p className="eyebrow">PROTO VAULT · MVP</p>
@@ -1708,7 +1746,12 @@ function App(): React.JSX.Element {
           onDeleteEnumValue={(type, value) => runContextAction(() => { void deleteEnumValueWithConfirm(type, value); })}
         />}
       </section>
-      <div className="resize-handle" role="separator" aria-label="调整属性栏宽度" onPointerDown={(event) => startResize("inspector", event)} />
+      <div
+        className={inspectorCollapsed ? "resize-handle collapsed" : "resize-handle"}
+        role="separator"
+        aria-label="调整属性栏宽度"
+        onPointerDown={(event) => { if (!inspectorCollapsed) startResize("inspector", event); }}
+      />
       <aside className="inspector">
         <div className="inspector-header">
           <h2>{centerViewMode === "graph" ? "图谱上下文" : "属性"}</h2>
