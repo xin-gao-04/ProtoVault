@@ -27,6 +27,7 @@ type FieldTypeOption = { group: "workspace" | "base"; value: string; label: stri
 type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; savedFieldName: string; savedFieldType: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
+type DirtyDataFlowEdit = { producers: string[]; consumers: string[] };
 type CenterViewMode = "workspace" | "graph";
 type WorkspaceReportState =
   | { kind: "lint"; report: WorkspaceLintReport }
@@ -110,6 +111,7 @@ function App(): React.JSX.Element {
   const [editingEnumValueId, setEditingEnumValueId] = React.useState<string | null>(null);
   const [dirtyNotes, setDirtyNotes] = React.useState<Record<string, string>>({});
   const [dirtyStructuralEdits, setDirtyStructuralEdits] = React.useState<Record<string, DirtyStructuralEdit>>({});
+  const [dirtyDataFlows, setDirtyDataFlows] = React.useState<Record<string, DirtyDataFlowEdit>>({});
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
   const [previewTab, setPreviewTab] = React.useState<WorkspaceTab | null>(null);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
@@ -128,8 +130,8 @@ function App(): React.JSX.Element {
         ? { id: selectedType.id, label: `${selectedType.kind === "struct" ? "Struct" : "Enum"} ${selectedType.qualifiedName}`, note: selectedType.note ?? "" }
         : null;
   const dirtyTabIds = React.useMemo(
-    () => workspace ? buildDirtyTabIds(workspace, dirtyNotes, dirtyStructuralEdits) : new Set<string>(),
-    [workspace, dirtyNotes, dirtyStructuralEdits]
+    () => workspace ? buildDirtyTabIds(workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows) : new Set<string>(),
+    [workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows]
   );
   const selectedFieldTypeOptions = React.useMemo(
     () => workspace && selectedType ? buildFieldTypeOptions(workspace, selectedType) : buildBaseFieldTypeOptions(),
@@ -951,6 +953,17 @@ function App(): React.JSX.Element {
     });
   }
 
+  function updateDataFlowDraft(type: WorkspaceTypeView, producers: string[], consumers: string[]): void {
+    const savedProducers = type.dataFlow?.producers ?? [];
+    const savedConsumers = type.dataFlow?.consumers ?? [];
+    setDirtyDataFlows((current) => {
+      const next = { ...current };
+      if (stringArrayEquals(producers, savedProducers) && stringArrayEquals(consumers, savedConsumers)) delete next[type.id];
+      else next[type.id] = { producers, consumers };
+      return next;
+    });
+  }
+
   async function saveNote(): Promise<void> {
     if (!workspace || !selectedNoteTarget) return;
     await saveNoteTarget(selectedNoteTarget.id);
@@ -980,6 +993,11 @@ function App(): React.JSX.Element {
     await runWorkspaceAction(async () => {
       const result = await window.protoVault.updateDataFlow({ workspaceRoot: workspace.rootPath, typeId: type.id, producers, consumers });
       setWorkspace(result);
+      setDirtyDataFlows((current) => {
+        const next = { ...current };
+        delete next[type.id];
+        return next;
+      });
       setUiNotice("数据流标签已保存到 .protocol/meta/metadata.json");
     });
   }
@@ -1067,6 +1085,11 @@ function App(): React.JSX.Element {
       await saveNoteTarget(selectedNoteTarget.id);
       return;
     }
+    if (selectedType && dirtyDataFlows[selectedType.id]) {
+      const edit = dirtyDataFlows[selectedType.id];
+      await updateDataFlowForType(selectedType, edit.producers, edit.consumers);
+      return;
+    }
     if (selectedType) {
       const memberIds = new Set([...selectedType.fields.map((field) => field.id), ...selectedType.values.map((value) => value.id), selectedType.id]);
       const structuralTarget = Object.keys(dirtyStructuralEdits).find((id) => memberIds.has(id));
@@ -1077,6 +1100,11 @@ function App(): React.JSX.Element {
       const noteTarget = Object.keys(dirtyNotes).find((id) => memberIds.has(id));
       if (noteTarget) {
         await saveNoteTarget(noteTarget);
+        return;
+      }
+      const dataFlowTarget = dirtyDataFlows[selectedType.id];
+      if (dataFlowTarget) {
+        await updateDataFlowForType(selectedType, dataFlowTarget.producers, dataFlowTarget.consumers);
         return;
       }
     }
@@ -1158,7 +1186,14 @@ function App(): React.JSX.Element {
     syncActionForTypeSelection(type, memberId);
   }
 
-  function activateTab(tab: WorkspaceTab): void {
+  function activeTabHasDirtyChanges(nextTabId?: string): boolean {
+    return !!activeTabId && activeTabId !== nextTabId && dirtyTabIds.has(activeTabId);
+  }
+
+  async function activateTab(tab: WorkspaceTab): Promise<void> {
+    if (activeTabHasDirtyChanges(tab.id) && window.confirm("当前标签页存在未保存改动，是否先保存再切换？")) {
+      await saveActiveChanges();
+    }
     activateDocumentTab(tab);
   }
 
@@ -1214,6 +1249,7 @@ function App(): React.JSX.Element {
       const ids = new Set([type.id, ...type.fields.map((field) => field.id), ...type.values.map((value) => value.id)]);
       setDirtyNotes((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
       setDirtyStructuralEdits((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
+      setDirtyDataFlows((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== type.id)));
     }
   }
 
@@ -1498,11 +1534,21 @@ function App(): React.JSX.Element {
           workspace={workspace}
           graph={graphContext}
           selectedNode={selectedGraphNode}
+          dirtyDataFlows={dirtyDataFlows}
           onOpenNode={openGraphNode}
           onSelectNode={selectGraphNode}
+          onDataFlowDraftChange={updateDataFlowDraft}
           onUpdateDataFlow={(type, producers, consumers) => void updateDataFlowForType(type, producers, consumers)}
         />
-          : selectedType ? <ProtocolInspector type={selectedType} layout={selectedLayout} selectedField={selectedField} selectedEnumValue={selectedEnumValue} onUpdateDataFlow={(type, producers, consumers) => void updateDataFlowForType(type, producers, consumers)} />
+          : selectedType ? <ProtocolInspector
+              type={selectedType}
+              layout={selectedLayout}
+              selectedField={selectedField}
+              selectedEnumValue={selectedEnumValue}
+              dirtyDataFlows={dirtyDataFlows}
+              onDataFlowDraftChange={updateDataFlowDraft}
+              onUpdateDataFlow={(type, producers, consumers) => void updateDataFlowForType(type, producers, consumers)}
+            />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
         {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
@@ -1717,8 +1763,13 @@ function tabForType(type: WorkspaceTypeView): WorkspaceTab {
   return { id: `type:${type.id}`, kind: "type", title: type.name, typeId: type.id };
 }
 
-function buildDirtyTabIds(workspace: WorkspaceView, dirtyNotes: Record<string, string>, dirtyStructuralEdits: Record<string, DirtyStructuralEdit>): Set<string> {
-  const dirtyIds = new Set([...Object.keys(dirtyNotes), ...Object.keys(dirtyStructuralEdits)]);
+function buildDirtyTabIds(
+  workspace: WorkspaceView,
+  dirtyNotes: Record<string, string>,
+  dirtyStructuralEdits: Record<string, DirtyStructuralEdit>,
+  dirtyDataFlows: Record<string, DirtyDataFlowEdit>
+): Set<string> {
+  const dirtyIds = new Set([...Object.keys(dirtyNotes), ...Object.keys(dirtyStructuralEdits), ...Object.keys(dirtyDataFlows)]);
   const tabIds = new Set<string>();
   for (const type of workspace.types) {
     if (
@@ -1774,7 +1825,7 @@ function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onCl
   previewTab: WorkspaceTab | null;
   activeTabId: string | null;
   dirtyTabIds: Set<string>;
-  onActivate(tab: WorkspaceTab): void;
+  onActivate(tab: WorkspaceTab): void | Promise<void>;
   onClose(tabId: string): void;
 }): React.JSX.Element | null {
   const visiblePreview = previewTab && !tabs.some((tab) => tab.id === previewTab.id) ? previewTab : null;
@@ -1783,7 +1834,7 @@ function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onCl
     {tabs.map((tab) => {
       const dirty = dirtyTabIds.has(tab.id);
       return <div className={`${tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"}${dirty ? " dirty" : ""}`} key={tab.id}>
-      <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}${dirty ? " 未保存" : ""}`} onClick={() => onActivate(tab)}>
+      <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}${dirty ? " 未保存" : ""}`} onClick={() => { void onActivate(tab); }}>
         <span className={tab.kind === "file" ? "tab-kind file" : "tab-kind type"}>{tab.kind === "file" ? "H" : "S"}</span>
         <span>{tab.title}</span>
         {dirty && <small>●</small>}
@@ -1794,7 +1845,7 @@ function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onCl
     {visiblePreview && (() => {
       const dirty = dirtyTabIds.has(visiblePreview.id);
       return <div className={`${visiblePreview.id === activeTabId ? "workspace-tab preview active" : "workspace-tab preview"}${dirty ? " dirty" : ""}`} key={`preview:${visiblePreview.id}`}>
-      <button className="workspace-tab-main" aria-label={`预览 ${visiblePreview.title}${dirty ? " 未保存" : ""}`} onClick={() => onActivate(visiblePreview)}>
+      <button className="workspace-tab-main" aria-label={`预览 ${visiblePreview.title}${dirty ? " 未保存" : ""}`} onClick={() => { void onActivate(visiblePreview); }}>
         <span className={visiblePreview.kind === "file" ? "tab-kind file" : "tab-kind type"}>{visiblePreview.kind === "file" ? "H" : "S"}</span>
         <span>{visiblePreview.title}</span>
         <small>{dirty ? "●" : "Preview"}</small>
@@ -3437,12 +3488,14 @@ function ContextMenu({
   </div>;
 }
 
-function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNode, onUpdateDataFlow }: {
+function GraphInspector({ workspace, graph, selectedNode, dirtyDataFlows, onOpenNode, onSelectNode, onDataFlowDraftChange, onUpdateDataFlow }: {
   workspace: WorkspaceView;
   graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] };
   selectedNode: ProtocolGraphNode | null;
+  dirtyDataFlows: Record<string, DirtyDataFlowEdit>;
   onOpenNode(node: ProtocolGraphNode): void;
   onSelectNode(node: ProtocolGraphNode): void;
+  onDataFlowDraftChange(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
   onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
 }): React.JSX.Element {
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
@@ -3508,7 +3561,12 @@ function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNo
         <dt>状态</dt><dd>{layout.partial ? "部分解析" : "已完成"}</dd>
       </dl>
     </section>}
-    {selectedTypeForLayout && <DataFlowEditor type={selectedTypeForLayout} onUpdateDataFlow={onUpdateDataFlow} />}
+    {selectedTypeForLayout && <DataFlowEditor
+      type={selectedTypeForLayout}
+      dirtyDataFlow={dirtyDataFlows[selectedTypeForLayout.id]}
+      onDraftChange={onDataFlowDraftChange}
+      onUpdateDataFlow={onUpdateDataFlow}
+    />}
     <section className="property-card">
       <h3>{selectedNode.kind === "file" ? "声明类型" : "影响范围"}</h3>
       {selectedNode.kind === "file"
@@ -3545,42 +3603,55 @@ function GraphNodeList({ nodes, emptyText, onSelectNode, onOpenNode }: {
   </div>;
 }
 
-function DataFlowEditor({ type, onUpdateDataFlow }: {
+function DataFlowEditor({ type, dirtyDataFlow, onDraftChange, onUpdateDataFlow }: {
   type: WorkspaceTypeView;
+  dirtyDataFlow?: DirtyDataFlowEdit;
+  onDraftChange(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
   onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
 }): React.JSX.Element {
   const savedProducers = type.dataFlow?.producers ?? [];
   const savedConsumers = type.dataFlow?.consumers ?? [];
-  const [producerText, setProducerText] = React.useState(savedProducers.join(", "));
-  const [consumerText, setConsumerText] = React.useState(savedConsumers.join(", "));
+  const currentProducers = dirtyDataFlow?.producers ?? savedProducers;
+  const currentConsumers = dirtyDataFlow?.consumers ?? savedConsumers;
+  const [producerText, setProducerText] = React.useState(currentProducers.join(", "));
+  const [consumerText, setConsumerText] = React.useState(currentConsumers.join(", "));
 
   React.useEffect(() => {
-    setProducerText(savedProducers.join(", "));
-    setConsumerText(savedConsumers.join(", "));
-  }, [type.id, savedProducers.join("\u0000"), savedConsumers.join("\u0000")]);
+    setProducerText(currentProducers.join(", "));
+    setConsumerText(currentConsumers.join(", "));
+  }, [type.id, currentProducers.join("\u0000"), currentConsumers.join("\u0000")]);
 
   const producers = parseFlowTags(producerText);
   const consumers = parseFlowTags(consumerText);
-  const dirty = producers.join("\u0000") !== savedProducers.join("\u0000")
-    || consumers.join("\u0000") !== savedConsumers.join("\u0000");
+  const dirty = dirtyDataFlow !== undefined;
   const isBaseData = producers.length === 0 && consumers.length === 0;
+
+  function changeProducers(value: string): void {
+    setProducerText(value);
+    onDraftChange(type, parseFlowTags(value), parseFlowTags(consumerText));
+  }
+
+  function changeConsumers(value: string): void {
+    setConsumerText(value);
+    onDraftChange(type, parseFlowTags(producerText), parseFlowTags(value));
+  }
 
   return <section className="property-card data-flow-editor">
     <h3>数据流标签</h3>
     <p className="readonly-note">{isBaseData ? "生产节点和消费节点均为空，当前按基础数据类型处理。" : "这些标签会在图谱的数据流模式中生成 Producer → Data → Consumer 关系。"}</p>
     <label>
       <span>生产节点</span>
-      <textarea aria-label={`${type.name} 生产节点`} value={producerText} placeholder="例如：RadarDriver, ReplayTool" onChange={(event) => setProducerText(event.target.value)} />
+      <textarea aria-label={`${type.name} 生产节点`} value={producerText} placeholder="例如：RadarDriver, ReplayTool" onChange={(event) => changeProducers(event.target.value)} />
     </label>
     <TagPreview tags={producers} emptyText="无生产节点" />
     <label>
       <span>消费节点</span>
-      <textarea aria-label={`${type.name} 消费节点`} value={consumerText} placeholder="例如：Tracker, Telemetry" onChange={(event) => setConsumerText(event.target.value)} />
+      <textarea aria-label={`${type.name} 消费节点`} value={consumerText} placeholder="例如：Tracker, Telemetry" onChange={(event) => changeConsumers(event.target.value)} />
     </label>
     <TagPreview tags={consumers} emptyText="无消费节点" />
     <div className="graph-inspector-actions">
       <button className="inline-action" disabled={!dirty} onClick={() => onUpdateDataFlow(type, producers, consumers)}>保存数据流</button>
-      <button className="inline-action ghost" disabled={!producerText && !consumerText} onClick={() => { setProducerText(""); setConsumerText(""); }}>清空</button>
+      <button className="inline-action ghost" disabled={!producerText && !consumerText} onClick={() => { setProducerText(""); setConsumerText(""); onDraftChange(type, [], []); }}>清空</button>
     </div>
   </section>;
 }
@@ -3595,11 +3666,17 @@ function parseFlowTags(value: string): string[] {
   return [...new Set(value.split(/[,，;\n\r]+/).map((item) => item.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
-function ProtocolInspector({ type, layout, selectedField, selectedEnumValue, onUpdateDataFlow }: {
+function stringArrayEquals(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function ProtocolInspector({ type, layout, selectedField, selectedEnumValue, dirtyDataFlows, onDataFlowDraftChange, onUpdateDataFlow }: {
   type: WorkspaceTypeView;
   layout: WorkspaceMemoryLayoutView | null;
   selectedField?: WorkspaceFieldView;
   selectedEnumValue?: WorkspaceEnumValueView;
+  dirtyDataFlows: Record<string, DirtyDataFlowEdit>;
+  onDataFlowDraftChange(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
   onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
 }): React.JSX.Element {
   const selectedFieldLayout = selectedField && type.kind === "struct" && layout
@@ -3624,7 +3701,12 @@ function ProtocolInspector({ type, layout, selectedField, selectedEnumValue, onU
       <p className="readonly-note">{readonlyNote || "暂无注释；请在中间 Editor 中编辑。"}</p>
     </section>
 
-    <DataFlowEditor type={type} onUpdateDataFlow={onUpdateDataFlow} />
+    <DataFlowEditor
+      type={type}
+      dirtyDataFlow={dirtyDataFlows[type.id]}
+      onDraftChange={onDataFlowDraftChange}
+      onUpdateDataFlow={onUpdateDataFlow}
+    />
 
     {layout && <section className="property-card">
       <h3>内存布局</h3>

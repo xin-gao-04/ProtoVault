@@ -6,6 +6,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
   const desktopRoot = resolve(import.meta.dirname, "../..");
   const geometryHeader = resolve(desktopRoot, "../../examples/radar-workspace/headers/common/geometry.hpp");
   const originalGeometryHeader = await readFile(geometryHeader, "utf8");
+  const flowProducer = `RadarDriver${Date.now()}`;
   const application = await electron.launch({
     args: ["."],
     cwd: desktopRoot,
@@ -48,12 +49,17 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByText("影响力")).toBeVisible();
     await expect(page.getByText("布局摘要")).toBeVisible();
     await expect(page.getByRole("heading", { name: "数据流标签" })).toBeVisible();
-    await page.getByLabel("Vec3 生产节点").fill("RadarDriver");
+    await graph.getByRole("button", { name: "图谱节点 struct Vec3" }).dblclick();
+    await expect(page.getByRole("button", { name: "切换到 Vec3" })).toBeVisible();
+    await page.getByLabel("Vec3 生产节点").fill(flowProducer);
     await page.getByLabel("Vec3 消费节点").fill("Tracker, Telemetry");
-    await page.getByRole("button", { name: "保存数据流" }).click();
+    await expect(page.getByRole("button", { name: "切换到 Vec3 未保存" })).toBeVisible();
+    await page.keyboard.press("Control+S");
     await expect(page.getByText("数据流标签已保存到 .protocol/meta/metadata.json")).toBeVisible();
+    await expect(page.getByRole("button", { name: "切换到 Vec3", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "关系图谱" }).click();
     await graph.getByRole("button", { name: "数据流" }).click();
-    await expect(graph.getByRole("button", { name: "图谱节点 producer RadarDriver" })).toBeVisible();
+    await expect(graph.getByRole("button", { name: `图谱节点 producer ${flowProducer}` })).toBeVisible();
     await expect(graph.getByRole("button", { name: "图谱节点 consumer Tracker" })).toBeVisible();
     await graph.getByRole("button", { name: "依赖" }).click();
     await expect(page.getByRole("button", { name: "demo::common::Vec3", exact: true })).toBeVisible();
