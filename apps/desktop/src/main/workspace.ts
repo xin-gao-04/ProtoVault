@@ -233,7 +233,7 @@ function ensureEnumBodyTrailingComma(body: string): string {
   const lines = body.trimEnd().split(/\r?\n/);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index] ?? "";
-    if (!line.trim() || NOTE_COMMENT_PATTERN.test(line)) continue;
+    if (!line.trim() || isCommentOnlyLine(line)) continue;
     if (!line.trimEnd().endsWith(",")) {
       lines[index] = `${line.trimEnd()},`;
     }
@@ -242,7 +242,70 @@ function ensureEnumBodyTrailingComma(body: string): string {
   return lines.join("\n");
 }
 
-const NOTE_COMMENT_PATTERN = /^\s*\/\/\/\s*@protovault-note:(?:\s?(.*))?$/;
+const BRIEF_COMMENT_TAG = "@brief";
+const LEGACY_NOTE_COMMENT_TAG = "@protovault-note:";
+const CONTROLLED_LINE_COMMENT_PATTERN = new RegExp(`^\\s*///\\s*(?:${escapeRegExp(BRIEF_COMMENT_TAG)}\\b|${escapeRegExp(LEGACY_NOTE_COMMENT_TAG)})(?:\\s?(.*))?$`);
+
+interface SourceCommentBlock {
+  start: number;
+  end: number;
+  note: string;
+}
+
+function isCommentOnlyLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*") || trimmed.endsWith("*/");
+}
+
+function stripCommentTag(text: string): string {
+  return text
+    .replace(new RegExp(`^\\s*${escapeRegExp(LEGACY_NOTE_COMMENT_TAG)}\\s*`), "")
+    .replace(new RegExp(`^\\s*${escapeRegExp(BRIEF_COMMENT_TAG)}\\b\\s*`), "")
+    .trimEnd();
+}
+
+function lineCommentText(line: string): string | undefined {
+  const match = line.match(/^\s*\/\/\/?!?\s?(.*)$/);
+  return match ? stripCommentTag(match[1] ?? "") : undefined;
+}
+
+function blockCommentText(lines: string[]): string {
+  const raw = lines.join("\n")
+    .replace(/^\s*\/\*!?\*?/, "")
+    .replace(/\*\/\s*$/, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\*\s?/, "").trimEnd());
+  return stripCommentTag(raw.join("\n").trim());
+}
+
+function commentBlockBefore(lines: string[], lineIndex: number): SourceCommentBlock | undefined {
+  if (lineIndex <= 0 || lineIndex > lines.length) return undefined;
+  const previous = lines[lineIndex - 1] ?? "";
+  const lineText = lineCommentText(previous);
+  if (lineText !== undefined) {
+    const collected: string[] = [];
+    let start = lineIndex - 1;
+    for (let index = lineIndex - 1; index >= 0; index -= 1) {
+      const text = lineCommentText(lines[index] ?? "");
+      if (text === undefined) break;
+      collected.unshift(text);
+      start = index;
+    }
+    return { start, end: lineIndex, note: collected.join("\n").trim() };
+  }
+
+  if (previous.trimEnd().endsWith("*/")) {
+    let start = lineIndex - 1;
+    for (let index = lineIndex - 1; index >= 0; index -= 1) {
+      start = index;
+      if ((lines[index] ?? "").includes("/*")) break;
+    }
+    if ((lines[start] ?? "").includes("/*")) {
+      return { start, end: lineIndex, note: blockCommentText(lines.slice(start, lineIndex)) };
+    }
+  }
+  return undefined;
+}
 
 async function atomicWriteFile(targetPath: string, content: string): Promise<void> {
   await fs.mkdir(dirname(targetPath), { recursive: true });
@@ -310,13 +373,7 @@ async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<Record<st
     const lines = await linesFor(file);
     const lineIndex = line - 1;
     if (lineIndex <= 0 || lineIndex > lines.length) return undefined;
-    const noteLines: string[] = [];
-    for (let index = lineIndex - 1; index >= 0; index -= 1) {
-      const match = lines[index]?.match(NOTE_COMMENT_PATTERN);
-      if (!match) break;
-      noteLines.unshift(match[1] ?? "");
-    }
-    const note = noteLines.join("\n").trim();
+    const note = commentBlockBefore(lines, lineIndex)?.note.trim();
     return note || undefined;
   }
 
@@ -1517,14 +1574,12 @@ async function syncNoteToSource(root: string, target: NoteSourceTarget, note: st
   if (lineIndex >= lines.length) throw new Error("注释同步目标行超出 Header 范围。");
 
   const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "";
-  let commentStart = lineIndex;
-  while (commentStart > 0 && NOTE_COMMENT_PATTERN.test(lines[commentStart - 1] ?? "")) {
-    commentStart -= 1;
-  }
+  const existingBlock = commentBlockBefore(lines, lineIndex);
+  const commentStart = existingBlock?.start ?? lineIndex;
   const commentLines = note
-    ? note.split(/\r?\n/).map((line) => `${indent}/// @protovault-note: ${line.trimEnd()}`)
+    ? note.split(/\r?\n/).map((line) => `${indent}/// ${BRIEF_COMMENT_TAG} ${line.trimEnd()}`)
     : [];
-  lines.splice(commentStart, lineIndex - commentStart, ...commentLines);
+  lines.splice(commentStart, (existingBlock?.end ?? lineIndex) - commentStart, ...commentLines);
   await atomicWriteFile(header, lines.join("\n"));
 }
 

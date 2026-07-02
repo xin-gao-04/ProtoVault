@@ -176,8 +176,18 @@ tr.dirty-row { background: color-mix(in srgb, var(--interactive-accent) 8%, tran
 .report-empty { color: var(--text-muted); }
 .report-preview { max-height: 360px; overflow: auto; margin-top: 12px; padding: 14px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary); color: var(--text-muted); white-space: pre-wrap; }
 code { color: #e4bc70; font-family: "Cascadia Code", monospace; }
-.source-editor { width: 100%; min-height: 520px; resize: vertical; overflow: auto; margin: 0; padding: 24px; border: 1px solid #292c34; border-radius: 6px; background: #111319e6; color: #d9dce3; font: 12px/1.65 "Cascadia Code", Consolas, monospace; white-space: pre; tab-size: 2; outline: none; }
-.source-editor:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent); }
+.source-editor-shell { position: relative; width: 100%; min-height: 520px; border: 1px solid #c8c8c8; border-radius: 6px; background: #fff; overflow: hidden; }
+.source-highlight, .source-editor { box-sizing: border-box; width: 100%; min-height: 520px; margin: 0; padding: 24px; font: 12px/1.65 "Cascadia Code", Consolas, monospace; white-space: pre; tab-size: 2; }
+.source-highlight { position: absolute; inset: 0; overflow: hidden; color: #000; pointer-events: none; }
+.source-editor { position: relative; resize: vertical; overflow: auto; border: 0; background: transparent; color: transparent; caret-color: #000; outline: none; }
+.source-editor::selection { background: #add6ff; color: transparent; }
+.source-editor-shell:focus-within { border-color: #007acc; box-shadow: 0 0 0 2px color-mix(in srgb, #007acc 18%, transparent); }
+.cpp-keyword { color: #0000ff; }
+.cpp-type { color: #2b91af; }
+.cpp-comment { color: #008000; }
+.cpp-string { color: #a31515; }
+.cpp-preprocessor { color: #800080; }
+.cpp-number { color: #098658; }
 .scan-empty { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 80px; color: #8f95a2; }
 .problems { margin-top: 48px; border-top: 1px solid #292c34; padding-top: 18px; }
 .ok { color: #70bb89; font-size: 12px; }

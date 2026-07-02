@@ -194,7 +194,8 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "预览 track.hpp", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "打开 Header radar-workspace/headers/radar/track.hpp" }).dblclick();
     await expect(page.getByRole("button", { name: "切换到 track.hpp" })).toBeVisible();
-    await expect(page.getByLabel("Header 源码")).toContainText("struct RadarTrack");
+    await expect(page.getByLabel("Header 源码")).toHaveValue(/struct RadarTrack/);
+    await expect(page.locator(".source-highlight .cpp-keyword", { hasText: "struct" }).first()).toBeVisible();
     await expect(page.getByText("源码已同步")).toBeVisible();
     await expect(page.getByRole("button", { name: "保存源码" })).toBeDisabled();
     await page.getByRole("button", { name: "Header 操作" }).click();
@@ -238,7 +239,14 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(ecefRow.getByLabel("枚举值")).toHaveValue("bad");
     await ecefRow.getByLabel("枚举值").fill("22");
     await expect(tabStrip.getByRole("button", { name: /CoordinateFrame 未保存/ })).toBeVisible();
-    await page.keyboard.press("Escape");
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("未保存");
+      await dialog.accept();
+    });
+    const editorBox = await editor.boundingBox();
+    if (!editorBox) throw new Error("Missing editor box");
+    await page.mouse.click(editorBox.x + 20, editorBox.y + editorBox.height - 20);
+    await expect(page.getByText("已保存枚举项：ECEF")).toBeVisible();
     await expect(ecefRow.getByLabel("枚举值")).toHaveCount(0);
 
     const noteText = `测试坐标系枚举项注释 CtrlS ${Date.now()}`;

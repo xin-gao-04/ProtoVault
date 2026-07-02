@@ -564,10 +564,10 @@ enum class Broken : std::uint8_t {
       expect(Object.values(metadata.notes)).toEqual(expect.arrayContaining(["协议包头结构", "业务侧稳定 ID", "消息类型枚举", "缺省值"]));
 
       const headerContent = await readFile(resolve(root, "headers", "meta.hpp"), "utf8");
-      expect(headerContent).toContain("/// @protovault-note: 协议包头结构");
-      expect(headerContent).toContain("/// @protovault-note: 业务侧稳定 ID");
-      expect(headerContent).toContain("/// @protovault-note: 消息类型枚举");
-      expect(headerContent).toContain("/// @protovault-note: 缺省值");
+      expect(headerContent).toContain("/// @brief 协议包头结构");
+      expect(headerContent).toContain("/// @brief 业务侧稳定 ID");
+      expect(headerContent).toContain("/// @brief 消息类型枚举");
+      expect(headerContent).toContain("/// @brief 缺省值");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -582,13 +582,15 @@ enum class Broken : std::uint8_t {
 
 namespace demo {
 
-/// @protovault-note: 源码结构注释
+/** @brief 源码结构注释 */
 struct Packet {
-  /// @protovault-note: 源码字段注释
+  /// 源码字段注释
   std::uint32_t id;
 };
 
-/// @protovault-note: 源码枚举注释
+/*!
+ * @brief 源码枚举注释
+ */
 enum class PacketState : std::uint8_t {
   /// @protovault-note: 源码枚举项注释
   Ready = 1,
@@ -613,6 +615,13 @@ enum class PacketState : std::uint8_t {
         "源码枚举注释",
         "源码枚举项注释"
       ]));
+
+      const updated = await updateNote({ workspaceRoot: root, targetId: packet.id, note: "更新后的结构说明" });
+      const updatedPacket = updated.types.find((type) => type.qualifiedName === "demo::Packet")!;
+      expect(updatedPacket.note).toBe("更新后的结构说明");
+      const headerContent = await readFile(resolve(root, "headers", "annotated.hpp"), "utf8");
+      expect(headerContent).toContain("/// @brief 更新后的结构说明");
+      expect(headerContent).not.toContain("/** @brief 源码结构注释 */");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

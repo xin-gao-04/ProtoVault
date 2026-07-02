@@ -1339,6 +1339,7 @@ function App(): React.JSX.Element {
           onAddEnumValueInline={addEnumValueInline}
           onFieldDraftChange={updateFieldDraft}
           onEnumValueDraftChange={updateEnumValueDraft}
+          onSaveStructuralEdit={saveStructuralEdit}
           onJumpToType={(target) => openTypeTab(target)}
           onSelectMember={setSelectedMemberId}
           onNoteChange={updateNoteDraft}
@@ -2101,6 +2102,7 @@ function ProtocolEditor({
   onAddEnumValueInline,
   onFieldDraftChange,
   onEnumValueDraftChange,
+  onSaveStructuralEdit,
   onJumpToType,
   onSelectMember,
   onNoteChange,
@@ -2118,6 +2120,7 @@ function ProtocolEditor({
   onAddEnumValueInline(type: WorkspaceTypeView, valueName: string, valueNumber: string): Promise<boolean>;
   onFieldDraftChange(type: WorkspaceTypeView, field: WorkspaceFieldView, fieldType: string, fieldName: string): void;
   onEnumValueDraftChange(type: WorkspaceTypeView, value: WorkspaceEnumValueView, valueName: string, valueNumber: string): void;
+  onSaveStructuralEdit(targetId: string): Promise<boolean>;
   onJumpToType(type: WorkspaceTypeView): void;
   onSelectMember(memberId: string): void;
   onNoteChange(targetId: string, value: string, savedValue: string): void;
@@ -2240,7 +2243,23 @@ function ProtocolEditor({
     || type.fields.some((field) => dirtyNotes[field.id] !== undefined || dirtyStructuralEdits[field.id] !== undefined)
     || type.values.some((value) => dirtyNotes[value.id] !== undefined || dirtyStructuralEdits[value.id] !== undefined);
 
-  return <div className="editor" onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type })}>
+  async function finishRowEditFromBlankClick(event: React.MouseEvent<HTMLDivElement>): Promise<void> {
+    const target = event.target as HTMLElement;
+    if (target.closest("table, button, input, textarea, .field-type-menu, .editor-title, .editor-note-card")) return;
+    const editingId = editingFieldId ?? editingEnumValueId;
+    if (!editingId) return;
+    const dirty = dirtyStructuralEdits[editingId] !== undefined;
+    if (dirty) {
+      const shouldSave = window.confirm("当前行存在未保存的结构化更改，是否立即保存？");
+      if (!shouldSave) return;
+      const ok = await onSaveStructuralEdit(editingId);
+      if (!ok) return;
+    }
+    setEditingFieldId(null);
+    setEditingEnumValueId(null);
+  }
+
+  return <div className="editor" onMouseDown={(event) => { void finishRowEditFromBlankClick(event); }} onContextMenu={(event) => onOpenContextMenu(event, { kind: "type", type })}>
     <div className="editor-title">
       <div><p className="eyebrow">{type.kind}</p><h2>{type.name}</h2><p>{type.qualifiedName}</p></div>
       <div className="editor-actions">
@@ -2253,7 +2272,7 @@ function ProtocolEditor({
     <section className="editor-note-card" aria-label={`${type.name} 注释编辑`}>
       <div>
         <h3>类型注释</h3>
-        <p>注释会同步到 Header 上方的 <code>/// @protovault-note:</code>，并保留到 .protocol 元数据。</p>
+        <p>注释会同步到 Header 上方的 <code>/// @brief</code>，并兼容读取旧 <code>@protovault-note:</code> 与常见 C++ 注释块。</p>
       </div>
       {noteEditor(type, `${type.name} 类型注释`)}
     </section>
@@ -2428,8 +2447,75 @@ function SourceViewer({ file, loading, onSaveContent, onEditHeader, onOpenContex
 
   return <div className="source-viewer" onContextMenu={(event) => onOpenContextMenu(event, { kind: "file", file })}>
     <div className="editor-title"><div><p className="eyebrow">Header Source</p><h2>{file.relativePath.split("/").at(-1)}</h2><p>{file.includes.length} 个 include 依赖</p></div><div className="editor-actions"><span className={dirty ? "status dirty" : "status"}>{dirty ? "源码未保存" : "源码已同步"}</span><button className="inline-action" disabled={loading || !dirty} onClick={() => void save()}>保存源码</button><button className="inline-action" onClick={onEditHeader}>Header 操作</button></div></div>
-    <textarea className="source-editor" aria-label="Header 源码" value={draftContent} spellCheck={false} onChange={(event) => setDraftContent(event.target.value)} />
+    <CppSourceEditor value={draftContent} onChange={setDraftContent} />
   </div>;
+}
+
+function CppSourceEditor({ value, onChange }: {
+  value: string;
+  onChange(value: string): void;
+}): React.JSX.Element {
+  const highlightRef = React.useRef<HTMLPreElement>(null);
+
+  function syncScroll(event: React.UIEvent<HTMLTextAreaElement>): void {
+    const target = event.currentTarget;
+    if (!highlightRef.current) return;
+    highlightRef.current.scrollTop = target.scrollTop;
+    highlightRef.current.scrollLeft = target.scrollLeft;
+  }
+
+  return <div className="source-editor-shell">
+    <pre className="source-highlight" aria-hidden="true" ref={highlightRef}><code>{highlightCpp(value)}</code></pre>
+    <textarea
+      className="source-editor source-editor-input"
+      aria-label="Header 源码"
+      value={value}
+      spellCheck={false}
+      onScroll={syncScroll}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  </div>;
+}
+
+const CPP_KEYWORDS = new Set([
+  "alignas", "alignof", "auto", "break", "case", "class", "const", "constexpr", "continue", "default",
+  "delete", "do", "else", "enum", "explicit", "export", "extern", "false", "for", "friend", "if",
+  "inline", "mutable", "namespace", "new", "noexcept", "nullptr", "operator", "private", "protected",
+  "public", "return", "sizeof", "static", "struct", "switch", "template", "this", "throw", "true",
+  "try", "typedef", "typename", "using", "virtual", "volatile", "while"
+]);
+const CPP_TYPES = new Set([
+  "bool", "char", "char16_t", "char32_t", "double", "float", "int", "long", "short", "signed", "unsigned",
+  "void", "wchar_t", "std", "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t",
+  "int64_t", "uint64_t"
+]);
+
+function highlightCpp(source: string): React.ReactNode[] {
+  const tokenPattern = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|^\s*#\s*[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*|\b\d+(?:\.\d+)?(?:[uUlLfF]+)?\b/gm;
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  let index = 0;
+  for (const match of source.matchAll(tokenPattern)) {
+    const token = match[0];
+    const start = match.index ?? 0;
+    if (start > cursor) nodes.push(source.slice(cursor, start));
+    const className = cppTokenClass(token);
+    nodes.push(className ? <span className={className} key={`tok-${index}`}>{token}</span> : token);
+    cursor = start + token.length;
+    index += 1;
+  }
+  if (cursor < source.length) nodes.push(source.slice(cursor));
+  return nodes;
+}
+
+function cppTokenClass(token: string): string | null {
+  if (token.startsWith("//") || token.startsWith("/*")) return "cpp-comment";
+  if (token.startsWith("\"") || token.startsWith("'")) return "cpp-string";
+  if (/^\s*#/.test(token)) return "cpp-preprocessor";
+  if (/^\d/.test(token)) return "cpp-number";
+  if (CPP_KEYWORDS.has(token)) return "cpp-keyword";
+  if (CPP_TYPES.has(token) || token.endsWith("_t")) return "cpp-type";
+  return null;
 }
 
 function ContextMenu({
