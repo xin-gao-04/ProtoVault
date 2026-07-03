@@ -348,6 +348,50 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .context-menu button:hover:not(:disabled) { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
 .context-menu button:disabled { opacity: .38; }
 
+.network-map-view { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 28px 34px; color: var(--text-normal); }
+.network-hero { display: flex; align-items: stretch; justify-content: space-between; gap: 18px; margin-bottom: 16px; padding: 18px 20px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: color-mix(in srgb, var(--background-secondary) 78%, transparent); }
+.network-hero h2 { margin: 3px 0 7px; font: 500 34px Georgia, serif; }
+.network-hero p { max-width: 720px; margin: 0; color: var(--text-muted); line-height: 1.6; }
+.network-kpis { display: grid; grid-template-columns: repeat(2, minmax(92px, 1fr)); gap: 8px; min-width: 260px; }
+.network-kpis span { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: color-mix(in srgb, var(--background-primary) 82%, transparent); }
+.network-kpis b { color: var(--text-accent-hover); font-size: 18px; }
+.network-kpis small { color: var(--text-faint); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+.network-tabs { display: flex; gap: 6px; margin: 0 0 14px; padding: 4px; border: 1px solid var(--background-modifier-border); border-radius: 999px; background: color-mix(in srgb, var(--background-secondary) 76%, transparent); width: fit-content; }
+.network-tabs button { padding: 7px 13px; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font-size: 12px; }
+.network-tabs button:hover, .network-tabs button.active { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
+.network-grid { display: grid; grid-template-columns: minmax(260px, 360px) minmax(420px, 1fr); gap: 16px; align-items: start; }
+.network-form, .network-table-card, .topology-link-card { border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: color-mix(in srgb, var(--background-secondary) 82%, transparent); box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+.network-form { display: grid; gap: 10px; padding: 15px; }
+.network-form h3, .network-table-card h3 { margin: 0 0 4px; color: var(--text-muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.network-form label { display: grid; gap: 5px; color: var(--text-faint); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.network-form input, .network-form select, .network-form textarea { width: 100%; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-modifier-form-field); color: var(--text-normal); padding: 7px 9px; outline: none; }
+.network-form textarea { min-height: 54px; resize: vertical; line-height: 1.45; }
+.network-form input:focus, .network-form select:focus, .network-form textarea:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 18%, transparent); }
+.network-form .checkbox-row { display: flex; align-items: center; gap: 8px; color: var(--text-muted); text-transform: none; letter-spacing: 0; font-size: 12px; }
+.network-form .checkbox-row input { width: auto; accent-color: var(--interactive-accent); }
+.network-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.network-form-actions button, .network-table button, .topology-bindings button, .link-button { padding: 5px 8px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--interactive-normal); color: var(--text-muted); font-size: 11px; }
+.network-form-actions button:hover:not(:disabled), .network-table button:hover:not(:disabled), .topology-bindings button:hover, .link-button:hover { border-color: var(--interactive-accent); color: var(--text-accent-hover); background: var(--interactive-hover); }
+.network-form-actions button:disabled { opacity: .45; }
+.network-table-card { min-width: 0; padding: 15px; overflow: hidden; }
+.network-table { min-width: 780px; background: transparent; }
+.network-table td { vertical-align: middle; }
+.network-table td:first-child { min-width: 160px; }
+.network-table b, .network-table small { display: block; }
+.network-table small { margin-top: 3px; color: var(--text-faint); font-size: 10px; }
+.network-table td:last-child { display: flex; gap: 6px; }
+.network-table button.danger { border-color: color-mix(in srgb, var(--color-red) 48%, var(--background-modifier-border)); color: var(--color-red); }
+.link-button { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-accent-hover); }
+.network-topology { display: grid; gap: 12px; }
+.topology-link-card { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(220px, 1.2fr) minmax(120px, .7fr); align-items: center; gap: 12px; padding: 14px; }
+.topology-node { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--interactive-accent) 28%, var(--background-modifier-border)); border-radius: var(--radius-m); background: color-mix(in srgb, var(--interactive-accent) 9%, var(--background-primary)); color: var(--text-normal); text-align: center; font-weight: 700; }
+.topology-edge { position: relative; display: grid; justify-items: center; gap: 4px; color: var(--text-muted); }
+.topology-edge i { display: block; width: 100%; height: 2px; border-radius: 999px; background: linear-gradient(90deg, transparent, var(--interactive-accent), transparent); box-shadow: 0 0 14px color-mix(in srgb, var(--interactive-accent) 44%, transparent); }
+.topology-edge span { color: var(--text-normal); font-weight: 700; }
+.topology-edge small { color: var(--text-faint); }
+.topology-bindings { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
+.topology-bindings small { color: var(--text-faint); }
+
 .graph-view { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 0; background: #070b10; }
 .graph-title { z-index: 2; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 54px; padding: 10px 22px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 80%, transparent); background: color-mix(in srgb, var(--background-secondary) 86%, #06090d); }
 .graph-title h2 { margin: 0; font: 700 18px/1.1 var(--font-interface); letter-spacing: .03em; }

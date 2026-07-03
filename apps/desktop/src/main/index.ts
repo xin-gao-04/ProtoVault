@@ -10,17 +10,26 @@ import type {
   CreateSnapshotInput,
   CreateEnumInput,
   CreateHeaderInput,
+  CreateNetworkLinkInput,
+  CreateNetworkNodeInput,
+  CreateProtocolBindingInput,
   CreateStructInput,
   DeleteEnumInput,
   DeleteEnumValueInput,
   DeleteFieldInput,
   DeleteHeaderInput,
+  DeleteNetworkLinkInput,
+  DeleteNetworkNodeInput,
+  DeleteProtocolBindingInput,
   DeleteStructInput,
   DiffProtocolInput,
   GenerateDocumentInput,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
+  UpdateNetworkLinkInput,
+  UpdateNetworkNodeInput,
+  UpdateProtocolBindingInput,
   UpdateDataFlowInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
@@ -34,7 +43,10 @@ import type {
 import {
   addEnumValue,
   addField,
+  createNetworkLink,
+  createNetworkNode,
   createProtocolSnapshot,
+  createProtocolBinding,
   createEnum,
   createHeader,
   createStruct,
@@ -42,6 +54,9 @@ import {
   deleteEnumValue,
   deleteField,
   deleteHeader,
+  deleteNetworkLink,
+  deleteNetworkNode,
+  deleteProtocolBinding,
   deleteStruct,
   diffProtocolSnapshot,
   generateProtocolDocument,
@@ -49,6 +64,9 @@ import {
   renameEnum,
   renameHeader,
   renameStruct,
+  updateNetworkLink,
+  updateNetworkNode,
+  updateProtocolBinding,
   sampleWorkspacePath,
   scanWorkspace,
   updateDataFlow,
@@ -254,6 +272,15 @@ app.whenReady().then(() => {
   ipcMain.handle("protocol:delete-enum-value", (event, input: DeleteEnumValueInput) => runWorkspaceMutation(event.sender, input, deleteEnumValue));
   ipcMain.handle("protocol:update-note", (event, input: UpdateNoteInput) => runWorkspaceMutation(event.sender, input, updateNote));
   ipcMain.handle("protocol:update-data-flow", (event, input: UpdateDataFlowInput) => runWorkspaceMutation(event.sender, input, updateDataFlow));
+  ipcMain.handle("network:create-node", (event, input: CreateNetworkNodeInput) => runWorkspaceMutation(event.sender, input, createNetworkNode));
+  ipcMain.handle("network:update-node", (event, input: UpdateNetworkNodeInput) => runWorkspaceMutation(event.sender, input, updateNetworkNode));
+  ipcMain.handle("network:delete-node", (event, input: DeleteNetworkNodeInput) => runWorkspaceMutation(event.sender, input, deleteNetworkNode));
+  ipcMain.handle("network:create-link", (event, input: CreateNetworkLinkInput) => runWorkspaceMutation(event.sender, input, createNetworkLink));
+  ipcMain.handle("network:update-link", (event, input: UpdateNetworkLinkInput) => runWorkspaceMutation(event.sender, input, updateNetworkLink));
+  ipcMain.handle("network:delete-link", (event, input: DeleteNetworkLinkInput) => runWorkspaceMutation(event.sender, input, deleteNetworkLink));
+  ipcMain.handle("network:create-binding", (event, input: CreateProtocolBindingInput) => runWorkspaceMutation(event.sender, input, createProtocolBinding));
+  ipcMain.handle("network:update-binding", (event, input: UpdateProtocolBindingInput) => runWorkspaceMutation(event.sender, input, updateProtocolBinding));
+  ipcMain.handle("network:delete-binding", (event, input: DeleteProtocolBindingInput) => runWorkspaceMutation(event.sender, input, deleteProtocolBinding));
   ipcMain.handle("protocol:lint", (_event, workspaceRoot: string) => lintWorkspace(workspaceRoot));
   ipcMain.handle("protocol:generate-document", (_event, input: GenerateDocumentInput) => generateProtocolDocument(input));
   ipcMain.handle("protocol:create-snapshot", (_event, input: CreateSnapshotInput) => createProtocolSnapshot(input));

@@ -2,8 +2,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import type {
   GeneratedDocumentReport,
+  NetworkNodeKind,
+  NetworkTransportKind,
+  ProtocolBindingCriticality,
   ProtocolSnapshotSummary,
   SemanticDiffReport,
+  WorkspaceNetworkLinkView,
+  WorkspaceNetworkNodeView,
+  WorkspaceProtocolBindingView,
   WorkspaceEnumValueView,
   WorkspaceExternalChange,
   WorkspaceFieldView,
@@ -30,7 +36,7 @@ type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; fieldInitializer: string; savedFieldName: string; savedFieldType: string; savedFieldInitializer: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
 type DirtyDataFlowEdit = { producers: string[]; consumers: string[] };
-type CenterViewMode = "workspace" | "graph";
+type CenterViewMode = "workspace" | "graph" | "network";
 type WorkspaceReportState =
   | { kind: "lint"; report: WorkspaceLintReport }
   | { kind: "document"; report: GeneratedDocumentReport }
@@ -199,6 +205,12 @@ function App(): React.JSX.Element {
     setTabs((current) => reconcileTabs(current, result));
     setPreviewTab(nextActiveTab);
     setActiveTabId(nextActiveTab?.id ?? null);
+  }, []);
+
+  const replaceWorkspaceResult = React.useCallback((result: WorkspaceView): void => {
+    setWorkspace(result);
+    setExternalChange(null);
+    setTabs((current) => reconcileTabs(current, result));
   }, []);
 
   React.useEffect(() => {
@@ -446,6 +458,15 @@ function App(): React.JSX.Element {
     } else {
       setCenterViewMode("graph");
     }
+  }
+
+  async function openProtocolTypeById(typeId: string): Promise<void> {
+    const type = workspace?.types.find((item) => item.id === typeId);
+    if (!type) {
+      setUiNotice("协议绑定引用的类型暂未在当前工作区扫描结果中找到");
+      return;
+    }
+    if (await openTypeTab(type)) setCenterViewMode("workspace");
   }
 
   async function deleteFieldWithConfirm(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
@@ -1467,6 +1488,7 @@ function App(): React.JSX.Element {
         <div className="mark">PV</div>
         <button className={centerViewMode === "workspace" ? "active" : ""} aria-label="协议工作区" title="协议工作区" onClick={() => setCenterViewMode("workspace")}>◇</button>
         <button className={centerViewMode === "graph" ? "active" : ""} aria-label="关系图谱" title="关系图谱" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("graph"); }}>⌬</button>
+        <button className={centerViewMode === "network" ? "active" : ""} aria-label="网络地图" title="网络地图" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("network"); }}>⇄</button>
         <button aria-label="问题面板">!</button>
       </aside>
       <aside className="navigator">
@@ -1610,6 +1632,13 @@ function App(): React.JSX.Element {
           onOpenNode={openGraphNode}
           onClose={() => setCenterViewMode("workspace")}
         />}
+        {workspace && centerViewMode === "network" && <NetworkMapView
+          workspace={workspace}
+          loading={loading}
+          onWorkspaceChange={replaceWorkspaceResult}
+          onNotice={setUiNotice}
+          onOpenProtocolType={(typeId) => void openProtocolTypeById(typeId)}
+        />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -1740,9 +1769,10 @@ function App(): React.JSX.Element {
       />
       <aside className="inspector">
         <div className="inspector-header">
-          <h2>{centerViewMode === "graph" ? "图谱上下文" : "属性"}</h2>
+          <h2>{centerViewMode === "graph" ? "图谱上下文" : centerViewMode === "network" ? "网络摘要" : "属性"}</h2>
         </div>
-        {centerViewMode === "graph" && workspace && graphContext ? <GraphInspector
+        {centerViewMode === "network" && workspace ? <NetworkInspector workspace={workspace} />
+          : centerViewMode === "graph" && workspace && graphContext ? <GraphInspector
           workspace={workspace}
           graph={graphContext}
           selectedNode={selectedGraphNode}
@@ -2980,6 +3010,469 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
           </div>}
     </>}
   </section>;
+}
+
+const NETWORK_NODE_KIND_OPTIONS: Array<{ value: NetworkNodeKind; label: string }> = [
+  { value: "simulator", label: "仿真主控" },
+  { value: "model", label: "模型节点" },
+  { value: "service", label: "算法服务" },
+  { value: "gateway", label: "网关" },
+  { value: "storage", label: "记录/存储" },
+  { value: "visualization", label: "可视化" },
+  { value: "hardware", label: "硬件设备" },
+  { value: "external", label: "外部系统" },
+  { value: "other", label: "其他" }
+];
+
+const NETWORK_TRANSPORT_OPTIONS: Array<{ value: NetworkTransportKind; label: string }> = [
+  { value: "udp", label: "UDP" },
+  { value: "tcp", label: "TCP" },
+  { value: "dds", label: "DDS" },
+  { value: "shared-memory", label: "共享内存" },
+  { value: "file", label: "文件" },
+  { value: "mq", label: "MQ" },
+  { value: "custom", label: "自定义总线" },
+  { value: "manual", label: "抽象链路" }
+];
+
+const PROTOCOL_BINDING_CRITICALITY_OPTIONS: Array<{ value: ProtocolBindingCriticality; label: string }> = [
+  { value: "low", label: "低" },
+  { value: "normal", label: "普通" },
+  { value: "high", label: "高" },
+  { value: "critical", label: "关键" }
+];
+
+type NetworkTabMode = "nodes" | "links" | "bindings" | "topology";
+type NetworkNodeFormState = {
+  name: string;
+  kind: NetworkNodeKind;
+  role: string;
+  subsystem: string;
+  host: string;
+  process: string;
+  hardwareProfile: string;
+  softwareProfile: string;
+  notes: string;
+};
+type NetworkLinkFormState = {
+  name: string;
+  fromNodeId: string;
+  toNodeId: string;
+  transport: NetworkTransportKind;
+  endpoint: string;
+  latencyBudgetMs: string;
+  bandwidthLimitMbps: string;
+  critical: boolean;
+  notes: string;
+};
+type ProtocolBindingFormState = {
+  name: string;
+  linkId: string;
+  typeId: string;
+  dataName: string;
+  frequencyHz: string;
+  batchSize: string;
+  peakMultiplier: string;
+  criticality: ProtocolBindingCriticality;
+  notes: string;
+};
+
+function emptyNodeForm(): NetworkNodeFormState {
+  return {
+    name: "",
+    kind: "model",
+    role: "",
+    subsystem: "",
+    host: "",
+    process: "",
+    hardwareProfile: "",
+    softwareProfile: "",
+    notes: ""
+  };
+}
+
+function emptyLinkForm(workspace: WorkspaceView): NetworkLinkFormState {
+  return {
+    name: "",
+    fromNodeId: workspace.network.nodes[0]?.id ?? "",
+    toNodeId: workspace.network.nodes[1]?.id ?? workspace.network.nodes[0]?.id ?? "",
+    transport: "udp",
+    endpoint: "",
+    latencyBudgetMs: "",
+    bandwidthLimitMbps: "",
+    critical: false,
+    notes: ""
+  };
+}
+
+function emptyBindingForm(workspace: WorkspaceView): ProtocolBindingFormState {
+  return {
+    name: "",
+    linkId: workspace.network.links[0]?.id ?? "",
+    typeId: workspace.types[0]?.id ?? "",
+    dataName: "",
+    frequencyHz: "1",
+    batchSize: "1",
+    peakMultiplier: "1",
+    criticality: "normal",
+    notes: ""
+  };
+}
+
+function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpenProtocolType }: {
+  workspace: WorkspaceView;
+  loading: boolean;
+  onWorkspaceChange: (workspace: WorkspaceView) => void;
+  onNotice: (message: string) => void;
+  onOpenProtocolType: (typeId: string) => void;
+}): React.JSX.Element {
+  const [mode, setMode] = React.useState<NetworkTabMode>("nodes");
+  const [pending, setPending] = React.useState(false);
+  const [editingNodeId, setEditingNodeId] = React.useState<string | null>(null);
+  const [editingLinkId, setEditingLinkId] = React.useState<string | null>(null);
+  const [editingBindingId, setEditingBindingId] = React.useState<string | null>(null);
+  const [nodeForm, setNodeForm] = React.useState<NetworkNodeFormState>(() => emptyNodeForm());
+  const [linkForm, setLinkForm] = React.useState<NetworkLinkFormState>(() => emptyLinkForm(workspace));
+  const [bindingForm, setBindingForm] = React.useState<ProtocolBindingFormState>(() => emptyBindingForm(workspace));
+  const busy = loading || pending;
+
+  React.useEffect(() => {
+    if (!editingLinkId) {
+      setLinkForm((current) => ({
+        ...current,
+        fromNodeId: current.fromNodeId || workspace.network.nodes[0]?.id || "",
+        toNodeId: current.toNodeId || workspace.network.nodes[1]?.id || workspace.network.nodes[0]?.id || ""
+      }));
+    }
+    if (!editingBindingId) {
+      setBindingForm((current) => ({
+        ...current,
+        linkId: current.linkId || workspace.network.links[0]?.id || "",
+        typeId: current.typeId || workspace.types[0]?.id || ""
+      }));
+    }
+  }, [editingBindingId, editingLinkId, workspace.network.links, workspace.network.nodes, workspace.types]);
+
+  async function run(action: () => Promise<WorkspaceView>, message: string): Promise<void> {
+    setPending(true);
+    try {
+      const result = await action();
+      onWorkspaceChange(result);
+      onNotice(message);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  function resetNodeForm(): void {
+    setEditingNodeId(null);
+    setNodeForm(emptyNodeForm());
+  }
+
+  function resetLinkForm(nextWorkspace = workspace): void {
+    setEditingLinkId(null);
+    setLinkForm(emptyLinkForm(nextWorkspace));
+  }
+
+  function resetBindingForm(nextWorkspace = workspace): void {
+    setEditingBindingId(null);
+    setBindingForm(emptyBindingForm(nextWorkspace));
+  }
+
+  function editNode(node: WorkspaceNetworkNodeView): void {
+    setMode("nodes");
+    setEditingNodeId(node.id);
+    setNodeForm({
+      name: node.name,
+      kind: node.kind,
+      role: node.role ?? "",
+      subsystem: node.subsystem ?? "",
+      host: node.host ?? "",
+      process: node.process ?? "",
+      hardwareProfile: node.hardwareProfile ?? "",
+      softwareProfile: node.softwareProfile ?? "",
+      notes: node.notes ?? ""
+    });
+  }
+
+  function editLink(link: WorkspaceNetworkLinkView): void {
+    setMode("links");
+    setEditingLinkId(link.id);
+    setLinkForm({
+      name: link.name,
+      fromNodeId: link.fromNodeId,
+      toNodeId: link.toNodeId,
+      transport: link.transport,
+      endpoint: link.endpoint ?? "",
+      latencyBudgetMs: link.latencyBudgetMs === undefined ? "" : String(link.latencyBudgetMs),
+      bandwidthLimitMbps: link.bandwidthLimitMbps === undefined ? "" : String(link.bandwidthLimitMbps),
+      critical: link.critical,
+      notes: link.notes ?? ""
+    });
+  }
+
+  function editBinding(binding: WorkspaceProtocolBindingView): void {
+    setMode("bindings");
+    setEditingBindingId(binding.id);
+    setBindingForm({
+      name: binding.name,
+      linkId: binding.linkId,
+      typeId: binding.typeId,
+      dataName: binding.dataName ?? "",
+      frequencyHz: String(binding.frequencyHz),
+      batchSize: String(binding.batchSize),
+      peakMultiplier: String(binding.peakMultiplier),
+      criticality: binding.criticality,
+      notes: binding.notes ?? ""
+    });
+  }
+
+  function optionalNumber(value: string): number | undefined {
+    const trimmed = value.trim();
+    return trimmed ? Number(trimmed) : undefined;
+  }
+
+  async function submitNode(event: React.FormEvent): Promise<void> {
+    event.preventDefault();
+    const payload = { workspaceRoot: workspace.rootPath, ...nodeForm };
+    if (editingNodeId) {
+      await run(() => window.protoVault.updateNetworkNode({ ...payload, nodeId: editingNodeId }), `已更新网络节点：${nodeForm.name}`);
+    } else {
+      await run(() => window.protoVault.createNetworkNode(payload), `已创建网络节点：${nodeForm.name}`);
+    }
+    resetNodeForm();
+  }
+
+  async function submitLink(event: React.FormEvent): Promise<void> {
+    event.preventDefault();
+    const payload = {
+      workspaceRoot: workspace.rootPath,
+      name: linkForm.name,
+      fromNodeId: linkForm.fromNodeId,
+      toNodeId: linkForm.toNodeId,
+      transport: linkForm.transport,
+      endpoint: linkForm.endpoint,
+      latencyBudgetMs: optionalNumber(linkForm.latencyBudgetMs),
+      bandwidthLimitMbps: optionalNumber(linkForm.bandwidthLimitMbps),
+      critical: linkForm.critical,
+      notes: linkForm.notes
+    };
+    if (editingLinkId) {
+      await run(() => window.protoVault.updateNetworkLink({ ...payload, linkId: editingLinkId }), `已更新通信链路：${linkForm.name}`);
+    } else {
+      await run(() => window.protoVault.createNetworkLink(payload), `已创建通信链路：${linkForm.name}`);
+    }
+    resetLinkForm();
+  }
+
+  async function submitBinding(event: React.FormEvent): Promise<void> {
+    event.preventDefault();
+    const payload = {
+      workspaceRoot: workspace.rootPath,
+      name: bindingForm.name,
+      linkId: bindingForm.linkId,
+      typeId: bindingForm.typeId,
+      dataName: bindingForm.dataName,
+      frequencyHz: optionalNumber(bindingForm.frequencyHz),
+      batchSize: optionalNumber(bindingForm.batchSize),
+      peakMultiplier: optionalNumber(bindingForm.peakMultiplier),
+      criticality: bindingForm.criticality,
+      notes: bindingForm.notes
+    };
+    if (editingBindingId) {
+      await run(() => window.protoVault.updateProtocolBinding({ ...payload, bindingId: editingBindingId }), `已更新协议绑定：${bindingForm.name}`);
+    } else {
+      await run(() => window.protoVault.createProtocolBinding(payload), `已创建协议绑定：${bindingForm.name}`);
+    }
+    resetBindingForm();
+  }
+
+  async function deleteNode(node: WorkspaceNetworkNodeView): Promise<void> {
+    if (!window.confirm(`确认删除网络节点？\n${node.name}\n关联链路和协议绑定也会被删除。`)) return;
+    await run(() => window.protoVault.deleteNetworkNode({ workspaceRoot: workspace.rootPath, nodeId: node.id }), `已删除网络节点：${node.name}`);
+  }
+
+  async function deleteLink(link: WorkspaceNetworkLinkView): Promise<void> {
+    if (!window.confirm(`确认删除通信链路？\n${link.name}\n链路上的协议绑定也会被删除。`)) return;
+    await run(() => window.protoVault.deleteNetworkLink({ workspaceRoot: workspace.rootPath, linkId: link.id }), `已删除通信链路：${link.name}`);
+  }
+
+  async function deleteBinding(binding: WorkspaceProtocolBindingView): Promise<void> {
+    if (!window.confirm(`确认删除协议绑定？\n${binding.name}`)) return;
+    await run(() => window.protoVault.deleteProtocolBinding({ workspaceRoot: workspace.rootPath, bindingId: binding.id }), `已删除协议绑定：${binding.name}`);
+  }
+
+  const totalBandwidth = workspace.network.links.reduce((sum, link) => sum + link.estimatedBandwidthBps, 0);
+
+  return <section className="network-map-view" aria-label="协议网络地图">
+    <div className="network-hero">
+      <div>
+        <p className="eyebrow">PROTOCOL NETWORK MAP</p>
+        <h2>网络事实层</h2>
+        <p>维护实体节点、通信链路和链路上的协议载荷；业务数据流和性能风险从这些事实中派生。</p>
+      </div>
+      <div className="network-kpis">
+        <span><b>{workspace.network.nodes.length}</b><small>节点</small></span>
+        <span><b>{workspace.network.links.length}</b><small>链路</small></span>
+        <span><b>{workspace.network.bindings.length}</b><small>绑定</small></span>
+        <span><b>{formatBandwidth(totalBandwidth)}</b><small>估算总量</small></span>
+      </div>
+    </div>
+
+    <div className="network-tabs" role="tablist">
+      <button className={mode === "nodes" ? "active" : ""} onClick={() => setMode("nodes")}>节点</button>
+      <button className={mode === "links" ? "active" : ""} onClick={() => setMode("links")}>链路</button>
+      <button className={mode === "bindings" ? "active" : ""} onClick={() => setMode("bindings")}>协议绑定</button>
+      <button className={mode === "topology" ? "active" : ""} onClick={() => setMode("topology")}>拓扑预览</button>
+    </div>
+
+    {mode === "nodes" && <div className="network-grid">
+      <form className="network-form" onSubmit={(event) => void submitNode(event)}>
+        <h3>{editingNodeId ? "编辑节点" : "创建节点"}</h3>
+        <label>名称<input value={nodeForm.name} onChange={(event) => setNodeForm({ ...nodeForm, name: event.target.value })} placeholder="RadarModel" /></label>
+        <label>类型<select value={nodeForm.kind} onChange={(event) => setNodeForm({ ...nodeForm, kind: event.target.value as NetworkNodeKind })}>{NETWORK_NODE_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <label>角色<input value={nodeForm.role} onChange={(event) => setNodeForm({ ...nodeForm, role: event.target.value })} placeholder="生产雷达原始数据" /></label>
+        <label>分系统<input value={nodeForm.subsystem} onChange={(event) => setNodeForm({ ...nodeForm, subsystem: event.target.value })} placeholder="Radar" /></label>
+        <label>主机<input value={nodeForm.host} onChange={(event) => setNodeForm({ ...nodeForm, host: event.target.value })} placeholder="sim-host-01" /></label>
+        <label>进程<input value={nodeForm.process} onChange={(event) => setNodeForm({ ...nodeForm, process: event.target.value })} placeholder="radar_model.exe" /></label>
+        <label>硬件画像<textarea value={nodeForm.hardwareProfile} onChange={(event) => setNodeForm({ ...nodeForm, hardwareProfile: event.target.value })} placeholder="CPU/GPU/网卡/内存…" /></label>
+        <label>软件画像<textarea value={nodeForm.softwareProfile} onChange={(event) => setNodeForm({ ...nodeForm, softwareProfile: event.target.value })} placeholder="运行时/线程/队列/容器…" /></label>
+        <label>备注<textarea value={nodeForm.notes} onChange={(event) => setNodeForm({ ...nodeForm, notes: event.target.value })} /></label>
+        <div className="network-form-actions">
+          <button disabled={busy || !nodeForm.name.trim()}>{editingNodeId ? "保存节点" : "添加节点"}</button>
+          {editingNodeId && <button type="button" onClick={resetNodeForm}>取消编辑</button>}
+        </div>
+      </form>
+      <NetworkTable title="节点列表" emptyText="还没有网络节点。">
+        {workspace.network.nodes.map((node) => <tr key={node.id}>
+          <td><b>{node.name}</b><small>{NETWORK_NODE_KIND_OPTIONS.find((option) => option.value === node.kind)?.label ?? node.kind}</small></td>
+          <td>{node.subsystem || "—"}</td>
+          <td>{node.host || "—"}</td>
+          <td>出 {node.outgoingLinkCount} / 入 {node.incomingLinkCount}</td>
+          <td>{formatBandwidth(node.outgoingBandwidthBps)} / {formatBandwidth(node.incomingBandwidthBps)}</td>
+          <td><button onClick={() => editNode(node)}>编辑</button><button className="danger" onClick={() => void deleteNode(node)}>删除</button></td>
+        </tr>)}
+      </NetworkTable>
+    </div>}
+
+    {mode === "links" && <div className="network-grid">
+      <form className="network-form" onSubmit={(event) => void submitLink(event)}>
+        <h3>{editingLinkId ? "编辑链路" : "创建链路"}</h3>
+        <label>名称<input value={linkForm.name} onChange={(event) => setLinkForm({ ...linkForm, name: event.target.value })} placeholder="Radar DDS Stream" /></label>
+        <label>源节点<select value={linkForm.fromNodeId} onChange={(event) => setLinkForm({ ...linkForm, fromNodeId: event.target.value })}>{workspace.network.nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label>目标节点<select value={linkForm.toNodeId} onChange={(event) => setLinkForm({ ...linkForm, toNodeId: event.target.value })}>{workspace.network.nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label>传输<select value={linkForm.transport} onChange={(event) => setLinkForm({ ...linkForm, transport: event.target.value as NetworkTransportKind })}>{NETWORK_TRANSPORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <label>Endpoint<input value={linkForm.endpoint} onChange={(event) => setLinkForm({ ...linkForm, endpoint: event.target.value })} placeholder="topic / port / queue / file" /></label>
+        <label>延迟预算 ms<input value={linkForm.latencyBudgetMs} onChange={(event) => setLinkForm({ ...linkForm, latencyBudgetMs: event.target.value })} inputMode="decimal" /></label>
+        <label>带宽上限 Mbps<input value={linkForm.bandwidthLimitMbps} onChange={(event) => setLinkForm({ ...linkForm, bandwidthLimitMbps: event.target.value })} inputMode="decimal" /></label>
+        <label className="checkbox-row"><input type="checkbox" checked={linkForm.critical} onChange={(event) => setLinkForm({ ...linkForm, critical: event.target.checked })} /> 关键链路</label>
+        <label>备注<textarea value={linkForm.notes} onChange={(event) => setLinkForm({ ...linkForm, notes: event.target.value })} /></label>
+        <div className="network-form-actions">
+          <button disabled={busy || workspace.network.nodes.length < 2 || !linkForm.name.trim()}>{editingLinkId ? "保存链路" : "添加链路"}</button>
+          {editingLinkId && <button type="button" onClick={() => resetLinkForm()}>取消编辑</button>}
+        </div>
+      </form>
+      <NetworkTable title="链路列表" emptyText="至少创建两个节点后再添加链路。">
+        {workspace.network.links.map((link) => <tr key={link.id}>
+          <td><b>{link.name}</b><small>{NETWORK_TRANSPORT_OPTIONS.find((option) => option.value === link.transport)?.label ?? link.transport}</small></td>
+          <td>{link.fromNodeName ?? link.fromNodeId} → {link.toNodeName ?? link.toNodeId}</td>
+          <td>{link.endpoint || "—"}</td>
+          <td>{link.bindingCount} 个协议</td>
+          <td>{formatBandwidth(link.estimatedBandwidthBps)}</td>
+          <td><button onClick={() => editLink(link)}>编辑</button><button className="danger" onClick={() => void deleteLink(link)}>删除</button></td>
+        </tr>)}
+      </NetworkTable>
+    </div>}
+
+    {mode === "bindings" && <div className="network-grid">
+      <form className="network-form" onSubmit={(event) => void submitBinding(event)}>
+        <h3>{editingBindingId ? "编辑协议绑定" : "创建协议绑定"}</h3>
+        <label>名称<input value={bindingForm.name} onChange={(event) => setBindingForm({ ...bindingForm, name: event.target.value })} placeholder="RadarFrame@50Hz" /></label>
+        <label>链路<select value={bindingForm.linkId} onChange={(event) => setBindingForm({ ...bindingForm, linkId: event.target.value })}>{workspace.network.links.map((link) => <option key={link.id} value={link.id}>{link.name}</option>)}</select></label>
+        <label>协议类型<select value={bindingForm.typeId} onChange={(event) => setBindingForm({ ...bindingForm, typeId: event.target.value })}>{workspace.types.map((type) => <option key={type.id} value={type.id}>{type.qualifiedName}</option>)}</select></label>
+        <label>业务数据名<input value={bindingForm.dataName} onChange={(event) => setBindingForm({ ...bindingForm, dataName: event.target.value })} placeholder="detections" /></label>
+        <label>频率 Hz<input value={bindingForm.frequencyHz} onChange={(event) => setBindingForm({ ...bindingForm, frequencyHz: event.target.value })} inputMode="decimal" /></label>
+        <label>批量大小<input value={bindingForm.batchSize} onChange={(event) => setBindingForm({ ...bindingForm, batchSize: event.target.value })} inputMode="numeric" /></label>
+        <label>峰值系数<input value={bindingForm.peakMultiplier} onChange={(event) => setBindingForm({ ...bindingForm, peakMultiplier: event.target.value })} inputMode="decimal" /></label>
+        <label>关键等级<select value={bindingForm.criticality} onChange={(event) => setBindingForm({ ...bindingForm, criticality: event.target.value as ProtocolBindingCriticality })}>{PROTOCOL_BINDING_CRITICALITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+        <label>备注<textarea value={bindingForm.notes} onChange={(event) => setBindingForm({ ...bindingForm, notes: event.target.value })} /></label>
+        <div className="network-form-actions">
+          <button disabled={busy || workspace.network.links.length === 0 || workspace.types.length === 0 || !bindingForm.name.trim()}>{editingBindingId ? "保存绑定" : "添加绑定"}</button>
+          {editingBindingId && <button type="button" onClick={() => resetBindingForm()}>取消编辑</button>}
+        </div>
+      </form>
+      <NetworkTable title="协议绑定列表" emptyText="创建链路后，把协议类型绑定到链路上。">
+        {workspace.network.bindings.map((binding) => <tr key={binding.id}>
+          <td><b>{binding.name}</b><small>{binding.dataName || "未命名业务数据"}</small></td>
+          <td>{binding.linkName ?? binding.linkId}</td>
+          <td><button className="link-button" onDoubleClick={() => onOpenProtocolType(binding.typeId)} onClick={() => onOpenProtocolType(binding.typeId)}>{binding.protocolName ?? binding.typeId}</button></td>
+          <td>{binding.payloadSize === undefined ? "未知" : formatBytes(binding.payloadSize)} · {binding.frequencyHz} Hz</td>
+          <td>{formatBandwidth(binding.estimatedBandwidthBps)}</td>
+          <td><button onClick={() => editBinding(binding)}>编辑</button><button className="danger" onClick={() => void deleteBinding(binding)}>删除</button></td>
+        </tr>)}
+      </NetworkTable>
+    </div>}
+
+    {mode === "topology" && <div className="network-topology">
+      {workspace.network.links.length === 0 ? <p className="scan-empty">还没有通信链路，先创建节点和链路。</p> : workspace.network.links.map((link) => {
+        const bindings = workspace.network.bindings.filter((binding) => binding.linkId === link.id);
+        return <div className="topology-link-card" key={link.id} onDoubleClick={() => editLink(link)}>
+          <div className="topology-node">{link.fromNodeName ?? link.fromNodeId}</div>
+          <div className="topology-edge">
+            <span>{link.name}</span>
+            <small>{NETWORK_TRANSPORT_OPTIONS.find((option) => option.value === link.transport)?.label ?? link.transport} · {formatBandwidth(link.estimatedBandwidthBps)}</small>
+            <i />
+          </div>
+          <div className="topology-node">{link.toNodeName ?? link.toNodeId}</div>
+          <div className="topology-bindings">
+            {bindings.length === 0 ? <small>暂无协议绑定</small> : bindings.map((binding) => <button key={binding.id} onClick={() => editBinding(binding)}>{binding.protocolName ?? binding.name} · {formatBandwidth(binding.estimatedBandwidthBps)}</button>)}
+          </div>
+        </div>;
+      })}
+    </div>}
+  </section>;
+}
+
+function NetworkTable({ title, emptyText, children }: { title: string; emptyText: string; children: React.ReactNode }): React.JSX.Element {
+  const rows = React.Children.toArray(children);
+  return <div className="network-table-card">
+    <h3>{title}</h3>
+    {rows.length === 0 ? <p className="scan-empty">{emptyText}</p> : <table className="network-table"><tbody>{children}</tbody></table>}
+  </div>;
+}
+
+function NetworkInspector({ workspace }: { workspace: WorkspaceView }): React.JSX.Element {
+  const totalBandwidth = workspace.network.links.reduce((sum, link) => sum + link.estimatedBandwidthBps, 0);
+  const busiestLink = [...workspace.network.links].sort((a, b) => b.estimatedBandwidthBps - a.estimatedBandwidthBps)[0];
+  const busiestNode = [...workspace.network.nodes].sort((a, b) => (b.incomingBandwidthBps + b.outgoingBandwidthBps) - (a.incomingBandwidthBps + a.outgoingBandwidthBps))[0];
+  return <div>
+    <dl>
+      <dt>网络节点</dt><dd>{workspace.network.nodes.length}</dd>
+      <dt>通信链路</dt><dd>{workspace.network.links.length}</dd>
+      <dt>协议绑定</dt><dd>{workspace.network.bindings.length}</dd>
+      <dt>估算总量</dt><dd>{formatBandwidth(totalBandwidth)}</dd>
+    </dl>
+    <section className="property-card">
+      <h3>当前建模原则</h3>
+      <p>节点和链路是事实，协议绑定是载荷，业务数据流是派生视图。</p>
+    </section>
+    <section className="property-card">
+      <h3>最高链路</h3>
+      {busiestLink ? <p>{busiestLink.name}<br /><small>{formatBandwidth(busiestLink.estimatedBandwidthBps)}</small></p> : <p className="ok">暂无链路</p>}
+    </section>
+    <section className="property-card">
+      <h3>最高节点</h3>
+      {busiestNode ? <p>{busiestNode.name}<br /><small>出 {formatBandwidth(busiestNode.outgoingBandwidthBps)} / 入 {formatBandwidth(busiestNode.incomingBandwidthBps)}</small></p> : <p className="ok">暂无节点</p>}
+    </section>
+  </div>;
+}
+
+function formatBandwidth(value: number): string {
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB/s`;
+  if (value >= 1024) return `${(value / 1024).toFixed(2)} KB/s`;
+  return `${Math.round(value)} B/s`;
 }
 
 function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThemeId, onSelectNode, onOpenNode, onClose }: {

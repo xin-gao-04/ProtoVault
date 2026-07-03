@@ -8,7 +8,10 @@ import type { WorkspaceTypeView } from "../shared/workspace";
 import {
   addEnumValue,
   addField,
+  createNetworkLink,
+  createNetworkNode,
   createProtocolSnapshot,
+  createProtocolBinding,
   createEnum,
   createHeader,
   createStruct,
@@ -16,6 +19,9 @@ import {
   deleteEnumValue,
   deleteField,
   deleteHeader,
+  deleteNetworkLink,
+  deleteNetworkNode,
+  deleteProtocolBinding,
   deleteStruct,
   diffProtocolSnapshot,
   generateProtocolDocument,
@@ -23,6 +29,9 @@ import {
   renameEnum,
   renameHeader,
   renameStruct,
+  updateNetworkLink,
+  updateNetworkNode,
+  updateProtocolBinding,
   scanWorkspace,
   updateDataFlow,
   updateEnumValue,
@@ -608,6 +617,157 @@ enum class Broken : std::uint8_t {
 
       workspace = await updateDataFlow({ workspaceRoot: root, typeId: frame.id, producers: [], consumers: [] });
       expect(workspace.types.find((type) => type.id === frame.id)?.dataFlow).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("creates, updates, links, and deletes protocol network facts", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-network-"));
+    try {
+      await createHeader({ workspaceRoot: root, relativePath: "headers/network.hpp" });
+      let workspace = await createStruct({
+        workspaceRoot: root,
+        headerPath: resolve(root, "headers", "network.hpp"),
+        structName: "RadarFrame"
+      });
+      const frame = workspace.types.find((type) => type.qualifiedName === "protovault::RadarFrame")!;
+
+      workspace = await createNetworkNode({
+        workspaceRoot: root,
+        name: "RadarModel",
+        kind: "model",
+        subsystem: "Radar",
+        host: "sim-host",
+        process: "radar_model.exe"
+      });
+      workspace = await createNetworkNode({
+        workspaceRoot: root,
+        name: "Tracker",
+        kind: "service",
+        subsystem: "Tracking",
+        host: "track-host"
+      });
+      expect(workspace.network.nodes.map((node) => node.name)).toEqual(["RadarModel", "Tracker"]);
+
+      const radarModel = workspace.network.nodes.find((node) => node.name === "RadarModel")!;
+      const tracker = workspace.network.nodes.find((node) => node.name === "Tracker")!;
+      workspace = await updateNetworkNode({
+        workspaceRoot: root,
+        nodeId: tracker.id,
+        name: "TrackService",
+        kind: "service",
+        role: "目标融合",
+        subsystem: "Tracking",
+        host: "track-host"
+      });
+      const trackService = workspace.network.nodes.find((node) => node.name === "TrackService")!;
+      expect(trackService.role).toBe("目标融合");
+
+      workspace = await createNetworkLink({
+        workspaceRoot: root,
+        name: "Radar UDP Stream",
+        fromNodeId: radarModel.id,
+        toNodeId: trackService.id,
+        transport: "udp",
+        endpoint: "239.10.0.1:5000",
+        latencyBudgetMs: 20,
+        bandwidthLimitMbps: 100,
+        critical: true
+      });
+      const link = workspace.network.links.find((item) => item.name === "Radar UDP Stream")!;
+      expect(link.fromNodeName).toBe("RadarModel");
+      expect(link.toNodeName).toBe("TrackService");
+
+      workspace = await updateNetworkLink({
+        workspaceRoot: root,
+        linkId: link.id,
+        name: "Radar DDS Stream",
+        fromNodeId: radarModel.id,
+        toNodeId: trackService.id,
+        transport: "dds",
+        endpoint: "RadarFrameTopic",
+        latencyBudgetMs: 15,
+        bandwidthLimitMbps: 80,
+        critical: true
+      });
+      const ddsLink = workspace.network.links.find((item) => item.name === "Radar DDS Stream")!;
+      expect(ddsLink.transport).toBe("dds");
+
+      workspace = await createProtocolBinding({
+        workspaceRoot: root,
+        name: "RadarFrame@50Hz",
+        linkId: ddsLink.id,
+        typeId: frame.id,
+        dataName: "detections",
+        frequencyHz: 50,
+        batchSize: 2,
+        peakMultiplier: 1.5,
+        criticality: "high"
+      });
+      const binding = workspace.network.bindings.find((item) => item.name === "RadarFrame@50Hz")!;
+      expect(binding.protocolName).toBe("protovault::RadarFrame");
+      expect(binding.payloadSize).toBe(frame.layout?.size);
+      expect(binding.estimatedBandwidthBps).toBe((frame.layout?.size ?? 0) * 50 * 2 * 1.5);
+      expect(workspace.network.links.find((item) => item.id === ddsLink.id)?.bindingCount).toBe(1);
+      expect(workspace.network.nodes.find((node) => node.id === radarModel.id)?.outgoingBandwidthBps).toBe(binding.estimatedBandwidthBps);
+      expect(workspace.network.nodes.find((node) => node.id === trackService.id)?.incomingBandwidthBps).toBe(binding.estimatedBandwidthBps);
+
+      workspace = await updateProtocolBinding({
+        workspaceRoot: root,
+        bindingId: binding.id,
+        name: "RadarFrame@25Hz",
+        linkId: ddsLink.id,
+        typeId: frame.id,
+        frequencyHz: 25,
+        batchSize: 1,
+        peakMultiplier: 1,
+        criticality: "normal",
+        notes: "降频测试"
+      });
+      const reduced = workspace.network.bindings.find((item) => item.name === "RadarFrame@25Hz")!;
+      expect(reduced.estimatedBandwidthBps).toBe((frame.layout?.size ?? 0) * 25);
+      expect(reduced.notes).toBe("降频测试");
+
+      const stored = JSON.parse(await readFile(resolve(root, ".protocol", "network", "network.json"), "utf8")) as {
+        nodes: unknown[];
+        links: unknown[];
+        bindings: Array<{ protocolName?: string; payloadSize?: number; estimatedBandwidthBps?: number }>;
+      };
+      expect(stored.nodes).toHaveLength(2);
+      expect(stored.links).toHaveLength(1);
+      expect(stored.bindings).toHaveLength(1);
+      expect(stored.bindings[0].protocolName).toBeUndefined();
+      expect(stored.bindings[0].payloadSize).toBeUndefined();
+
+      workspace = await deleteProtocolBinding({ workspaceRoot: root, bindingId: reduced.id });
+      expect(workspace.network.bindings).toHaveLength(0);
+      workspace = await createProtocolBinding({
+        workspaceRoot: root,
+        name: "RadarFrame@10Hz",
+        linkId: ddsLink.id,
+        typeId: frame.id,
+        frequencyHz: 10
+      });
+      expect(workspace.network.bindings).toHaveLength(1);
+      workspace = await deleteNetworkLink({ workspaceRoot: root, linkId: ddsLink.id });
+      expect(workspace.network.links).toHaveLength(0);
+      expect(workspace.network.bindings).toHaveLength(0);
+
+      workspace = await createNetworkLink({
+        workspaceRoot: root,
+        name: "Temp Link",
+        fromNodeId: radarModel.id,
+        toNodeId: trackService.id,
+        transport: "tcp"
+      });
+      const tempLink = workspace.network.links.find((item) => item.name === "Temp Link")!;
+      workspace = await createProtocolBinding({ workspaceRoot: root, name: "Temp Binding", linkId: tempLink.id, typeId: frame.id });
+      expect(workspace.network.bindings).toHaveLength(1);
+      workspace = await deleteNetworkNode({ workspaceRoot: root, nodeId: radarModel.id });
+      expect(workspace.network.nodes.map((node) => node.name)).toEqual(["TrackService"]);
+      expect(workspace.network.links).toHaveLength(0);
+      expect(workspace.network.bindings).toHaveLength(0);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

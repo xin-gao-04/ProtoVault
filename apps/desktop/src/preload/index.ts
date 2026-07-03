@@ -5,11 +5,17 @@ import type {
   CreateSnapshotInput,
   CreateEnumInput,
   CreateHeaderInput,
+  CreateNetworkLinkInput,
+  CreateNetworkNodeInput,
+  CreateProtocolBindingInput,
   CreateStructInput,
   DeleteEnumInput,
   DeleteEnumValueInput,
   DeleteFieldInput,
   DeleteHeaderInput,
+  DeleteNetworkLinkInput,
+  DeleteNetworkNodeInput,
+  DeleteProtocolBindingInput,
   DeleteStructInput,
   DiffProtocolInput,
   GenerateDocumentInput,
@@ -19,6 +25,9 @@ import type {
   RenameStructInput,
   ProtocolSnapshotSummary,
   SemanticDiffReport,
+  UpdateNetworkLinkInput,
+  UpdateNetworkNodeInput,
+  UpdateProtocolBindingInput,
   UpdateDataFlowInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
@@ -58,6 +67,15 @@ export interface ProtoVaultDesktopApi {
   deleteEnumValue(input: DeleteEnumValueInput): Promise<WorkspaceView>;
   updateNote(input: UpdateNoteInput): Promise<WorkspaceView>;
   updateDataFlow(input: UpdateDataFlowInput): Promise<WorkspaceView>;
+  createNetworkNode(input: CreateNetworkNodeInput): Promise<WorkspaceView>;
+  updateNetworkNode(input: UpdateNetworkNodeInput): Promise<WorkspaceView>;
+  deleteNetworkNode(input: DeleteNetworkNodeInput): Promise<WorkspaceView>;
+  createNetworkLink(input: CreateNetworkLinkInput): Promise<WorkspaceView>;
+  updateNetworkLink(input: UpdateNetworkLinkInput): Promise<WorkspaceView>;
+  deleteNetworkLink(input: DeleteNetworkLinkInput): Promise<WorkspaceView>;
+  createProtocolBinding(input: CreateProtocolBindingInput): Promise<WorkspaceView>;
+  updateProtocolBinding(input: UpdateProtocolBindingInput): Promise<WorkspaceView>;
+  deleteProtocolBinding(input: DeleteProtocolBindingInput): Promise<WorkspaceView>;
   lint(workspaceRoot: string): Promise<WorkspaceLintReport>;
   generateDocument(input: GenerateDocumentInput): Promise<GeneratedDocumentReport>;
   createSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary>;
@@ -99,6 +117,15 @@ contextBridge.exposeInMainWorld("protoVault", {
   deleteEnumValue: (input) => ipcRenderer.invoke("protocol:delete-enum-value", input),
   updateNote: (input) => ipcRenderer.invoke("protocol:update-note", input),
   updateDataFlow: (input) => ipcRenderer.invoke("protocol:update-data-flow", input),
+  createNetworkNode: (input) => ipcRenderer.invoke("network:create-node", input),
+  updateNetworkNode: (input) => ipcRenderer.invoke("network:update-node", input),
+  deleteNetworkNode: (input) => ipcRenderer.invoke("network:delete-node", input),
+  createNetworkLink: (input) => ipcRenderer.invoke("network:create-link", input),
+  updateNetworkLink: (input) => ipcRenderer.invoke("network:update-link", input),
+  deleteNetworkLink: (input) => ipcRenderer.invoke("network:delete-link", input),
+  createProtocolBinding: (input) => ipcRenderer.invoke("network:create-binding", input),
+  updateProtocolBinding: (input) => ipcRenderer.invoke("network:update-binding", input),
+  deleteProtocolBinding: (input) => ipcRenderer.invoke("network:delete-binding", input),
   lint: (workspaceRoot) => ipcRenderer.invoke("protocol:lint", workspaceRoot),
   generateDocument: (input) => ipcRenderer.invoke("protocol:generate-document", input),
   createSnapshot: (input) => ipcRenderer.invoke("protocol:create-snapshot", input),

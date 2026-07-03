@@ -177,6 +177,90 @@ export const workspaceDataFlowMetadataSchema = z.object({
   consumers: z.array(z.string())
 });
 
+export const networkNodeKindSchema = z.enum([
+  "simulator",
+  "model",
+  "service",
+  "gateway",
+  "storage",
+  "visualization",
+  "hardware",
+  "external",
+  "other"
+]);
+
+export const networkTransportKindSchema = z.enum(["udp", "tcp", "dds", "shared-memory", "file", "mq", "custom", "manual"]);
+
+export const protocolBindingCriticalitySchema = z.enum(["low", "normal", "high", "critical"]);
+
+export const workspaceNetworkNodeViewSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: networkNodeKindSchema,
+  role: z.string().optional(),
+  subsystem: z.string().optional(),
+  host: z.string().optional(),
+  process: z.string().optional(),
+  hardwareProfile: z.string().optional(),
+  softwareProfile: z.string().optional(),
+  notes: z.string().optional(),
+  outgoingLinkCount: z.number().int().nonnegative(),
+  incomingLinkCount: z.number().int().nonnegative(),
+  outgoingBandwidthBps: z.number().nonnegative(),
+  incomingBandwidthBps: z.number().nonnegative()
+});
+
+export const workspaceNetworkLinkViewSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  fromNodeId: z.string().min(1),
+  toNodeId: z.string().min(1),
+  fromNodeName: z.string().optional(),
+  toNodeName: z.string().optional(),
+  transport: networkTransportKindSchema,
+  endpoint: z.string().optional(),
+  latencyBudgetMs: z.number().nonnegative().optional(),
+  bandwidthLimitMbps: z.number().nonnegative().optional(),
+  critical: z.boolean(),
+  notes: z.string().optional(),
+  bindingCount: z.number().int().nonnegative(),
+  estimatedBandwidthBps: z.number().nonnegative()
+});
+
+export const workspaceProtocolBindingViewSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  linkId: z.string().min(1),
+  linkName: z.string().optional(),
+  typeId: z.string().min(1),
+  protocolName: z.string().optional(),
+  dataName: z.string().optional(),
+  frequencyHz: z.number().nonnegative(),
+  batchSize: z.number().int().positive(),
+  peakMultiplier: z.number().positive(),
+  payloadSize: z.number().int().nonnegative().optional(),
+  estimatedBandwidthBps: z.number().nonnegative(),
+  criticality: protocolBindingCriticalitySchema,
+  notes: z.string().optional()
+});
+
+export const workspaceFlowViewSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  filter: z.string().optional(),
+  source: z.enum(["manual", "derived", "ai"])
+});
+
+export const workspaceNetworkMapViewSchema = z.object({
+  schemaVersion: z.literal(1),
+  nodes: z.array(workspaceNetworkNodeViewSchema),
+  links: z.array(workspaceNetworkLinkViewSchema),
+  bindings: z.array(workspaceProtocolBindingViewSchema),
+  views: z.array(workspaceFlowViewSchema),
+  updatedAt: z.string().datetime().optional()
+});
+
 export const workspaceFieldViewSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -262,6 +346,7 @@ export const workspaceViewSchema = z.object({
   directories: z.array(workspaceDirectoryViewSchema),
   files: z.array(workspaceFileViewSchema),
   types: z.array(workspaceTypeViewSchema),
+  network: workspaceNetworkMapViewSchema,
   diagnostics: z.array(workspaceDiagnosticViewSchema),
   scanner: z.string().min(1)
 });
@@ -278,3 +363,4 @@ export type SemanticChange = z.infer<typeof semanticChangeSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
 export type ServiceRequest = z.infer<typeof serviceRequestSchema>;
 export type WorkspaceViewContract = z.infer<typeof workspaceViewSchema>;
+export type WorkspaceNetworkMapViewContract = z.infer<typeof workspaceNetworkMapViewSchema>;

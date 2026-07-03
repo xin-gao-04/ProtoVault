@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { cpus } from "node:os";
@@ -19,11 +19,17 @@ import type {
   CreateSnapshotInput,
   CreateEnumInput,
   CreateHeaderInput,
+  CreateNetworkLinkInput,
+  CreateNetworkNodeInput,
+  CreateProtocolBindingInput,
   CreateStructInput,
   DeleteEnumInput,
   DeleteEnumValueInput,
   DeleteHeaderInput,
   DeleteFieldInput,
+  DeleteNetworkLinkInput,
+  DeleteNetworkNodeInput,
+  DeleteProtocolBindingInput,
   DeleteStructInput,
   DiffProtocolInput,
   GenerateDocumentInput,
@@ -33,7 +39,13 @@ import type {
   RenameStructInput,
   SemanticChange,
   SemanticDiffReport,
+  NetworkNodeKind,
+  NetworkTransportKind,
   ProtocolSnapshotSummary,
+  ProtocolBindingCriticality,
+  UpdateNetworkLinkInput,
+  UpdateNetworkNodeInput,
+  UpdateProtocolBindingInput,
   UpdateDataFlowInput,
   UpdateEnumValueInput,
   UpdateFieldInput,
@@ -48,6 +60,10 @@ import type {
   WorkspaceLintIssue,
   WorkspaceLintReport,
   WorkspaceMemoryLayoutView,
+  WorkspaceNetworkMapView,
+  WorkspaceNetworkNodeView,
+  WorkspaceNetworkLinkView,
+  WorkspaceProtocolBindingView,
   WorkspaceScanProgress,
   WorkspaceTypeView,
   WorkspaceView
@@ -89,6 +105,21 @@ const BASE_TYPE_SIZE: Record<string, { size: number; alignment: number }> = {
   char: { size: 1, alignment: 1 },
   "std::byte": { size: 1, alignment: 1 }
 };
+
+const NETWORK_NODE_KINDS = new Set<NetworkNodeKind>([
+  "simulator",
+  "model",
+  "service",
+  "gateway",
+  "storage",
+  "visualization",
+  "hardware",
+  "external",
+  "other"
+]);
+
+const NETWORK_TRANSPORT_KINDS = new Set<NetworkTransportKind>(["udp", "tcp", "dds", "shared-memory", "file", "mq", "custom", "manual"]);
+const PROTOCOL_BINDING_CRITICALITIES = new Set<ProtocolBindingCriticality>(["low", "normal", "high", "critical"]);
 
 type SizeInfo = { size: number; alignment: number; supported: true } | { supported: false; reason: string };
 
@@ -476,6 +507,297 @@ function normalizeMetadataDataFlows(value: unknown): Record<string, { producers:
 function normalizeFlowTags(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function networkPath(root: string): string {
+  return join(root, ".protocol", "network", "network.json");
+}
+
+function emptyNetworkMap(updatedAt?: string): WorkspaceNetworkMapView {
+  return {
+    schemaVersion: 1,
+    nodes: [],
+    links: [],
+    bindings: [],
+    views: [],
+    updatedAt
+  };
+}
+
+function cleanOptionalText(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || undefined;
+}
+
+function cleanRequiredText(value: string, label: string): string {
+  const text = value.trim();
+  if (!text) throw new Error(`${label} 不能为空。`);
+  return text;
+}
+
+function normalizePositiveNumber(value: unknown, fallback: number, label: string): number {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) throw new Error(`${label} 必须大于 0。`);
+  return numberValue;
+}
+
+function normalizeNonNegativeNumber(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const numberValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numberValue) || numberValue < 0) throw new Error(`${label} 不能小于 0。`);
+  return numberValue;
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number, label: string): number {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(numberValue) || numberValue <= 0) throw new Error(`${label} 必须是大于 0 的整数。`);
+  return numberValue;
+}
+
+function parseNetworkNodeKind(value: unknown): NetworkNodeKind {
+  return typeof value === "string" && NETWORK_NODE_KINDS.has(value as NetworkNodeKind)
+    ? value as NetworkNodeKind
+    : "other";
+}
+
+function parseNetworkTransport(value: unknown): NetworkTransportKind {
+  return typeof value === "string" && NETWORK_TRANSPORT_KINDS.has(value as NetworkTransportKind)
+    ? value as NetworkTransportKind
+    : "manual";
+}
+
+function parseProtocolBindingCriticality(value: unknown): ProtocolBindingCriticality {
+  return typeof value === "string" && PROTOCOL_BINDING_CRITICALITIES.has(value as ProtocolBindingCriticality)
+    ? value as ProtocolBindingCriticality
+    : "normal";
+}
+
+function createNetworkId(prefix: string): string {
+  return `${prefix}:${randomUUID()}`;
+}
+
+function normalizeNetworkMap(value: unknown): WorkspaceNetworkMapView {
+  if (!value || typeof value !== "object") return emptyNetworkMap();
+  const parsed = value as Partial<WorkspaceNetworkMapView>;
+  const nodes = Array.isArray(parsed.nodes)
+    ? parsed.nodes.flatMap((node): WorkspaceNetworkNodeView[] => {
+        if (!node || typeof node !== "object") return [];
+        const candidate = node as Partial<WorkspaceNetworkNodeView>;
+        const id = cleanOptionalText(candidate.id);
+        const name = cleanOptionalText(candidate.name);
+        if (!id || !name) return [];
+        return [{
+          id,
+          name,
+          kind: parseNetworkNodeKind(candidate.kind),
+          role: cleanOptionalText(candidate.role),
+          subsystem: cleanOptionalText(candidate.subsystem),
+          host: cleanOptionalText(candidate.host),
+          process: cleanOptionalText(candidate.process),
+          hardwareProfile: cleanOptionalText(candidate.hardwareProfile),
+          softwareProfile: cleanOptionalText(candidate.softwareProfile),
+          notes: cleanOptionalText(candidate.notes),
+          outgoingLinkCount: 0,
+          incomingLinkCount: 0,
+          outgoingBandwidthBps: 0,
+          incomingBandwidthBps: 0
+        }];
+      })
+    : [];
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const links = Array.isArray(parsed.links)
+    ? parsed.links.flatMap((link): WorkspaceNetworkLinkView[] => {
+        if (!link || typeof link !== "object") return [];
+        const candidate = link as Partial<WorkspaceNetworkLinkView>;
+        const id = cleanOptionalText(candidate.id);
+        const name = cleanOptionalText(candidate.name);
+        const fromNodeId = cleanOptionalText(candidate.fromNodeId);
+        const toNodeId = cleanOptionalText(candidate.toNodeId);
+        if (!id || !name || !fromNodeId || !toNodeId || !nodeIds.has(fromNodeId) || !nodeIds.has(toNodeId)) return [];
+        return [{
+          id,
+          name,
+          fromNodeId,
+          toNodeId,
+          transport: parseNetworkTransport(candidate.transport),
+          endpoint: cleanOptionalText(candidate.endpoint),
+          latencyBudgetMs: normalizeNonNegativeNumber(candidate.latencyBudgetMs, "延迟预算"),
+          bandwidthLimitMbps: normalizeNonNegativeNumber(candidate.bandwidthLimitMbps, "带宽上限"),
+          critical: Boolean(candidate.critical),
+          notes: cleanOptionalText(candidate.notes),
+          bindingCount: 0,
+          estimatedBandwidthBps: 0
+        }];
+      })
+    : [];
+  const linkIds = new Set(links.map((link) => link.id));
+  const bindings = Array.isArray(parsed.bindings)
+    ? parsed.bindings.flatMap((binding): WorkspaceProtocolBindingView[] => {
+        if (!binding || typeof binding !== "object") return [];
+        const candidate = binding as Partial<WorkspaceProtocolBindingView>;
+        const id = cleanOptionalText(candidate.id);
+        const name = cleanOptionalText(candidate.name);
+        const linkId = cleanOptionalText(candidate.linkId);
+        const typeId = cleanOptionalText(candidate.typeId);
+        if (!id || !name || !linkId || !typeId || !linkIds.has(linkId)) return [];
+        return [{
+          id,
+          name,
+          linkId,
+          typeId,
+          dataName: cleanOptionalText(candidate.dataName),
+          frequencyHz: normalizeNonNegativeNumber(candidate.frequencyHz, "发送频率") ?? 0,
+          batchSize: normalizePositiveInteger(candidate.batchSize ?? 1, 1, "批量大小"),
+          peakMultiplier: normalizePositiveNumber(candidate.peakMultiplier ?? 1, 1, "峰值倍数"),
+          criticality: parseProtocolBindingCriticality(candidate.criticality),
+          notes: cleanOptionalText(candidate.notes),
+          estimatedBandwidthBps: 0
+        }];
+      })
+    : [];
+  const views = Array.isArray(parsed.views)
+    ? parsed.views.flatMap((view): WorkspaceNetworkMapView["views"] => {
+        if (!view || typeof view !== "object") return [];
+        const candidate = view as Partial<WorkspaceNetworkMapView["views"][number]>;
+        const id = cleanOptionalText(candidate.id);
+        const name = cleanOptionalText(candidate.name);
+        if (!id || !name) return [];
+        const source = candidate.source === "derived" || candidate.source === "ai" ? candidate.source : "manual";
+        return [{ id, name, source, description: cleanOptionalText(candidate.description), filter: cleanOptionalText(candidate.filter) }];
+      })
+    : [];
+  return {
+    schemaVersion: 1,
+    nodes,
+    links,
+    bindings,
+    views,
+    updatedAt: cleanOptionalText(parsed.updatedAt)
+  };
+}
+
+async function readNetworkMap(root: string): Promise<WorkspaceNetworkMapView> {
+  try {
+    return normalizeNetworkMap(JSON.parse(await fs.readFile(networkPath(root), "utf8")) as unknown);
+  } catch {
+    return emptyNetworkMap();
+  }
+}
+
+function networkMapForStorage(network: WorkspaceNetworkMapView) {
+  return {
+    schemaVersion: 1,
+    nodes: network.nodes.map((node) => ({
+      id: node.id,
+      name: node.name,
+      kind: node.kind,
+      role: node.role,
+      subsystem: node.subsystem,
+      host: node.host,
+      process: node.process,
+      hardwareProfile: node.hardwareProfile,
+      softwareProfile: node.softwareProfile,
+      notes: node.notes
+    })),
+    links: network.links.map((link) => ({
+      id: link.id,
+      name: link.name,
+      fromNodeId: link.fromNodeId,
+      toNodeId: link.toNodeId,
+      transport: link.transport,
+      endpoint: link.endpoint,
+      latencyBudgetMs: link.latencyBudgetMs,
+      bandwidthLimitMbps: link.bandwidthLimitMbps,
+      critical: link.critical,
+      notes: link.notes
+    })),
+    bindings: network.bindings.map((binding) => ({
+      id: binding.id,
+      name: binding.name,
+      linkId: binding.linkId,
+      typeId: binding.typeId,
+      dataName: binding.dataName,
+      frequencyHz: binding.frequencyHz,
+      batchSize: binding.batchSize,
+      peakMultiplier: binding.peakMultiplier,
+      criticality: binding.criticality,
+      notes: binding.notes
+    })),
+    views: network.views,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function writeNetworkMap(root: string, network: WorkspaceNetworkMapView): Promise<void> {
+  await atomicWriteFile(networkPath(root), `${JSON.stringify(networkMapForStorage(network), null, 2)}\n`);
+}
+
+function protocolPayloadSize(type: WorkspaceTypeView | undefined): number | undefined {
+  if (!type) return undefined;
+  if (type.layout?.size !== undefined) return type.layout.size;
+  if (type.layout?.dataSize !== undefined) return type.layout.dataSize;
+  return undefined;
+}
+
+function enrichNetworkMap(network: WorkspaceNetworkMapView, types: WorkspaceTypeView[]): WorkspaceNetworkMapView {
+  const typeById = new Map(types.map((type) => [type.id, type]));
+  const nodeById = new Map(network.nodes.map((node) => [node.id, node]));
+  const enrichedNodes = network.nodes.map((node) => ({
+    ...node,
+    outgoingLinkCount: 0,
+    incomingLinkCount: 0,
+    outgoingBandwidthBps: 0,
+    incomingBandwidthBps: 0
+  }));
+  const enrichedNodeById = new Map(enrichedNodes.map((node) => [node.id, node]));
+  const enrichedLinks = network.links.map((link) => ({
+    ...link,
+    fromNodeName: nodeById.get(link.fromNodeId)?.name,
+    toNodeName: nodeById.get(link.toNodeId)?.name,
+    bindingCount: 0,
+    estimatedBandwidthBps: 0
+  }));
+  const enrichedLinkById = new Map(enrichedLinks.map((link) => [link.id, link]));
+  const enrichedBindings = network.bindings.map((binding) => {
+    const type = typeById.get(binding.typeId);
+    const payloadSize = protocolPayloadSize(type);
+    const estimatedBandwidthBps = payloadSize === undefined
+      ? 0
+      : payloadSize * binding.frequencyHz * binding.batchSize * binding.peakMultiplier;
+    return {
+      ...binding,
+      protocolName: type?.qualifiedName,
+      linkName: enrichedLinkById.get(binding.linkId)?.name,
+      payloadSize,
+      estimatedBandwidthBps
+    };
+  });
+
+  for (const binding of enrichedBindings) {
+    const link = enrichedLinkById.get(binding.linkId);
+    if (!link) continue;
+    link.bindingCount += 1;
+    link.estimatedBandwidthBps += binding.estimatedBandwidthBps;
+  }
+  for (const link of enrichedLinks) {
+    const source = enrichedNodeById.get(link.fromNodeId);
+    const target = enrichedNodeById.get(link.toNodeId);
+    if (source) {
+      source.outgoingLinkCount += 1;
+      source.outgoingBandwidthBps += link.estimatedBandwidthBps;
+    }
+    if (target) {
+      target.incomingLinkCount += 1;
+      target.incomingBandwidthBps += link.estimatedBandwidthBps;
+    }
+  }
+
+  return {
+    ...network,
+    nodes: enrichedNodes,
+    links: enrichedLinks,
+    bindings: enrichedBindings
+  };
 }
 
 async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<SourceNoteScan> {
@@ -893,7 +1215,10 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
       directories: workspace.directories.length,
       headers: workspace.files.length,
       types: workspace.types.length,
-      diagnostics: workspace.diagnostics.length
+      diagnostics: workspace.diagnostics.length,
+      networkNodes: workspace.network.nodes.length,
+      networkLinks: workspace.network.links.length,
+      protocolBindings: workspace.network.bindings.length
     },
     directories: workspace.directories.map((directory) => ({
       path: directory.relativePath
@@ -909,6 +1234,24 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
       qualifiedName: type.qualifiedName,
       file: relative(workspace.rootPath, type.file).replaceAll("\\", "/")
     })),
+    network: {
+      nodes: workspace.network.nodes.map((node) => ({ id: node.id, name: node.name, kind: node.kind })),
+      links: workspace.network.links.map((link) => ({
+        id: link.id,
+        name: link.name,
+        from: link.fromNodeName ?? link.fromNodeId,
+        to: link.toNodeName ?? link.toNodeId,
+        transport: link.transport,
+        estimatedBandwidthBps: link.estimatedBandwidthBps
+      })),
+      bindings: workspace.network.bindings.map((binding) => ({
+        id: binding.id,
+        name: binding.name,
+        protocolName: binding.protocolName ?? binding.typeId,
+        linkName: binding.linkName ?? binding.linkId,
+        estimatedBandwidthBps: binding.estimatedBandwidthBps
+      }))
+    },
     diagnostics: workspace.diagnostics
   };
 
@@ -978,7 +1321,16 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
     }
   }
 
-  let workspace: WorkspaceView = { name: basename(root), rootPath: root, directories, files, types, diagnostics, scanner };
+  let workspace: WorkspaceView = {
+    name: basename(root),
+    rootPath: root,
+    directories,
+    files,
+    types,
+    network: enrichNetworkMap(await readNetworkMap(root), types),
+    diagnostics,
+    scanner
+  };
   emitProgress(options, { phase: "metadata", message: "正在合并 Header 注释与协议元数据…", current: 0, total: 1 });
   const diskMetadata = await readMetadata(root);
   const sourceNotes = await collectSourceNotes(types);
@@ -1767,6 +2119,156 @@ export async function updateDataFlow(input: UpdateDataFlowInput): Promise<Worksp
     delete metadata.dataFlows[input.typeId];
   }
   await writeMetadata(root, metadata);
+  return scanWorkspace(root);
+}
+
+function networkNodeFromInput(input: CreateNetworkNodeInput | UpdateNetworkNodeInput, id: string): WorkspaceNetworkNodeView {
+  const kind = input.kind;
+  if (!NETWORK_NODE_KINDS.has(kind)) throw new Error("未知的网络节点类型。");
+  return {
+    id,
+    name: cleanRequiredText(input.name, "节点名称"),
+    kind,
+    role: cleanOptionalText(input.role),
+    subsystem: cleanOptionalText(input.subsystem),
+    host: cleanOptionalText(input.host),
+    process: cleanOptionalText(input.process),
+    hardwareProfile: cleanOptionalText(input.hardwareProfile),
+    softwareProfile: cleanOptionalText(input.softwareProfile),
+    notes: cleanOptionalText(input.notes),
+    outgoingLinkCount: 0,
+    incomingLinkCount: 0,
+    outgoingBandwidthBps: 0,
+    incomingBandwidthBps: 0
+  };
+}
+
+function networkLinkFromInput(input: CreateNetworkLinkInput | UpdateNetworkLinkInput, id: string, network: WorkspaceNetworkMapView): WorkspaceNetworkLinkView {
+  const transport = input.transport;
+  if (!NETWORK_TRANSPORT_KINDS.has(transport)) throw new Error("未知的链路传输方式。");
+  if (!network.nodes.some((node) => node.id === input.fromNodeId)) throw new Error("链路源节点不存在。");
+  if (!network.nodes.some((node) => node.id === input.toNodeId)) throw new Error("链路目标节点不存在。");
+  if (input.fromNodeId === input.toNodeId) throw new Error("链路源节点和目标节点不能相同。");
+  return {
+    id,
+    name: cleanRequiredText(input.name, "链路名称"),
+    fromNodeId: input.fromNodeId,
+    toNodeId: input.toNodeId,
+    transport,
+    endpoint: cleanOptionalText(input.endpoint),
+    latencyBudgetMs: normalizeNonNegativeNumber(input.latencyBudgetMs, "延迟预算"),
+    bandwidthLimitMbps: normalizeNonNegativeNumber(input.bandwidthLimitMbps, "带宽上限"),
+    critical: Boolean(input.critical),
+    notes: cleanOptionalText(input.notes),
+    bindingCount: 0,
+    estimatedBandwidthBps: 0
+  };
+}
+
+function protocolBindingFromInput(input: CreateProtocolBindingInput | UpdateProtocolBindingInput, id: string, network: WorkspaceNetworkMapView, workspace: WorkspaceView): WorkspaceProtocolBindingView {
+  const criticality = input.criticality ?? "normal";
+  if (!PROTOCOL_BINDING_CRITICALITIES.has(criticality)) throw new Error("未知的协议绑定关键等级。");
+  if (!network.links.some((link) => link.id === input.linkId)) throw new Error("协议绑定所属链路不存在。");
+  if (!workspace.types.some((type) => type.id === input.typeId)) throw new Error("协议绑定引用的协议类型不存在。");
+  return {
+    id,
+    name: cleanRequiredText(input.name, "协议绑定名称"),
+    linkId: input.linkId,
+    typeId: input.typeId,
+    dataName: cleanOptionalText(input.dataName),
+    frequencyHz: normalizeNonNegativeNumber(input.frequencyHz ?? 0, "发送频率") ?? 0,
+    batchSize: normalizePositiveInteger(input.batchSize ?? 1, 1, "批量大小"),
+    peakMultiplier: normalizePositiveNumber(input.peakMultiplier ?? 1, 1, "峰值倍数"),
+    criticality,
+    notes: cleanOptionalText(input.notes),
+    estimatedBandwidthBps: 0
+  };
+}
+
+export async function createNetworkNode(input: CreateNetworkNodeInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  network.nodes.push(networkNodeFromInput(input, createNetworkId("node")));
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function updateNetworkNode(input: UpdateNetworkNodeInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  const index = network.nodes.findIndex((node) => node.id === input.nodeId);
+  if (index < 0) throw new Error("未找到要更新的网络节点。");
+  network.nodes[index] = networkNodeFromInput(input, input.nodeId);
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function deleteNetworkNode(input: DeleteNetworkNodeInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  if (!network.nodes.some((node) => node.id === input.nodeId)) throw new Error("未找到要删除的网络节点。");
+  const removedLinkIds = new Set(network.links.filter((link) => link.fromNodeId === input.nodeId || link.toNodeId === input.nodeId).map((link) => link.id));
+  network.nodes = network.nodes.filter((node) => node.id !== input.nodeId);
+  network.links = network.links.filter((link) => !removedLinkIds.has(link.id));
+  network.bindings = network.bindings.filter((binding) => !removedLinkIds.has(binding.linkId));
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function createNetworkLink(input: CreateNetworkLinkInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  network.links.push(networkLinkFromInput(input, createNetworkId("link"), network));
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function updateNetworkLink(input: UpdateNetworkLinkInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  const index = network.links.findIndex((link) => link.id === input.linkId);
+  if (index < 0) throw new Error("未找到要更新的网络链路。");
+  network.links[index] = networkLinkFromInput(input, input.linkId, network);
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function deleteNetworkLink(input: DeleteNetworkLinkInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  if (!network.links.some((link) => link.id === input.linkId)) throw new Error("未找到要删除的网络链路。");
+  network.links = network.links.filter((link) => link.id !== input.linkId);
+  network.bindings = network.bindings.filter((binding) => binding.linkId !== input.linkId);
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function createProtocolBinding(input: CreateProtocolBindingInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const network = await readNetworkMap(root);
+  network.bindings.push(protocolBindingFromInput(input, createNetworkId("binding"), network, workspace));
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function updateProtocolBinding(input: UpdateProtocolBindingInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const workspace = await scanWorkspace(root);
+  const network = await readNetworkMap(root);
+  const index = network.bindings.findIndex((binding) => binding.id === input.bindingId);
+  if (index < 0) throw new Error("未找到要更新的协议绑定。");
+  network.bindings[index] = protocolBindingFromInput(input, input.bindingId, network, workspace);
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function deleteProtocolBinding(input: DeleteProtocolBindingInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  if (!network.bindings.some((binding) => binding.id === input.bindingId)) throw new Error("未找到要删除的协议绑定。");
+  network.bindings = network.bindings.filter((binding) => binding.id !== input.bindingId);
+  await writeNetworkMap(root, network);
   return scanWorkspace(root);
 }
 

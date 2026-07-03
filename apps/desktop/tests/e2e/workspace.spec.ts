@@ -1,12 +1,14 @@
 import { _electron as electron, expect, test } from "@playwright/test";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 test("opens the sample workspace and navigates headers and protocol types", async () => {
   const desktopRoot = resolve(import.meta.dirname, "../..");
   const fixtureRoot = resolve(desktopRoot, "../../fixtures");
   const geometryHeader = resolve(fixtureRoot, "radar-workspace/headers/common/geometry.hpp");
+  const networkConfig = resolve(fixtureRoot, ".protocol/network/network.json");
   const originalGeometryHeader = await readFile(geometryHeader, "utf8");
+  const originalNetworkConfig = await readFile(networkConfig, "utf8").catch(() => null);
   const flowProducer = `RadarDriver${Date.now()}`;
   const application = await electron.launch({
     args: ["."],
@@ -20,7 +22,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("heading", { name: "ProtoVault" })).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: "加载示例项目" }).click();
-    await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: "新增枚举" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "新建 Header 文件" })).toBeEnabled();
     await page.getByRole("button", { name: "Lint" }).click();
@@ -35,6 +37,56 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.getByRole("button", { name: "Diff" }).click();
     await expect(page.getByRole("region", { name: "协议报告" })).toContainText("语义 Diff");
     await page.getByRole("button", { name: "关闭报告" }).click();
+    await page.getByRole("button", { name: "网络地图" }).click();
+    const network = page.getByRole("region", { name: "协议网络地图" });
+    await expect(network).toBeVisible();
+    await expect(page.getByRole("heading", { name: "网络摘要" })).toBeVisible();
+    await expect(network.getByRole("heading", { name: "网络事实层" })).toBeVisible();
+
+    await network.getByLabel("名称").fill("E2E RadarModel");
+    await network.getByLabel("类型").selectOption({ label: "模型节点" });
+    await network.getByLabel("主机").fill("sim-host-e2e");
+    await network.getByRole("button", { name: "添加节点" }).click();
+    await expect(page.getByText("已创建网络节点：E2E RadarModel")).toBeVisible();
+    await expect(network.getByRole("row", { name: /E2E RadarModel/ })).toBeVisible();
+
+    await network.getByLabel("名称").fill("E2E TrackService");
+    await network.getByLabel("类型").selectOption({ label: "算法服务" });
+    await network.getByRole("button", { name: "添加节点" }).click();
+    await expect(page.getByText("已创建网络节点：E2E TrackService")).toBeVisible();
+
+    await network.getByRole("button", { name: "链路" }).click();
+    await network.getByLabel("名称").fill("E2E DDS Link");
+    await network.getByLabel("源节点").selectOption({ label: "E2E RadarModel" });
+    await network.getByLabel("目标节点").selectOption({ label: "E2E TrackService" });
+    await network.getByLabel("传输").selectOption({ label: "DDS" });
+    await network.getByLabel("Endpoint").fill("E2E/RadarFrame");
+    await network.getByRole("button", { name: "添加链路" }).click();
+    await expect(page.getByText("已创建通信链路：E2E DDS Link")).toBeVisible();
+    await expect(network.getByRole("row", { name: /E2E DDS Link/ })).toBeVisible();
+
+    await network.getByRole("button", { name: "协议绑定" }).click();
+    await network.getByLabel("名称").fill("E2E RadarTrack@20Hz");
+    await network.getByLabel("链路").selectOption({ label: "E2E DDS Link" });
+    await network.getByLabel("协议类型").selectOption({ label: "demo::radar::RadarTrack" });
+    await network.getByLabel("频率 Hz").fill("20");
+    await network.getByRole("button", { name: "添加绑定" }).click();
+    await expect(page.getByText("已创建协议绑定：E2E RadarTrack@20Hz")).toBeVisible();
+    await expect(network.getByRole("row", { name: /E2E RadarTrack@20Hz/ })).toContainText("demo::radar::RadarTrack");
+    await network.getByRole("button", { name: "demo::radar::RadarTrack" }).click();
+    await expect(page.getByRole("button", { name: "切换到 RadarTrack", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "网络地图" }).click();
+    await network.getByRole("button", { name: "协议绑定" }).click();
+    const bindingRow = network.getByRole("row", { name: /E2E RadarTrack@20Hz/ });
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("确认删除协议绑定");
+      await dialog.accept();
+    });
+    await bindingRow.getByRole("button", { name: "删除" }).click();
+    await expect(page.getByText("已删除协议绑定：E2E RadarTrack@20Hz")).toBeVisible();
+    await network.getByRole("button", { name: "拓扑预览" }).click();
+    await expect(network.getByText("E2E DDS Link")).toBeVisible();
+
     await page.getByRole("button", { name: "关系图谱" }).click();
     const graph = page.getByRole("region", { name: "协议关系图谱" });
     await expect(graph).toBeVisible();
@@ -329,5 +381,10 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
   } finally {
     await application.close();
     await writeFile(geometryHeader, originalGeometryHeader, "utf8");
+    if (originalNetworkConfig === null) {
+      await rm(resolve(fixtureRoot, ".protocol/network"), { recursive: true, force: true });
+    } else {
+      await writeFile(networkConfig, originalNetworkConfig, "utf8");
+    }
   }
 });

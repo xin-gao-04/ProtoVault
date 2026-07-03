@@ -46,6 +46,13 @@ describe("workspace contract", () => {
         fields: [],
         values: []
       }],
+      network: {
+        schemaVersion: 1,
+        nodes: [],
+        links: [],
+        bindings: [],
+        views: []
+      },
       diagnostics: [],
       scanner: "Clang AST"
     };

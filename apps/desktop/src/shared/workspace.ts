@@ -60,6 +60,89 @@ export interface WorkspaceDataFlowMetadata {
   consumers: string[];
 }
 
+export type NetworkNodeKind =
+  | "simulator"
+  | "model"
+  | "service"
+  | "gateway"
+  | "storage"
+  | "visualization"
+  | "hardware"
+  | "external"
+  | "other";
+
+export type NetworkTransportKind = "udp" | "tcp" | "dds" | "shared-memory" | "file" | "mq" | "custom" | "manual";
+
+export type ProtocolBindingCriticality = "low" | "normal" | "high" | "critical";
+
+export interface WorkspaceNetworkNodeView {
+  id: string;
+  name: string;
+  kind: NetworkNodeKind;
+  role?: string;
+  subsystem?: string;
+  host?: string;
+  process?: string;
+  hardwareProfile?: string;
+  softwareProfile?: string;
+  notes?: string;
+  outgoingLinkCount: number;
+  incomingLinkCount: number;
+  outgoingBandwidthBps: number;
+  incomingBandwidthBps: number;
+}
+
+export interface WorkspaceNetworkLinkView {
+  id: string;
+  name: string;
+  fromNodeId: string;
+  toNodeId: string;
+  fromNodeName?: string;
+  toNodeName?: string;
+  transport: NetworkTransportKind;
+  endpoint?: string;
+  latencyBudgetMs?: number;
+  bandwidthLimitMbps?: number;
+  critical: boolean;
+  notes?: string;
+  bindingCount: number;
+  estimatedBandwidthBps: number;
+}
+
+export interface WorkspaceProtocolBindingView {
+  id: string;
+  name: string;
+  linkId: string;
+  linkName?: string;
+  typeId: string;
+  protocolName?: string;
+  dataName?: string;
+  frequencyHz: number;
+  batchSize: number;
+  peakMultiplier: number;
+  payloadSize?: number;
+  estimatedBandwidthBps: number;
+  criticality: ProtocolBindingCriticality;
+  notes?: string;
+}
+
+export interface WorkspaceFlowView {
+  id: string;
+  name: string;
+  description?: string;
+  filter?: string;
+  source: "manual" | "derived" | "ai";
+}
+
+export interface WorkspaceNetworkMapView {
+  schemaVersion: 1;
+  nodes: WorkspaceNetworkNodeView[];
+  links: WorkspaceNetworkLinkView[];
+  bindings: WorkspaceProtocolBindingView[];
+  views: WorkspaceFlowView[];
+  updatedAt?: string;
+}
+
 export interface WorkspaceFileView {
   path: string;
   relativePath: string;
@@ -80,6 +163,7 @@ export interface WorkspaceView {
   directories: WorkspaceDirectoryView[];
   files: WorkspaceFileView[];
   types: WorkspaceTypeView[];
+  network: WorkspaceNetworkMapView;
   diagnostics: WorkspaceDiagnostic[];
   scanner: string;
 }
@@ -225,6 +309,72 @@ export interface UpdateDataFlowInput {
   typeId: string;
   producers: string[];
   consumers: string[];
+}
+
+export interface CreateNetworkNodeInput {
+  workspaceRoot: string;
+  name: string;
+  kind: NetworkNodeKind;
+  role?: string;
+  subsystem?: string;
+  host?: string;
+  process?: string;
+  hardwareProfile?: string;
+  softwareProfile?: string;
+  notes?: string;
+}
+
+export interface UpdateNetworkNodeInput extends CreateNetworkNodeInput {
+  nodeId: string;
+}
+
+export interface DeleteNetworkNodeInput {
+  workspaceRoot: string;
+  nodeId: string;
+}
+
+export interface CreateNetworkLinkInput {
+  workspaceRoot: string;
+  name: string;
+  fromNodeId: string;
+  toNodeId: string;
+  transport: NetworkTransportKind;
+  endpoint?: string;
+  latencyBudgetMs?: number;
+  bandwidthLimitMbps?: number;
+  critical?: boolean;
+  notes?: string;
+}
+
+export interface UpdateNetworkLinkInput extends CreateNetworkLinkInput {
+  linkId: string;
+}
+
+export interface DeleteNetworkLinkInput {
+  workspaceRoot: string;
+  linkId: string;
+}
+
+export interface CreateProtocolBindingInput {
+  workspaceRoot: string;
+  name: string;
+  linkId: string;
+  typeId: string;
+  dataName?: string;
+  frequencyHz?: number;
+  batchSize?: number;
+  peakMultiplier?: number;
+  criticality?: ProtocolBindingCriticality;
+  notes?: string;
+}
+
+export interface UpdateProtocolBindingInput extends CreateProtocolBindingInput {
+  bindingId: string;
+}
+
+export interface DeleteProtocolBindingInput {
+  workspaceRoot: string;
+  bindingId: string;
 }
 
 export interface WorkspaceLintIssue {
