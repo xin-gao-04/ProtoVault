@@ -46,6 +46,7 @@ export interface ProtoVaultDesktopApi {
   openWorkspace(): Promise<WorkspaceView | null>;
   scanWorkspace(workspaceRoot: string): Promise<WorkspaceView>;
   restoreLastWorkspace(): Promise<WorkspaceView | null>;
+  openFileLocation(input: { workspaceRoot: string; filePath: string }): Promise<boolean>;
   onScanProgress(listener: (progress: WorkspaceScanProgress) => void): () => void;
   onExternalChange(listener: (change: WorkspaceExternalChange) => void): () => void;
   createHeader(input: CreateHeaderInput): Promise<WorkspaceView>;
@@ -88,6 +89,7 @@ contextBridge.exposeInMainWorld("protoVault", {
   openWorkspace: () => ipcRenderer.invoke("workspace:open"),
   scanWorkspace: (workspaceRoot) => ipcRenderer.invoke("workspace:scan", workspaceRoot),
   restoreLastWorkspace: () => ipcRenderer.invoke("workspace:restore-last"),
+  openFileLocation: (input) => ipcRenderer.invoke("workspace:open-file-location", input),
   onScanProgress: (listener) => {
     const wrapped = (_event: IpcRendererEvent, progress: WorkspaceScanProgress): void => listener(progress);
     ipcRenderer.on("workspace:scan-progress", wrapped);

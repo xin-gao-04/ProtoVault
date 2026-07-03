@@ -31,6 +31,7 @@ type ProtocolTreeNode =
 
 type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit-header" | "edit-struct" | "edit-enum" | "add-field" | "edit-field" | "add-enum-value" | "edit-enum-value";
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
+type TabContextMenuState = { x: number; y: number; tab: WorkspaceTab; orderedTabs: WorkspaceTab[] };
 type FieldTypeOption = { group: "composite" | "base"; value: string; label: string; detail?: string };
 type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; fieldInitializer: string; savedFieldName: string; savedFieldType: string; savedFieldInitializer: string }
@@ -134,6 +135,7 @@ function App(): React.JSX.Element {
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
   const [previewTab, setPreviewTab] = React.useState<WorkspaceTab | null>(null);
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
+  const [tabContextMenu, setTabContextMenu] = React.useState<TabContextMenuState | null>(null);
   const [contextMenu, setContextMenu] = React.useState<ContextMenuState | null>(null);
   const [workspaceReport, setWorkspaceReport] = React.useState<WorkspaceReportState | null>(null);
   const [externalChange, setExternalChange] = React.useState<WorkspaceExternalChange | null>(null);
@@ -264,6 +266,7 @@ function App(): React.JSX.Element {
   React.useEffect(() => {
     function closeMenu(): void {
       setContextMenu(null);
+      setTabContextMenu(null);
     }
     function handleKeyDown(event: KeyboardEvent): void {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -1335,47 +1338,62 @@ function App(): React.JSX.Element {
     activateDocumentTab(tab);
   }
 
-  function closeTab(tabId: string): void {
-    if (dirtyTabIds.has(tabId) && !window.confirm("该标签页存在未保存改动，关闭会丢弃这些改动。确认关闭？")) return;
-    discardDirtyForTab(tabId);
-    if (previewTab?.id === tabId) {
-      setPreviewTab(null);
-      if (activeTabId === tabId) {
-        const fallback = tabs.at(-1) ?? null;
-        setActiveTabId(fallback?.id ?? null);
-        if (fallback) activateDocumentTab(fallback);
-        else {
-          setSelectedFilePath(null);
-          setSelectedTypeId(null);
-          setSelectedMemberId(null);
-          setActiveAction(null);
-        }
-      }
-      return;
+  function visibleDocumentTabs(): WorkspaceTab[] {
+    const visiblePreview = previewTab && !tabs.some((tab) => tab.id === previewTab.id) ? previewTab : null;
+    return visiblePreview ? [...tabs, visiblePreview] : tabs;
+  }
+
+  function clearActiveDocumentSelection(): void {
+    setActiveTabId(null);
+    setSelectedFilePath(null);
+    setSelectedTypeId(null);
+    setSelectedMemberId(null);
+    setActiveAction(null);
+  }
+
+  function fallbackAfterClosing(orderedTabs: WorkspaceTab[], closingIds: Set<string>, closingActiveId: string | null): WorkspaceTab | null {
+    if (!closingActiveId) return null;
+    const activeIndex = orderedTabs.findIndex((tab) => tab.id === closingActiveId);
+    if (activeIndex < 0) return orderedTabs.find((tab) => !closingIds.has(tab.id)) ?? null;
+    const left = [...orderedTabs.slice(0, activeIndex)].reverse().find((tab) => !closingIds.has(tab.id));
+    const right = orderedTabs.slice(activeIndex + 1).find((tab) => !closingIds.has(tab.id));
+    return left ?? right ?? null;
+  }
+
+  function closeTabs(tabIds: string[]): void {
+    const uniqueIds = [...new Set(tabIds)];
+    if (uniqueIds.length === 0) return;
+    const closingIds = new Set(uniqueIds);
+    const dirtyCount = uniqueIds.filter((id) => dirtyTabIds.has(id)).length;
+    if (dirtyCount > 0 && !window.confirm(`${dirtyCount} 个标签页存在未保存改动，关闭会丢弃这些改动。确认关闭？`)) return;
+    uniqueIds.forEach(discardDirtyForTab);
+
+    const orderedBefore = visibleDocumentTabs();
+    const closingActiveId = activeTabId && closingIds.has(activeTabId) ? activeTabId : null;
+    const fallback = fallbackAfterClosing(orderedBefore, closingIds, closingActiveId);
+    const nextTabs = tabs.filter((tab) => !closingIds.has(tab.id));
+    const nextPreview = previewTab && !closingIds.has(previewTab.id) ? previewTab : null;
+
+    setTabs(nextTabs);
+    setPreviewTab(nextPreview);
+    if (closingActiveId) {
+      if (fallback) activateDocumentTab(fallback);
+      else clearActiveDocumentSelection();
     }
-    setTabs((current) => {
-      const index = current.findIndex((tab) => tab.id === tabId);
-      const next = current.filter((tab) => tab.id !== tabId);
-      if (activeTabId === tabId) {
-        const fallback = next[Math.max(0, index - 1)] ?? next[0] ?? previewTab ?? null;
-        setActiveTabId(fallback?.id ?? null);
-        if (!fallback) {
-          setSelectedFilePath(null);
-          setSelectedTypeId(null);
-          setSelectedMemberId(null);
-          setActiveAction(null);
-        } else if (fallback.kind === "file") {
-          setSelectedFilePath(fallback.filePath);
-          setSelectedTypeId(null);
-          setSelectedMemberId(null);
-        } else {
-          setSelectedTypeId(fallback.typeId);
-          setSelectedFilePath(null);
-          setSelectedMemberId(null);
-        }
-      }
-      return next;
-    });
+  }
+
+  function closeTab(tabId: string): void {
+    closeTabs([tabId]);
+  }
+
+  async function openFileLocationForTab(tab: WorkspaceTab): Promise<void> {
+    if (!workspace || tab.kind !== "file") return;
+    try {
+      await window.protoVault.openFileLocation({ workspaceRoot: workspace.rootPath, filePath: tab.filePath });
+      setUiNotice("已打开 Header 文件位置");
+    } catch (error) {
+      setUiNotice(error instanceof Error ? error.message : String(error));
+    }
   }
 
   function discardDirtyForTab(tabId: string): void {
@@ -1621,7 +1639,18 @@ function App(): React.JSX.Element {
           <p className="lede">扫描 C++ 数据结构，理解字段布局，维护语义元数据，并用受控生成与语义差异守住协议演进。</p>
           <div className="flow"><span>扫描</span><b>→</b><span>IR</span><b>→</b><span>布局</span><b>→</b><span>生成</span><b>→</b><span>检查</span></div>
         </article>}
-        {workspace && <TabStrip tabs={tabs} previewTab={previewTab} activeTabId={activeTabId} dirtyTabIds={dirtyTabIds} onActivate={activateTab} onClose={closeTab} />}
+        {workspace && <TabStrip
+          tabs={tabs}
+          previewTab={previewTab}
+          activeTabId={activeTabId}
+          dirtyTabIds={dirtyTabIds}
+          contextMenu={tabContextMenu}
+          onActivate={activateTab}
+          onClose={closeTab}
+          onCloseMany={closeTabs}
+          onOpenContextMenu={setTabContextMenu}
+          onOpenFileLocation={(tab) => { void openFileLocationForTab(tab); }}
+        />}
         {workspace && workspaceReport && <WorkspaceReportPanel report={workspaceReport} workspaceRoot={workspace.rootPath} onClose={() => setWorkspaceReport(null)} />}
         {workspace && centerViewMode === "graph" && <ProtocolGraphView
           workspace={workspace}
@@ -2133,20 +2162,31 @@ function ExternalChangePanel({ change, onRescan, onDiff, onDismiss }: {
   </section>;
 }
 
-function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onClose }: {
+function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, contextMenu, onActivate, onClose, onCloseMany, onOpenContextMenu, onOpenFileLocation }: {
   tabs: WorkspaceTab[];
   previewTab: WorkspaceTab | null;
   activeTabId: string | null;
   dirtyTabIds: Set<string>;
+  contextMenu: TabContextMenuState | null;
   onActivate(tab: WorkspaceTab): void | Promise<void>;
   onClose(tabId: string): void;
+  onCloseMany(tabIds: string[]): void;
+  onOpenContextMenu(menu: TabContextMenuState | null): void;
+  onOpenFileLocation(tab: WorkspaceTab): void;
 }): React.JSX.Element | null {
   const visiblePreview = previewTab && !tabs.some((tab) => tab.id === previewTab.id) ? previewTab : null;
   if (tabs.length === 0 && !visiblePreview) return null;
+  const orderedTabs = visiblePreview ? [...tabs, visiblePreview] : tabs;
+  function openTabMenu(event: React.MouseEvent, tab: WorkspaceTab): void {
+    event.preventDefault();
+    event.stopPropagation();
+    onOpenContextMenu({ x: event.clientX, y: event.clientY, tab, orderedTabs });
+  }
+
   return <nav className="tab-strip" aria-label="工作区标签页">
     {tabs.map((tab) => {
       const dirty = dirtyTabIds.has(tab.id);
-      return <div className={`${tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"}${dirty ? " dirty" : ""}`} key={tab.id}>
+      return <div className={`${tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"}${dirty ? " dirty" : ""}`} key={tab.id} onContextMenu={(event) => openTabMenu(event, tab)}>
       <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}${dirty ? " 未保存" : ""}`} onClick={() => { void onActivate(tab); }}>
         <span className={tab.kind === "file" ? "tab-kind file" : "tab-kind type"}>{tab.kind === "file" ? "H" : "S"}</span>
         <span>{tab.title}</span>
@@ -2157,7 +2197,7 @@ function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onCl
     })}
     {visiblePreview && (() => {
       const dirty = dirtyTabIds.has(visiblePreview.id);
-      return <div className={`${visiblePreview.id === activeTabId ? "workspace-tab preview active" : "workspace-tab preview"}${dirty ? " dirty" : ""}`} key={`preview:${visiblePreview.id}`}>
+      return <div className={`${visiblePreview.id === activeTabId ? "workspace-tab preview active" : "workspace-tab preview"}${dirty ? " dirty" : ""}`} key={`preview:${visiblePreview.id}`} onContextMenu={(event) => openTabMenu(event, visiblePreview)}>
       <button className="workspace-tab-main" aria-label={`预览 ${visiblePreview.title}${dirty ? " 未保存" : ""}`} onClick={() => { void onActivate(visiblePreview); }}>
         <span className={visiblePreview.kind === "file" ? "tab-kind file" : "tab-kind type"}>{visiblePreview.kind === "file" ? "H" : "S"}</span>
         <span>{visiblePreview.title}</span>
@@ -2166,7 +2206,48 @@ function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, onActivate, onCl
       <button className="workspace-tab-close" aria-label={`关闭预览 ${visiblePreview.title}`} onClick={() => onClose(visiblePreview.id)}>×</button>
     </div>;
     })()}
+    {contextMenu && <TabContextMenu
+      menu={contextMenu}
+      onClose={() => onOpenContextMenu(null)}
+      onOpenFileLocation={onOpenFileLocation}
+      onCloseTab={(tab) => onClose(tab.id)}
+      onCloseMany={onCloseMany}
+    />}
   </nav>;
+}
+
+function TabContextMenu({ menu, onClose, onOpenFileLocation, onCloseTab, onCloseMany }: {
+  menu: TabContextMenuState;
+  onClose(): void;
+  onOpenFileLocation(tab: WorkspaceTab): void;
+  onCloseTab(tab: WorkspaceTab): void;
+  onCloseMany(tabIds: string[]): void;
+}): React.JSX.Element {
+  const index = menu.orderedTabs.findIndex((tab) => tab.id === menu.tab.id);
+  const leftTabs = index > 0 ? menu.orderedTabs.slice(0, index) : [];
+  const rightTabs = index >= 0 ? menu.orderedTabs.slice(index + 1) : [];
+  const otherTabs = menu.orderedTabs.filter((tab) => tab.id !== menu.tab.id);
+
+  function run(action: () => void): void {
+    action();
+    onClose();
+  }
+
+  return <div
+    className="context-menu tab-context-menu"
+    role="menu"
+    aria-label="标签页菜单"
+    style={{ left: menu.x, top: menu.y }}
+    onClick={(event) => event.stopPropagation()}
+    onContextMenu={(event) => event.preventDefault()}
+  >
+    <button role="menuitem" disabled={menu.tab.kind !== "file"} onClick={() => run(() => onOpenFileLocation(menu.tab))}>打开文件位置</button>
+    <hr />
+    <button role="menuitem" onClick={() => run(() => onCloseTab(menu.tab))}>关闭</button>
+    <button role="menuitem" disabled={otherTabs.length === 0} onClick={() => run(() => onCloseMany(otherTabs.map((tab) => tab.id)))}>关闭其他标签</button>
+    <button role="menuitem" disabled={leftTabs.length === 0} onClick={() => run(() => onCloseMany(leftTabs.map((tab) => tab.id)))}>关闭左侧标签</button>
+    <button role="menuitem" disabled={rightTabs.length === 0} onClick={() => run(() => onCloseMany(rightTabs.map((tab) => tab.id)))}>关闭右侧标签</button>
+  </div>;
 }
 
 function TreeNodes({

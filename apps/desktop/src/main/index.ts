@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
 import { createHash } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import { promises as fs } from "node:fs";
@@ -139,6 +139,16 @@ function suppressWorkspaceWatcher(rootPath: string): void {
   if (watchedWorkspace?.root === root) watchedWorkspace.ignoreUntil = Date.now() + 2500;
 }
 
+function assertPathInsideWorkspace(workspaceRoot: string, targetPath: string): string {
+  const root = resolve(workspaceRoot);
+  const target = resolve(isAbsolute(targetPath) ? targetPath : join(root, targetPath));
+  const relativePath = relative(root, target);
+  if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error("只能打开当前工作区内的文件位置。");
+  }
+  return target;
+}
+
 async function emitExternalChangeIfNeeded(root: string, sender: WebContents, changedPath?: string): Promise<void> {
   if (!watchedWorkspace || watchedWorkspace.root !== root) return;
   if (Date.now() < watchedWorkspace.ignoreUntil) return;
@@ -247,6 +257,11 @@ app.whenReady().then(() => {
     return scanAndRemember(result.filePaths[0], event.sender);
   });
   ipcMain.handle("workspace:scan", (event, workspaceRoot: string) => scanAndRemember(workspaceRoot, event.sender));
+  ipcMain.handle("workspace:open-file-location", async (_event, input: { workspaceRoot: string; filePath: string }) => {
+    const target = assertPathInsideWorkspace(input.workspaceRoot, input.filePath);
+    await shell.showItemInFolder(target);
+    return true;
+  });
   ipcMain.handle("workspace:restore-last", async (event) => {
     if (process.env.PROTOVAULT_DISABLE_RESTORE === "1") return null;
     const lastWorkspacePath = (await readPreferences()).lastWorkspacePath;
