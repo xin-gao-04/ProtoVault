@@ -377,6 +377,23 @@ export interface DeleteProtocolBindingInput {
   bindingId: string;
 }
 
+export interface CreateNetworkFlowViewInput {
+  workspaceRoot: string;
+  name: string;
+  description?: string;
+  filter?: string;
+  source?: WorkspaceFlowView["source"];
+}
+
+export interface UpdateNetworkFlowViewInput extends CreateNetworkFlowViewInput {
+  viewId: string;
+}
+
+export interface DeleteNetworkFlowViewInput {
+  workspaceRoot: string;
+  viewId: string;
+}
+
 export interface WorkspaceLintIssue {
   id: string;
   ruleId: string;

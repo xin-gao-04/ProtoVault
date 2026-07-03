@@ -1,0 +1,237 @@
+{
+  "schemaVersion": 1,
+  "nodes": [
+    {
+      "id": "node:sim-master",
+      "name": "SimMaster",
+      "kind": "simulator",
+      "role": "仿真节拍调度与场景控制",
+      "subsystem": "Simulation",
+      "host": "sim-host-01",
+      "process": "sim_master.exe",
+      "hardwareProfile": "8C/16T CPU, 32 GB RAM, 1 GbE",
+      "softwareProfile": "固定步长调度，负责接收跟踪结果并驱动场景状态",
+      "notes": "大型仿真中的中心调度节点。"
+    },
+    {
+      "id": "node:radar-model",
+      "name": "RadarModel",
+      "kind": "model",
+      "role": "生产雷达探测帧",
+      "subsystem": "Radar",
+      "host": "sim-host-02",
+      "process": "radar_model.exe",
+      "hardwareProfile": "12C/24T CPU, optional GPU, 10 GbE",
+      "softwareProfile": "雷达回波、探测生成和坐标转换",
+      "notes": "高频生产 DetectionFrame，是链路压力的主要来源。"
+    },
+    {
+      "id": "node:track-service",
+      "name": "TrackService",
+      "kind": "service",
+      "role": "目标航迹融合与状态估计",
+      "subsystem": "Tracking",
+      "host": "track-host-01",
+      "process": "track_service.exe",
+      "hardwareProfile": "16C/32T CPU, 64 GB RAM, 10 GbE",
+      "softwareProfile": "多目标跟踪、聚类和轨迹发布",
+      "notes": "消费探测数据并输出 RadarTrack / TrackCluster。"
+    },
+    {
+      "id": "node:control-console",
+      "name": "ControlConsole",
+      "kind": "visualization",
+      "role": "人工控制与关注区域下发",
+      "subsystem": "Control",
+      "host": "operator-01",
+      "process": "control_console.exe",
+      "hardwareProfile": "Operator workstation",
+      "softwareProfile": "交互式 UI，低频控制命令",
+      "notes": "向 RadarModel 下发 TrackRegionCommand。"
+    },
+    {
+      "id": "node:telemetry-recorder",
+      "name": "TelemetryRecorder",
+      "kind": "storage",
+      "role": "状态遥测与回放记录",
+      "subsystem": "Telemetry",
+      "host": "record-host-01",
+      "process": "telemetry_recorder.exe",
+      "hardwareProfile": "NVMe SSD, 1 GbE",
+      "softwareProfile": "低频状态采样和归档",
+      "notes": "为后续性能分析和回放提供基础数据。"
+    },
+    {
+      "id": "node:diagnostics-panel",
+      "name": "DiagnosticsPanel",
+      "kind": "visualization",
+      "role": "故障态势展示",
+      "subsystem": "Diagnostics",
+      "host": "operator-01",
+      "process": "diagnostics_panel.exe",
+      "hardwareProfile": "Operator workstation",
+      "softwareProfile": "告警聚合与故障定位",
+      "notes": "消费 FaultSnapshot 并突出关键故障。"
+    }
+  ],
+  "links": [
+    {
+      "id": "link:radar-detections",
+      "name": "Radar detections stream",
+      "fromNodeId": "node:radar-model",
+      "toNodeId": "node:track-service",
+      "transport": "dds",
+      "endpoint": "Radar/DetectionFrame",
+      "latencyBudgetMs": 15,
+      "bandwidthLimitMbps": 120,
+      "critical": true,
+      "notes": "高频探测帧链路，P13 派生视图重点关注。"
+    },
+    {
+      "id": "link:tracking-output",
+      "name": "Tracking output stream",
+      "fromNodeId": "node:track-service",
+      "toNodeId": "node:sim-master",
+      "transport": "udp",
+      "endpoint": "239.10.20.8:41000",
+      "latencyBudgetMs": 20,
+      "bandwidthLimitMbps": 80,
+      "critical": true,
+      "notes": "将航迹结果返回仿真主控。"
+    },
+    {
+      "id": "link:control-region",
+      "name": "Control ROI command",
+      "fromNodeId": "node:control-console",
+      "toNodeId": "node:radar-model",
+      "transport": "tcp",
+      "endpoint": "control/radar/roi",
+      "latencyBudgetMs": 100,
+      "bandwidthLimitMbps": 5,
+      "critical": false,
+      "notes": "低频控制命令链路。"
+    },
+    {
+      "id": "link:telemetry-status",
+      "name": "Node telemetry stream",
+      "fromNodeId": "node:track-service",
+      "toNodeId": "node:telemetry-recorder",
+      "transport": "mq",
+      "endpoint": "telemetry.node.status",
+      "latencyBudgetMs": 500,
+      "bandwidthLimitMbps": 10,
+      "critical": false,
+      "notes": "记录节点健康状态。"
+    },
+    {
+      "id": "link:fault-snapshot",
+      "name": "Fault snapshot alert",
+      "fromNodeId": "node:track-service",
+      "toNodeId": "node:diagnostics-panel",
+      "transport": "mq",
+      "endpoint": "diagnostics.fault.snapshot",
+      "latencyBudgetMs": 120,
+      "bandwidthLimitMbps": 10,
+      "critical": true,
+      "notes": "故障链路，关键事件需要快速抵达操作台。"
+    }
+  ],
+  "bindings": [
+    {
+      "id": "binding:detection-frame",
+      "name": "DetectionFrame@60Hz",
+      "linkId": "link:radar-detections",
+      "typeId": "struct:00bb08865c268904",
+      "dataName": "radar-detections",
+      "frequencyHz": 60,
+      "batchSize": 1,
+      "peakMultiplier": 1.8,
+      "criticality": "high",
+      "notes": "探测帧是目标跟踪闭环的上游输入。"
+    },
+    {
+      "id": "binding:radar-track",
+      "name": "RadarTrack@30Hz",
+      "linkId": "link:tracking-output",
+      "typeId": "struct:52f28b668b073cc4",
+      "dataName": "tracks",
+      "frequencyHz": 30,
+      "batchSize": 32,
+      "peakMultiplier": 1.5,
+      "criticality": "high",
+      "notes": "按批量估算航迹输出压力。"
+    },
+    {
+      "id": "binding:track-cluster",
+      "name": "TrackCluster@10Hz",
+      "linkId": "link:tracking-output",
+      "typeId": "struct:5281cb761bf285c7",
+      "dataName": "track-clusters",
+      "frequencyHz": 10,
+      "batchSize": 1,
+      "peakMultiplier": 1.2,
+      "criticality": "normal",
+      "notes": "聚类摘要用于仿真主控整体态势。"
+    },
+    {
+      "id": "binding:track-region-command",
+      "name": "TrackRegionCommand@2Hz",
+      "linkId": "link:control-region",
+      "typeId": "struct:303779de30d545fc",
+      "dataName": "roi-command",
+      "frequencyHz": 2,
+      "batchSize": 1,
+      "peakMultiplier": 1,
+      "criticality": "normal",
+      "notes": "人工关注区域控制命令。"
+    },
+    {
+      "id": "binding:node-status",
+      "name": "NodeStatus@1Hz",
+      "linkId": "link:telemetry-status",
+      "typeId": "struct:6686f57f2eeac2d2",
+      "dataName": "node-status",
+      "frequencyHz": 1,
+      "batchSize": 1,
+      "peakMultiplier": 1,
+      "criticality": "low",
+      "notes": "低频健康状态。"
+    },
+    {
+      "id": "binding:fault-snapshot",
+      "name": "FaultSnapshot@5Hz",
+      "linkId": "link:fault-snapshot",
+      "typeId": "struct:dbef949c83be12e8",
+      "dataName": "fault-snapshot",
+      "frequencyHz": 5,
+      "batchSize": 1,
+      "peakMultiplier": 2,
+      "criticality": "critical",
+      "notes": "关键故障链路。"
+    }
+  ],
+  "views": [
+    {
+      "id": "flow:tracking-loop",
+      "name": "目标跟踪闭环",
+      "description": "从雷达探测帧到航迹输出的核心闭环，用于观察 Tracking 计算链路压力。",
+      "filter": "radar track tracking",
+      "source": "manual"
+    },
+    {
+      "id": "flow:critical-path",
+      "name": "关键链路视图",
+      "description": "聚合关键链路、高关键等级协议和可能超限的通信边。",
+      "filter": "critical",
+      "source": "manual"
+    },
+    {
+      "id": "flow:health-diagnostics",
+      "name": "健康诊断视图",
+      "description": "关注遥测、故障快照和操作台诊断链路。",
+      "filter": "telemetry diagnostics fault",
+      "source": "manual"
+    }
+  ],
+  "updatedAt": "2026-07-03T07:10:00.000Z"
+}

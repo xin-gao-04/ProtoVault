@@ -10,6 +10,7 @@ import type {
   WorkspaceNetworkLinkView,
   WorkspaceNetworkNodeView,
   WorkspaceProtocolBindingView,
+  WorkspaceFlowView,
   WorkspaceEnumValueView,
   WorkspaceExternalChange,
   WorkspaceFieldView,
@@ -3123,7 +3124,7 @@ const PROTOCOL_BINDING_CRITICALITY_OPTIONS: Array<{ value: ProtocolBindingCritic
   { value: "critical", label: "关键" }
 ];
 
-type NetworkTabMode = "nodes" | "links" | "bindings" | "topology";
+type NetworkTabMode = "nodes" | "links" | "bindings" | "flows" | "topology";
 type NetworkNodeFormState = {
   name: string;
   kind: NetworkNodeKind;
@@ -3156,6 +3157,20 @@ type ProtocolBindingFormState = {
   peakMultiplier: string;
   criticality: ProtocolBindingCriticality;
   notes: string;
+};
+type FlowViewFormState = {
+  name: string;
+  description: string;
+  filter: string;
+};
+type FlowViewAnalysis = {
+  nodes: WorkspaceNetworkNodeView[];
+  links: WorkspaceNetworkLinkView[];
+  bindings: WorkspaceProtocolBindingView[];
+  totalBandwidthBps: number;
+  busiestNode?: WorkspaceNetworkNodeView;
+  busiestLink?: WorkspaceNetworkLinkView;
+  warnings: string[];
 };
 
 function emptyNodeForm(): NetworkNodeFormState {
@@ -3200,6 +3215,10 @@ function emptyBindingForm(workspace: WorkspaceView): ProtocolBindingFormState {
   };
 }
 
+function emptyFlowViewForm(): FlowViewFormState {
+  return { name: "", description: "", filter: "" };
+}
+
 function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpenProtocolType }: {
   workspace: WorkspaceView;
   loading: boolean;
@@ -3212,10 +3231,20 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
   const [editingNodeId, setEditingNodeId] = React.useState<string | null>(null);
   const [editingLinkId, setEditingLinkId] = React.useState<string | null>(null);
   const [editingBindingId, setEditingBindingId] = React.useState<string | null>(null);
+  const [editingFlowViewId, setEditingFlowViewId] = React.useState<string | null>(null);
+  const [selectedFlowViewId, setSelectedFlowViewId] = React.useState("derived:all");
   const [nodeForm, setNodeForm] = React.useState<NetworkNodeFormState>(() => emptyNodeForm());
   const [linkForm, setLinkForm] = React.useState<NetworkLinkFormState>(() => emptyLinkForm(workspace));
   const [bindingForm, setBindingForm] = React.useState<ProtocolBindingFormState>(() => emptyBindingForm(workspace));
+  const [flowViewForm, setFlowViewForm] = React.useState<FlowViewFormState>(() => emptyFlowViewForm());
   const busy = loading || pending;
+  const flowViews = React.useMemo<WorkspaceFlowView[]>(() => [
+    { id: "derived:all", name: "全量网络", description: "展示当前网络地图的所有节点、链路和协议载荷。", filter: "", source: "derived" },
+    { id: "derived:critical", name: "关键与高风险", description: "自动聚合关键链路、高关键等级绑定和超过带宽上限的链路。", filter: "critical", source: "derived" },
+    ...workspace.network.views
+  ], [workspace.network.views]);
+  const selectedFlowView = flowViews.find((view) => view.id === selectedFlowViewId) ?? flowViews[0];
+  const selectedFlowAnalysis = React.useMemo(() => deriveFlowViewAnalysis(workspace, selectedFlowView), [selectedFlowView, workspace]);
 
   React.useEffect(() => {
     if (!editingLinkId) {
@@ -3232,7 +3261,10 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
         typeId: current.typeId || workspace.types[0]?.id || ""
       }));
     }
-  }, [editingBindingId, editingLinkId, workspace.network.links, workspace.network.nodes, workspace.types]);
+    if (!flowViews.some((view) => view.id === selectedFlowViewId)) {
+      setSelectedFlowViewId(flowViews[0]?.id ?? "derived:all");
+    }
+  }, [editingBindingId, editingLinkId, flowViews, selectedFlowViewId, workspace.network.links, workspace.network.nodes, workspace.types]);
 
   async function run(action: () => Promise<WorkspaceView>, message: string): Promise<void> {
     setPending(true);
@@ -3260,6 +3292,11 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
   function resetBindingForm(nextWorkspace = workspace): void {
     setEditingBindingId(null);
     setBindingForm(emptyBindingForm(nextWorkspace));
+  }
+
+  function resetFlowViewForm(): void {
+    setEditingFlowViewId(null);
+    setFlowViewForm(emptyFlowViewForm());
   }
 
   function editNode(node: WorkspaceNetworkNodeView): void {
@@ -3307,6 +3344,18 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
       peakMultiplier: String(binding.peakMultiplier),
       criticality: binding.criticality,
       notes: binding.notes ?? ""
+    });
+  }
+
+  function editFlowView(view: WorkspaceFlowView): void {
+    if (view.source !== "manual" && !workspace.network.views.some((item) => item.id === view.id)) return;
+    setMode("flows");
+    setSelectedFlowViewId(view.id);
+    setEditingFlowViewId(view.id);
+    setFlowViewForm({
+      name: view.name,
+      description: view.description ?? "",
+      filter: view.filter ?? ""
     });
   }
 
@@ -3370,6 +3419,30 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
     resetBindingForm();
   }
 
+  async function submitFlowView(event: React.FormEvent): Promise<void> {
+    event.preventDefault();
+    const payload = {
+      workspaceRoot: workspace.rootPath,
+      name: flowViewForm.name,
+      description: flowViewForm.description,
+      filter: flowViewForm.filter,
+      source: "manual" as const
+    };
+    if (editingFlowViewId) {
+      await run(() => window.protoVault.updateNetworkFlowView({ ...payload, viewId: editingFlowViewId }), `已更新数据流视图：${flowViewForm.name}`);
+      setSelectedFlowViewId(editingFlowViewId);
+    } else {
+      const beforeIds = new Set(workspace.network.views.map((view) => view.id));
+      await run(async () => {
+        const result = await window.protoVault.createNetworkFlowView(payload);
+        const created = result.network.views.find((view) => !beforeIds.has(view.id));
+        if (created) setSelectedFlowViewId(created.id);
+        return result;
+      }, `已创建数据流视图：${flowViewForm.name}`);
+    }
+    resetFlowViewForm();
+  }
+
   async function deleteNode(node: WorkspaceNetworkNodeView): Promise<void> {
     if (!window.confirm(`确认删除网络节点？\n${node.name}\n关联链路和协议绑定也会被删除。`)) return;
     await run(() => window.protoVault.deleteNetworkNode({ workspaceRoot: workspace.rootPath, nodeId: node.id }), `已删除网络节点：${node.name}`);
@@ -3383,6 +3456,14 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
   async function deleteBinding(binding: WorkspaceProtocolBindingView): Promise<void> {
     if (!window.confirm(`确认删除协议绑定？\n${binding.name}`)) return;
     await run(() => window.protoVault.deleteProtocolBinding({ workspaceRoot: workspace.rootPath, bindingId: binding.id }), `已删除协议绑定：${binding.name}`);
+  }
+
+  async function deleteFlowView(view: WorkspaceFlowView): Promise<void> {
+    if (!workspace.network.views.some((item) => item.id === view.id)) return;
+    if (!window.confirm(`确认删除数据流视图？\n${view.name}`)) return;
+    await run(() => window.protoVault.deleteNetworkFlowView({ workspaceRoot: workspace.rootPath, viewId: view.id }), `已删除数据流视图：${view.name}`);
+    setSelectedFlowViewId("derived:all");
+    resetFlowViewForm();
   }
 
   const totalBandwidth = workspace.network.links.reduce((sum, link) => sum + link.estimatedBandwidthBps, 0);
@@ -3406,6 +3487,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
       <button className={mode === "nodes" ? "active" : ""} onClick={() => setMode("nodes")}>节点</button>
       <button className={mode === "links" ? "active" : ""} onClick={() => setMode("links")}>链路</button>
       <button className={mode === "bindings" ? "active" : ""} onClick={() => setMode("bindings")}>协议绑定</button>
+      <button className={mode === "flows" ? "active" : ""} onClick={() => setMode("flows")}>数据流视图</button>
       <button className={mode === "topology" ? "active" : ""} onClick={() => setMode("topology")}>拓扑预览</button>
     </div>
 
@@ -3496,6 +3578,37 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
       </NetworkTable>
     </div>}
 
+    {mode === "flows" && <div className="network-grid flow-grid">
+      <div className="flow-sidebar">
+        <form className="network-form" onSubmit={(event) => void submitFlowView(event)}>
+          <h3>{editingFlowViewId ? "编辑视图" : "创建视图"}</h3>
+          <label>名称<input value={flowViewForm.name} onChange={(event) => setFlowViewForm({ ...flowViewForm, name: event.target.value })} placeholder="目标跟踪闭环" /></label>
+          <label>过滤条件<input value={flowViewForm.filter} onChange={(event) => setFlowViewForm({ ...flowViewForm, filter: event.target.value })} placeholder="radar track critical" /></label>
+          <label>说明<textarea value={flowViewForm.description} onChange={(event) => setFlowViewForm({ ...flowViewForm, description: event.target.value })} placeholder="这个视角想回答什么问题？" /></label>
+          <div className="network-form-actions">
+            <button disabled={busy || !flowViewForm.name.trim()}>{editingFlowViewId ? "保存视图" : "添加视图"}</button>
+            {editingFlowViewId && <button type="button" onClick={resetFlowViewForm}>取消编辑</button>}
+          </div>
+        </form>
+        <div className="flow-view-list">
+          {flowViews.map((view) => {
+            const stored = workspace.network.views.some((item) => item.id === view.id);
+            return <article className={view.id === selectedFlowView.id ? "active" : ""} key={view.id}>
+              <button onClick={() => setSelectedFlowViewId(view.id)}>
+                <b>{view.name}</b>
+                <small>{flowViewSourceLabel(view.source)}{view.filter ? ` · ${view.filter}` : ""}</small>
+              </button>
+              {stored && <div>
+                <button onClick={() => editFlowView(view)}>编辑</button>
+                <button className="danger" onClick={() => void deleteFlowView(view)}>删除</button>
+              </div>}
+            </article>;
+          })}
+        </div>
+      </div>
+      <FlowViewPanel view={selectedFlowView} analysis={selectedFlowAnalysis} onOpenProtocolType={onOpenProtocolType} />
+    </div>}
+
     {mode === "topology" && <div className="network-topology">
       {workspace.network.links.length === 0 ? <p className="scan-empty">还没有通信链路，先创建节点和链路。</p> : workspace.network.links.map((link) => {
         const bindings = workspace.network.bindings.filter((binding) => binding.linkId === link.id);
@@ -3514,6 +3627,217 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
       })}
     </div>}
   </section>;
+}
+
+function FlowViewPanel({ view, analysis, onOpenProtocolType }: {
+  view: WorkspaceFlowView;
+  analysis: FlowViewAnalysis;
+  onOpenProtocolType: (typeId: string) => void;
+}): React.JSX.Element {
+  return <div className="flow-analysis-panel">
+    <div className="flow-analysis-hero">
+      <div>
+        <p className="eyebrow">FLOW VIEW</p>
+        <h3>{view.name}</h3>
+        <p>{view.description || "从网络事实中派生的业务数据流观察视角。"}</p>
+      </div>
+      <div className="network-kpis flow-kpis">
+        <span><b>{analysis.nodes.length}</b><small>节点</small></span>
+        <span><b>{analysis.links.length}</b><small>链路</small></span>
+        <span><b>{analysis.bindings.length}</b><small>协议</small></span>
+        <span><b>{formatBandwidth(analysis.totalBandwidthBps)}</b><small>估算总量</small></span>
+      </div>
+    </div>
+
+    {view.filter && <p className="flow-filter-chip">过滤：{view.filter}</p>}
+
+    <div className="flow-risk-grid">
+      <section className="property-card">
+        <h3>最高链路</h3>
+        {analysis.busiestLink ? <p>{analysis.busiestLink.name}<br /><small>{formatBandwidth(analysis.busiestLink.estimatedBandwidthBps)}</small></p> : <p className="ok">暂无匹配链路</p>}
+      </section>
+      <section className="property-card">
+        <h3>最高节点</h3>
+        {analysis.busiestNode ? <p>{analysis.busiestNode.name}<br /><small>出 {formatBandwidth(analysis.busiestNode.outgoingBandwidthBps)} / 入 {formatBandwidth(analysis.busiestNode.incomingBandwidthBps)}</small></p> : <p className="ok">暂无匹配节点</p>}
+      </section>
+      <section className="property-card flow-warnings">
+        <h3>风险提示</h3>
+        {analysis.warnings.length === 0 ? <p className="ok">当前视图未发现关键风险。</p> : <ul>{analysis.warnings.slice(0, 6).map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+      </section>
+    </div>
+
+    <NetworkTable title="视图内协议载荷" emptyText="当前过滤条件没有匹配协议绑定。">
+      {analysis.bindings.map((binding) => <tr key={binding.id}>
+        <td><b>{binding.name}</b><small>{binding.dataName || "未命名业务数据"}</small></td>
+        <td>{binding.linkName ?? binding.linkId}</td>
+        <td><button className="link-button" onClick={() => onOpenProtocolType(binding.typeId)}>{binding.protocolName ?? binding.typeId}</button></td>
+        <td>{binding.payloadSize === undefined ? "未知" : formatBytes(binding.payloadSize)} · {binding.frequencyHz} Hz · x{binding.batchSize}</td>
+        <td>{formatBandwidth(binding.estimatedBandwidthBps)}</td>
+      </tr>)}
+    </NetworkTable>
+
+    <NetworkTable title="视图内链路" emptyText="当前过滤条件没有匹配链路。">
+      {analysis.links.map((link) => <tr key={link.id}>
+        <td><b>{link.name}</b><small>{NETWORK_TRANSPORT_OPTIONS.find((option) => option.value === link.transport)?.label ?? link.transport}</small></td>
+        <td>{link.fromNodeName ?? link.fromNodeId} → {link.toNodeName ?? link.toNodeId}</td>
+        <td>{link.endpoint || "—"}</td>
+        <td>{link.bindingCount} 个协议</td>
+        <td>{formatBandwidth(link.estimatedBandwidthBps)}</td>
+      </tr>)}
+    </NetworkTable>
+
+    <div className="flow-node-grid">
+      {analysis.nodes.map((node) => <article key={node.id}>
+        <b>{node.name}</b>
+        <small>{NETWORK_NODE_KIND_OPTIONS.find((option) => option.value === node.kind)?.label ?? node.kind} · {node.subsystem || "未分系统"}</small>
+        <span>出 {formatBandwidth(node.outgoingBandwidthBps)} / 入 {formatBandwidth(node.incomingBandwidthBps)}</span>
+      </article>)}
+    </div>
+  </div>;
+}
+
+function flowViewSourceLabel(source: WorkspaceFlowView["source"]): string {
+  if (source === "derived") return "派生";
+  if (source === "ai") return "AI";
+  return "手动";
+}
+
+function deriveFlowViewAnalysis(workspace: WorkspaceView, view: WorkspaceFlowView): FlowViewAnalysis {
+  const terms = flowFilterTerms(view.filter);
+  const linkById = new Map(workspace.network.links.map((link) => [link.id, link]));
+
+  const matchedBindings = workspace.network.bindings.filter((binding) => {
+    const link = linkById.get(binding.linkId);
+    return terms.length === 0 || flowEntityMatches(terms, { binding, link, workspace });
+  });
+  const matchedLinkIds = new Set(matchedBindings.map((binding) => binding.linkId));
+  const matchedLinks = workspace.network.links.filter((link) => {
+    return terms.length === 0 || matchedLinkIds.has(link.id) || flowEntityMatches(terms, { link, workspace });
+  });
+  for (const link of matchedLinks) matchedLinkIds.add(link.id);
+
+  const bindings = terms.length === 0
+    ? workspace.network.bindings
+    : workspace.network.bindings.filter((binding) => matchedLinkIds.has(binding.linkId) || matchedBindings.some((item) => item.id === binding.id));
+  const links = terms.length === 0 ? workspace.network.links : matchedLinks;
+
+  const matchedNodeIds = new Set<string>();
+  for (const link of links) {
+    matchedNodeIds.add(link.fromNodeId);
+    matchedNodeIds.add(link.toNodeId);
+  }
+  if (terms.length > 0) {
+    for (const node of workspace.network.nodes) {
+      if (flowEntityMatches(terms, { node, workspace })) matchedNodeIds.add(node.id);
+    }
+  }
+
+  const nodes = workspace.network.nodes
+    .filter((node) => terms.length === 0 || matchedNodeIds.has(node.id))
+    .map((node) => ({
+      ...node,
+      outgoingLinkCount: 0,
+      incomingLinkCount: 0,
+      outgoingBandwidthBps: 0,
+      incomingBandwidthBps: 0
+    }));
+  const analysisNodeById = new Map(nodes.map((node) => [node.id, node]));
+  for (const link of links) {
+    const source = analysisNodeById.get(link.fromNodeId);
+    const target = analysisNodeById.get(link.toNodeId);
+    if (source) {
+      source.outgoingLinkCount += 1;
+      source.outgoingBandwidthBps += link.estimatedBandwidthBps;
+    }
+    if (target) {
+      target.incomingLinkCount += 1;
+      target.incomingBandwidthBps += link.estimatedBandwidthBps;
+    }
+  }
+
+  const totalBandwidthBps = links.reduce((sum, link) => sum + link.estimatedBandwidthBps, 0);
+  const busiestLink = [...links].sort((left, right) => right.estimatedBandwidthBps - left.estimatedBandwidthBps)[0];
+  const busiestNode = [...nodes].sort((left, right) => (right.incomingBandwidthBps + right.outgoingBandwidthBps) - (left.incomingBandwidthBps + left.outgoingBandwidthBps))[0];
+  const warnings = flowWarnings(links, bindings, analysisNodeById);
+
+  return { nodes, links, bindings, totalBandwidthBps, busiestLink, busiestNode, warnings };
+}
+
+function flowFilterTerms(filter: string | undefined): string[] {
+  return [...new Set((filter ?? "").toLowerCase().split(/[\s,;，；]+/).map((term) => term.trim()).filter(Boolean))];
+}
+
+function flowEntityMatches(terms: string[], context: {
+  workspace: WorkspaceView;
+  node?: WorkspaceNetworkNodeView;
+  link?: WorkspaceNetworkLinkView;
+  binding?: WorkspaceProtocolBindingView;
+}): boolean {
+  const link = context.link ?? (context.binding ? context.workspace.network.links.find((item) => item.id === context.binding?.linkId) : undefined);
+  const fromNode = link ? context.workspace.network.nodes.find((node) => node.id === link.fromNodeId) : undefined;
+  const toNode = link ? context.workspace.network.nodes.find((node) => node.id === link.toNodeId) : undefined;
+  const overLimit = link ? isLinkOverBandwidthLimit(link) : false;
+  const critical = Boolean(link?.critical)
+    || context.binding?.criticality === "high"
+    || context.binding?.criticality === "critical"
+    || overLimit;
+  const highRate = (context.binding?.frequencyHz ?? 0) >= 30 || (context.binding?.estimatedBandwidthBps ?? link?.estimatedBandwidthBps ?? 0) >= 1024 * 64;
+  const blob = [
+    context.node?.name,
+    context.node?.kind,
+    context.node?.role,
+    context.node?.subsystem,
+    context.node?.host,
+    context.node?.process,
+    context.node?.hardwareProfile,
+    context.node?.softwareProfile,
+    context.node?.notes,
+    link?.name,
+    link?.transport,
+    link?.endpoint,
+    link?.notes,
+    fromNode?.name,
+    fromNode?.kind,
+    fromNode?.subsystem,
+    toNode?.name,
+    toNode?.kind,
+    toNode?.subsystem,
+    context.binding?.name,
+    context.binding?.protocolName,
+    context.binding?.dataName,
+    context.binding?.criticality,
+    context.binding?.notes
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  return terms.some((term) => {
+    if (["critical", "关键", "risk", "风险"].includes(term)) return critical;
+    if (["high", "高频", "大流量", "hot"].includes(term)) return highRate || critical;
+    if (["over", "over-limit", "超限", "瓶颈"].includes(term)) return overLimit;
+    return blob.includes(term);
+  });
+}
+
+function flowWarnings(links: WorkspaceNetworkLinkView[], bindings: WorkspaceProtocolBindingView[], nodeById: Map<string, WorkspaceNetworkNodeView>): string[] {
+  const warnings: string[] = [];
+  for (const link of links) {
+    if (link.critical) warnings.push(`关键链路：${link.name}`);
+    if (isLinkOverBandwidthLimit(link)) warnings.push(`带宽超限：${link.name} 估算 ${formatBandwidth(link.estimatedBandwidthBps)} / 上限 ${link.bandwidthLimitMbps} Mbps`);
+  }
+  for (const binding of bindings) {
+    if (binding.criticality === "critical") warnings.push(`关键协议：${binding.name}`);
+    else if (binding.criticality === "high") warnings.push(`高优先级协议：${binding.name}`);
+    if (binding.payloadSize === undefined) warnings.push(`未知载荷大小：${binding.name}`);
+  }
+  for (const node of nodeById.values()) {
+    const total = node.incomingBandwidthBps + node.outgoingBandwidthBps;
+    if (total >= 1024 * 1024) warnings.push(`高吞吐节点：${node.name} ${formatBandwidth(total)}`);
+  }
+  return [...new Set(warnings)];
+}
+
+function isLinkOverBandwidthLimit(link: WorkspaceNetworkLinkView): boolean {
+  if (!link.bandwidthLimitMbps || link.bandwidthLimitMbps <= 0) return false;
+  return link.estimatedBandwidthBps > link.bandwidthLimitMbps * 125_000;
 }
 
 function NetworkTable({ title, emptyText, children }: { title: string; emptyText: string; children: React.ReactNode }): React.JSX.Element {

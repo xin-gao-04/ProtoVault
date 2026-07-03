@@ -2,6 +2,82 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-03 Loop 1：P13 FlowView 与示例网络
+
+### 目标
+
+推进 P13 的第一轮落地：让协议网络地图不只维护事实层，还能保存业务数据流观察视角，并从节点、链路和协议绑定中派生基础分析结果。
+
+同时补一套可直接打开查看的示例网络编辑效果。
+
+### 基线状态
+
+- 当前提交：`1bdad87 docs: add agent loop workflow`。
+- P12 协议网络地图事实层已完成。
+- P13 原状态为“设计收束，待实现”。
+- 本轮开始时仍存在未归属示例 Header 改动和一个 `.tmp` 文件：
+  - `examples/radar-workspace/headers/common/geometry.hpp`
+  - `examples/radar-workspace/headers/common/time.hpp`
+  - `examples/radar-workspace/headers/diagnostics/faults.hpp`
+  - `examples/radar-workspace/headers/telemetry/status.hpp`
+  - `examples/radar-workspace/headers/common/.time.hpp.29896.1783053185857.tmp`
+- 这些 Header 改动不归本轮处理，未纳入提交范围。
+
+### 行动
+
+- 新增 FlowView CRUD：
+  - `createNetworkFlowView`
+  - `updateNetworkFlowView`
+  - `deleteNetworkFlowView`
+- 补齐 shared 类型、main IPC、preload API 和后端单元测试。
+- 网络地图 UI 新增“数据流视图”tab：
+  - 默认派生视图：全量网络、关键与高风险。
+  - 手动 FlowView 创建、编辑、删除。
+  - 基于过滤条件派生节点、链路、协议绑定、吞吐、最高链路、最高节点和风险提示。
+- 新增 `examples/.protocol/network/network.json`，为默认示例入口提供网络演示数据。
+- `.gitignore` 精确放行示例 network.json，继续忽略其他 `.protocol` 运行产物。
+- E2E 增加 FlowView 创建和派生结果展示验证。
+
+### 验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm agent:loop
+pnpm test:e2e
+pnpm agent:loop
+pnpm release:check
+```
+
+结果通过：
+
+- contracts：2 个测试文件、6 个测试通过。
+- desktop typecheck：通过。
+- desktop：3 个测试文件、20 个测试通过。
+- Electron E2E：1 个测试通过。
+- C++ core：CMake configure/build 通过，CTest `core-self-test` 通过。
+
+中途发现并修复：
+
+- 首次 E2E 中 `全量网络` 同时匹配左侧按钮和右侧标题，触发 Playwright strict mode。
+- 修复方式：断言改为 `heading: 全量网络`。
+
+### 收获
+
+- FlowView 作为“观察视角”是合适的：它只保存过滤条件和说明，不复制事实层数据，也不保存派生统计。
+- 当前过滤语法宜保持轻量；正式查询语言应等用户实际使用后再设计。
+- 示例网络配置必须放在 `examples/.protocol/network/network.json`，因为桌面端默认“加载示例项目”打开的是 `examples` 根目录。
+
+### 下一轮
+
+建议进入 P13 Loop 2：
+
+1. 节点画像驱动的瓶颈提示：把硬件画像、软件画像、链路带宽、协议吞吐组合成更具体的风险解释。
+2. FlowView 报告生成：把当前视图导出为 Markdown，包含节点、链路、协议绑定、吞吐和风险摘要。
+3. 网络派生视图和右侧 Inspector 联动：选择 FlowView 后右侧展示该视图的上下文，而不是全局网络摘要。
+
 ## 2026-07-03 Loop 0：建立本地循环工作法
 
 ### 目标

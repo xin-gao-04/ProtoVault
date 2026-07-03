@@ -7,6 +7,7 @@ import type {
   CreateHeaderInput,
   CreateNetworkLinkInput,
   CreateNetworkNodeInput,
+  CreateNetworkFlowViewInput,
   CreateProtocolBindingInput,
   CreateStructInput,
   DeleteEnumInput,
@@ -15,6 +16,7 @@ import type {
   DeleteHeaderInput,
   DeleteNetworkLinkInput,
   DeleteNetworkNodeInput,
+  DeleteNetworkFlowViewInput,
   DeleteProtocolBindingInput,
   DeleteStructInput,
   DiffProtocolInput,
@@ -27,6 +29,7 @@ import type {
   SemanticDiffReport,
   UpdateNetworkLinkInput,
   UpdateNetworkNodeInput,
+  UpdateNetworkFlowViewInput,
   UpdateProtocolBindingInput,
   UpdateDataFlowInput,
   UpdateEnumValueInput,
@@ -77,6 +80,9 @@ export interface ProtoVaultDesktopApi {
   createProtocolBinding(input: CreateProtocolBindingInput): Promise<WorkspaceView>;
   updateProtocolBinding(input: UpdateProtocolBindingInput): Promise<WorkspaceView>;
   deleteProtocolBinding(input: DeleteProtocolBindingInput): Promise<WorkspaceView>;
+  createNetworkFlowView(input: CreateNetworkFlowViewInput): Promise<WorkspaceView>;
+  updateNetworkFlowView(input: UpdateNetworkFlowViewInput): Promise<WorkspaceView>;
+  deleteNetworkFlowView(input: DeleteNetworkFlowViewInput): Promise<WorkspaceView>;
   lint(workspaceRoot: string): Promise<WorkspaceLintReport>;
   generateDocument(input: GenerateDocumentInput): Promise<GeneratedDocumentReport>;
   createSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary>;
@@ -128,6 +134,9 @@ contextBridge.exposeInMainWorld("protoVault", {
   createProtocolBinding: (input) => ipcRenderer.invoke("network:create-binding", input),
   updateProtocolBinding: (input) => ipcRenderer.invoke("network:update-binding", input),
   deleteProtocolBinding: (input) => ipcRenderer.invoke("network:delete-binding", input),
+  createNetworkFlowView: (input) => ipcRenderer.invoke("network:create-flow-view", input),
+  updateNetworkFlowView: (input) => ipcRenderer.invoke("network:update-flow-view", input),
+  deleteNetworkFlowView: (input) => ipcRenderer.invoke("network:delete-flow-view", input),
   lint: (workspaceRoot) => ipcRenderer.invoke("protocol:lint", workspaceRoot),
   generateDocument: (input) => ipcRenderer.invoke("protocol:generate-document", input),
   createSnapshot: (input) => ipcRenderer.invoke("protocol:create-snapshot", input),

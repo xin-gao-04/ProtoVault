@@ -11,6 +11,7 @@ import type {
   CreateEnumInput,
   CreateHeaderInput,
   CreateNetworkLinkInput,
+  CreateNetworkFlowViewInput,
   CreateNetworkNodeInput,
   CreateProtocolBindingInput,
   CreateStructInput,
@@ -19,6 +20,7 @@ import type {
   DeleteFieldInput,
   DeleteHeaderInput,
   DeleteNetworkLinkInput,
+  DeleteNetworkFlowViewInput,
   DeleteNetworkNodeInput,
   DeleteProtocolBindingInput,
   DeleteStructInput,
@@ -28,6 +30,7 @@ import type {
   RenameHeaderInput,
   RenameStructInput,
   UpdateNetworkLinkInput,
+  UpdateNetworkFlowViewInput,
   UpdateNetworkNodeInput,
   UpdateProtocolBindingInput,
   UpdateDataFlowInput,
@@ -44,6 +47,7 @@ import {
   addEnumValue,
   addField,
   createNetworkLink,
+  createNetworkFlowView,
   createNetworkNode,
   createProtocolSnapshot,
   createProtocolBinding,
@@ -55,6 +59,7 @@ import {
   deleteField,
   deleteHeader,
   deleteNetworkLink,
+  deleteNetworkFlowView,
   deleteNetworkNode,
   deleteProtocolBinding,
   deleteStruct,
@@ -65,6 +70,7 @@ import {
   renameHeader,
   renameStruct,
   updateNetworkLink,
+  updateNetworkFlowView,
   updateNetworkNode,
   updateProtocolBinding,
   sampleWorkspacePath,
@@ -296,6 +302,9 @@ app.whenReady().then(() => {
   ipcMain.handle("network:create-binding", (event, input: CreateProtocolBindingInput) => runWorkspaceMutation(event.sender, input, createProtocolBinding));
   ipcMain.handle("network:update-binding", (event, input: UpdateProtocolBindingInput) => runWorkspaceMutation(event.sender, input, updateProtocolBinding));
   ipcMain.handle("network:delete-binding", (event, input: DeleteProtocolBindingInput) => runWorkspaceMutation(event.sender, input, deleteProtocolBinding));
+  ipcMain.handle("network:create-flow-view", (event, input: CreateNetworkFlowViewInput) => runWorkspaceMutation(event.sender, input, createNetworkFlowView));
+  ipcMain.handle("network:update-flow-view", (event, input: UpdateNetworkFlowViewInput) => runWorkspaceMutation(event.sender, input, updateNetworkFlowView));
+  ipcMain.handle("network:delete-flow-view", (event, input: DeleteNetworkFlowViewInput) => runWorkspaceMutation(event.sender, input, deleteNetworkFlowView));
   ipcMain.handle("protocol:lint", (_event, workspaceRoot: string) => lintWorkspace(workspaceRoot));
   ipcMain.handle("protocol:generate-document", (_event, input: GenerateDocumentInput) => generateProtocolDocument(input));
   ipcMain.handle("protocol:create-snapshot", (_event, input: CreateSnapshotInput) => createProtocolSnapshot(input));

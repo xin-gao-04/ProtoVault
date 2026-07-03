@@ -19,6 +19,7 @@ import type {
   CreateSnapshotInput,
   CreateEnumInput,
   CreateHeaderInput,
+  CreateNetworkFlowViewInput,
   CreateNetworkLinkInput,
   CreateNetworkNodeInput,
   CreateProtocolBindingInput,
@@ -27,6 +28,7 @@ import type {
   DeleteEnumValueInput,
   DeleteHeaderInput,
   DeleteFieldInput,
+  DeleteNetworkFlowViewInput,
   DeleteNetworkLinkInput,
   DeleteNetworkNodeInput,
   DeleteProtocolBindingInput,
@@ -44,6 +46,7 @@ import type {
   ProtocolSnapshotSummary,
   ProtocolBindingCriticality,
   UpdateNetworkLinkInput,
+  UpdateNetworkFlowViewInput,
   UpdateNetworkNodeInput,
   UpdateProtocolBindingInput,
   UpdateDataFlowInput,
@@ -64,6 +67,7 @@ import type {
   WorkspaceNetworkNodeView,
   WorkspaceNetworkLinkView,
   WorkspaceProtocolBindingView,
+  WorkspaceFlowView,
   WorkspaceScanProgress,
   WorkspaceTypeView,
   WorkspaceView
@@ -120,6 +124,7 @@ const NETWORK_NODE_KINDS = new Set<NetworkNodeKind>([
 
 const NETWORK_TRANSPORT_KINDS = new Set<NetworkTransportKind>(["udp", "tcp", "dds", "shared-memory", "file", "mq", "custom", "manual"]);
 const PROTOCOL_BINDING_CRITICALITIES = new Set<ProtocolBindingCriticality>(["low", "normal", "high", "critical"]);
+const NETWORK_FLOW_VIEW_SOURCES = new Set<WorkspaceFlowView["source"]>(["manual", "derived", "ai"]);
 
 type SizeInfo = { size: number; alignment: number; supported: true } | { supported: false; reason: string };
 
@@ -1218,7 +1223,8 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
       diagnostics: workspace.diagnostics.length,
       networkNodes: workspace.network.nodes.length,
       networkLinks: workspace.network.links.length,
-      protocolBindings: workspace.network.bindings.length
+      protocolBindings: workspace.network.bindings.length,
+      flowViews: workspace.network.views.length
     },
     directories: workspace.directories.map((directory) => ({
       path: directory.relativePath
@@ -1250,6 +1256,12 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
         protocolName: binding.protocolName ?? binding.typeId,
         linkName: binding.linkName ?? binding.linkId,
         estimatedBandwidthBps: binding.estimatedBandwidthBps
+      })),
+      views: workspace.network.views.map((view) => ({
+        id: view.id,
+        name: view.name,
+        source: view.source,
+        filter: view.filter
       }))
     },
     diagnostics: workspace.diagnostics
@@ -2185,6 +2197,18 @@ function protocolBindingFromInput(input: CreateProtocolBindingInput | UpdateProt
   };
 }
 
+function networkFlowViewFromInput(input: CreateNetworkFlowViewInput | UpdateNetworkFlowViewInput, id: string): WorkspaceFlowView {
+  const source = input.source ?? "manual";
+  if (!NETWORK_FLOW_VIEW_SOURCES.has(source)) throw new Error("未知的数据流视图来源。");
+  return {
+    id,
+    name: cleanRequiredText(input.name, "数据流视图名称"),
+    description: cleanOptionalText(input.description),
+    filter: cleanOptionalText(input.filter),
+    source
+  };
+}
+
 export async function createNetworkNode(input: CreateNetworkNodeInput): Promise<WorkspaceView> {
   const root = resolve(input.workspaceRoot);
   const network = await readNetworkMap(root);
@@ -2268,6 +2292,33 @@ export async function deleteProtocolBinding(input: DeleteProtocolBindingInput): 
   const network = await readNetworkMap(root);
   if (!network.bindings.some((binding) => binding.id === input.bindingId)) throw new Error("未找到要删除的协议绑定。");
   network.bindings = network.bindings.filter((binding) => binding.id !== input.bindingId);
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function createNetworkFlowView(input: CreateNetworkFlowViewInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  network.views.push(networkFlowViewFromInput(input, createNetworkId("flow")));
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function updateNetworkFlowView(input: UpdateNetworkFlowViewInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  const index = network.views.findIndex((view) => view.id === input.viewId);
+  if (index < 0) throw new Error("未找到要更新的数据流视图。");
+  network.views[index] = networkFlowViewFromInput(input, input.viewId);
+  await writeNetworkMap(root, network);
+  return scanWorkspace(root);
+}
+
+export async function deleteNetworkFlowView(input: DeleteNetworkFlowViewInput): Promise<WorkspaceView> {
+  const root = resolve(input.workspaceRoot);
+  const network = await readNetworkMap(root);
+  if (!network.views.some((view) => view.id === input.viewId)) throw new Error("未找到要删除的数据流视图。");
+  network.views = network.views.filter((view) => view.id !== input.viewId);
   await writeNetworkMap(root, network);
   return scanWorkspace(root);
 }

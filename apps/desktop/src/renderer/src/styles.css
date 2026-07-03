@@ -393,6 +393,31 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .topology-edge small { color: var(--text-faint); }
 .topology-bindings { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
 .topology-bindings small { color: var(--text-faint); }
+.flow-grid { grid-template-columns: minmax(250px, 330px) minmax(520px, 1fr); }
+.flow-sidebar { display: grid; gap: 12px; align-content: start; }
+.flow-view-list { display: grid; gap: 8px; }
+.flow-view-list article { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: color-mix(in srgb, var(--background-secondary) 82%, transparent); }
+.flow-view-list article.active { border-color: color-mix(in srgb, var(--interactive-accent) 62%, var(--background-modifier-border)); box-shadow: inset 3px 0 0 var(--interactive-accent); }
+.flow-view-list article > button { display: grid; gap: 3px; width: 100%; padding: 0; border: 0; background: transparent; color: var(--text-normal); text-align: left; }
+.flow-view-list article > div { display: flex; gap: 6px; }
+.flow-view-list b { font-size: 13px; }
+.flow-view-list small { color: var(--text-faint); font-size: 10px; line-height: 1.35; }
+.flow-view-list button:not(:first-child), .flow-view-list article > div button { padding: 4px 7px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--interactive-normal); color: var(--text-muted); font-size: 11px; }
+.flow-view-list button:hover { color: var(--text-accent-hover); }
+.flow-view-list button.danger { border-color: color-mix(in srgb, var(--color-red) 48%, var(--background-modifier-border)); color: var(--color-red); }
+.flow-analysis-panel { display: grid; gap: 14px; min-width: 0; }
+.flow-analysis-hero { display: flex; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: radial-gradient(circle at top left, color-mix(in srgb, var(--interactive-accent) 12%, transparent), transparent 42%), color-mix(in srgb, var(--background-secondary) 84%, transparent); }
+.flow-analysis-hero h3 { margin: 2px 0 6px; font-size: 24px; }
+.flow-analysis-hero p { margin: 0; max-width: 620px; color: var(--text-muted); line-height: 1.55; }
+.flow-kpis { min-width: 220px; }
+.flow-filter-chip { width: fit-content; margin: 0; padding: 5px 9px; border: 1px solid var(--background-modifier-border); border-radius: 999px; background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-secondary)); color: var(--text-muted); font-size: 11px; }
+.flow-risk-grid { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 12px; }
+.flow-warnings ul { margin: 6px 0 0; padding-left: 17px; color: var(--text-muted); line-height: 1.5; }
+.flow-node-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.flow-node-grid article { display: grid; gap: 4px; padding: 11px 12px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: color-mix(in srgb, var(--background-secondary) 78%, transparent); }
+.flow-node-grid b { color: var(--text-normal); }
+.flow-node-grid small { color: var(--text-faint); }
+.flow-node-grid span { color: var(--text-muted); font-size: 12px; }
 
 .graph-view { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 0; background: #070b10; }
 .graph-title { z-index: 2; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 54px; padding: 10px 22px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 80%, transparent); background: color-mix(in srgb, var(--background-secondary) 86%, #06090d); }

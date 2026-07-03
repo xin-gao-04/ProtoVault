@@ -9,6 +9,7 @@ import {
   addEnumValue,
   addField,
   createNetworkLink,
+  createNetworkFlowView,
   createNetworkNode,
   createProtocolSnapshot,
   createProtocolBinding,
@@ -20,6 +21,7 @@ import {
   deleteField,
   deleteHeader,
   deleteNetworkLink,
+  deleteNetworkFlowView,
   deleteNetworkNode,
   deleteProtocolBinding,
   deleteStruct,
@@ -30,6 +32,7 @@ import {
   renameHeader,
   renameStruct,
   updateNetworkLink,
+  updateNetworkFlowView,
   updateNetworkNode,
   updateProtocolBinding,
   scanWorkspace,
@@ -739,6 +742,36 @@ enum class Broken : std::uint8_t {
       expect(stored.bindings).toHaveLength(1);
       expect(stored.bindings[0].protocolName).toBeUndefined();
       expect(stored.bindings[0].payloadSize).toBeUndefined();
+
+      workspace = await createNetworkFlowView({
+        workspaceRoot: root,
+        name: "Tracking Critical Path",
+        description: "关注 Tracking 子系统和关键链路。",
+        filter: "Tracking critical"
+      });
+      const flowView = workspace.network.views.find((view) => view.name === "Tracking Critical Path")!;
+      expect(flowView.filter).toBe("Tracking critical");
+
+      workspace = await updateNetworkFlowView({
+        workspaceRoot: root,
+        viewId: flowView.id,
+        name: "Tracking High Rate",
+        description: "关注高频跟踪数据。",
+        filter: "RadarFrame high",
+        source: "manual"
+      });
+      const updatedFlowView = workspace.network.views.find((view) => view.id === flowView.id)!;
+      expect(updatedFlowView.name).toBe("Tracking High Rate");
+      expect(updatedFlowView.source).toBe("manual");
+
+      const storedWithView = JSON.parse(await readFile(resolve(root, ".protocol", "network", "network.json"), "utf8")) as {
+        views: Array<{ name: string; filter?: string; estimatedBandwidthBps?: number }>;
+      };
+      expect(storedWithView.views).toEqual([expect.objectContaining({ name: "Tracking High Rate", filter: "RadarFrame high" })]);
+      expect(storedWithView.views[0].estimatedBandwidthBps).toBeUndefined();
+
+      workspace = await deleteNetworkFlowView({ workspaceRoot: root, viewId: flowView.id });
+      expect(workspace.network.views).toHaveLength(0);
 
       workspace = await deleteProtocolBinding({ workspaceRoot: root, bindingId: reduced.id });
       expect(workspace.network.bindings).toHaveLength(0);

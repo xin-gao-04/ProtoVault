@@ -76,6 +76,15 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await network.getByRole("button", { name: "demo::radar::RadarTrack" }).click();
     await expect(page.getByRole("button", { name: "切换到 RadarTrack", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "网络地图" }).click();
+    await network.getByRole("button", { name: "数据流视图" }).click();
+    await expect(network.getByRole("heading", { name: "全量网络" })).toBeVisible();
+    await network.getByLabel("名称").fill("E2E Tracking Flow");
+    await network.getByLabel("过滤条件").fill("E2E RadarTrack");
+    await network.getByLabel("说明").fill("E2E 创建的数据流观察视角");
+    await network.getByRole("button", { name: "添加视图" }).click();
+    await expect(page.getByText("已创建数据流视图：E2E Tracking Flow")).toBeVisible();
+    await expect(network.getByRole("heading", { name: "E2E Tracking Flow" })).toBeVisible();
+    await expect(network.getByText("E2E RadarTrack@20Hz")).toBeVisible();
     await network.getByRole("button", { name: "协议绑定" }).click();
     const bindingRow = network.getByRole("row", { name: /E2E RadarTrack@20Hz/ });
     page.once("dialog", async (dialog) => {

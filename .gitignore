@@ -6,6 +6,11 @@ playwright-report/
 test-results/
 .vite/
 .protocol/
+!examples/.protocol/
+examples/.protocol/*
+!examples/.protocol/network/
+examples/.protocol/network/*
+!examples/.protocol/network/network.json
 build*/
 CMakeUserPresets.json
 *.user
