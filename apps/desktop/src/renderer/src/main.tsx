@@ -27,7 +27,7 @@ type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit
 type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
 type FieldTypeOption = { group: "composite" | "base"; value: string; label: string; detail?: string };
 type DirtyStructuralEdit =
-  | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; savedFieldName: string; savedFieldType: string }
+  | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; fieldInitializer: string; savedFieldName: string; savedFieldType: string; savedFieldInitializer: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
 type DirtyDataFlowEdit = { producers: string[]; consumers: string[] };
 type CenterViewMode = "workspace" | "graph";
@@ -116,6 +116,7 @@ function App(): React.JSX.Element {
   const [enumEditName, setEnumEditName] = React.useState("");
   const [fieldType, setFieldType] = React.useState("std::uint32_t");
   const [fieldName, setFieldName] = React.useState("value");
+  const [fieldInitializer, setFieldInitializer] = React.useState("");
   const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
   const [enumValueName, setEnumValueName] = React.useState("Unknown");
   const [enumValueNumber, setEnumValueNumber] = React.useState("0");
@@ -529,6 +530,7 @@ function App(): React.JSX.Element {
     if (field) {
       setFieldType(field.type);
       setFieldName(field.name);
+      setFieldInitializer(field.initializer ?? "");
       setEditingFieldId(field.id);
       setActiveAction("edit-field");
       return;
@@ -536,6 +538,7 @@ function App(): React.JSX.Element {
     if (activeAction === "add-field") {
       setFieldType("std::uint32_t");
       setFieldName("value");
+      setFieldInitializer("");
       setEditingFieldId(null);
       return;
     }
@@ -789,14 +792,14 @@ function App(): React.JSX.Element {
       return;
     }
     await runWorkspaceAction(async () => {
-      const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldType: nextFieldType, fieldName: nextFieldName });
+      const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldType: nextFieldType, fieldName: nextFieldName, initializer: fieldInitializer });
       applyWorkspaceResult(result, { selectTypeName: selectedType.name, selectFieldName: nextFieldName });
       setUiNotice(`已添加字段：${nextFieldName}`);
       setActiveAction(null);
     });
   }
 
-  async function addFieldInline(type: WorkspaceTypeView, nextFieldType: string, nextFieldName: string): Promise<boolean> {
+  async function addFieldInline(type: WorkspaceTypeView, nextFieldType: string, nextFieldName: string, nextInitializer: string): Promise<boolean> {
     if (!workspace || type.kind !== "struct") return false;
     const trimmedType = nextFieldType.trim();
     const trimmedName = nextFieldName.trim();
@@ -810,7 +813,7 @@ function App(): React.JSX.Element {
       return false;
     }
     return runWorkspaceAction(async () => {
-      const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: type.id, fieldType: trimmedType, fieldName: trimmedName });
+      const result = await window.protoVault.addField({ workspaceRoot: workspace.rootPath, typeId: type.id, fieldType: trimmedType, fieldName: trimmedName, initializer: nextInitializer });
       applyWorkspaceResult(result, { selectTypeName: type.name, selectFieldName: trimmedName });
       setUiNotice(`已添加字段：${trimmedName}`);
     });
@@ -830,7 +833,7 @@ function App(): React.JSX.Element {
       return;
     }
     await runWorkspaceAction(async () => {
-      const result = await window.protoVault.updateField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldId: editingFieldId, fieldType: nextFieldType, fieldName: nextFieldName });
+      const result = await window.protoVault.updateField({ workspaceRoot: workspace.rootPath, typeId: selectedType.id, fieldId: editingFieldId, fieldType: nextFieldType, fieldName: nextFieldName, initializer: fieldInitializer });
       applyWorkspaceResult(result, { selectTypeName: selectedType.name, selectFieldName: nextFieldName });
       setUiNotice(`已更新字段：${nextFieldName}`);
       setActiveAction(null);
@@ -838,7 +841,7 @@ function App(): React.JSX.Element {
     });
   }
 
-  async function updateFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView, nextFieldType: string, nextFieldName: string): Promise<boolean> {
+  async function updateFieldInline(type: WorkspaceTypeView, field: WorkspaceFieldView, nextFieldType: string, nextFieldName: string, nextInitializer: string): Promise<boolean> {
     if (!workspace || type.kind !== "struct") return false;
     const trimmedType = nextFieldType.trim();
     const trimmedName = nextFieldName.trim();
@@ -852,24 +855,27 @@ function App(): React.JSX.Element {
       return false;
     }
     return runWorkspaceAction(async () => {
-      const result = await window.protoVault.updateField({ workspaceRoot: workspace.rootPath, typeId: type.id, fieldId: field.id, fieldType: trimmedType, fieldName: trimmedName });
+      const result = await window.protoVault.updateField({ workspaceRoot: workspace.rootPath, typeId: type.id, fieldId: field.id, fieldType: trimmedType, fieldName: trimmedName, initializer: nextInitializer });
       applyWorkspaceResult(result, { selectTypeName: type.name, selectFieldName: trimmedName });
       setUiNotice(`已更新字段：${trimmedName}`);
     });
   }
 
-  function updateFieldDraft(type: WorkspaceTypeView, field: WorkspaceFieldView, nextFieldType: string, nextFieldName: string): void {
+  function updateFieldDraft(type: WorkspaceTypeView, field: WorkspaceFieldView, nextFieldType: string, nextFieldName: string, nextInitializer: string): void {
     setDirtyStructuralEdits((current) => {
       const next = { ...current };
-      if (nextFieldType === field.type && nextFieldName === field.name) delete next[field.id];
+      const savedInitializer = field.initializer ?? "";
+      if (nextFieldType === field.type && nextFieldName === field.name && nextInitializer === savedInitializer) delete next[field.id];
       else next[field.id] = {
         kind: "field",
         typeId: type.id,
         fieldId: field.id,
         fieldName: nextFieldName,
         fieldType: nextFieldType,
+        fieldInitializer: nextInitializer,
         savedFieldName: field.name,
-        savedFieldType: field.type
+        savedFieldType: field.type,
+        savedFieldInitializer: savedInitializer
       };
       return next;
     });
@@ -1129,7 +1135,8 @@ function App(): React.JSX.Element {
           typeId: type.id,
           fieldId: field.id,
           fieldType: trimmedType,
-          fieldName: trimmedName
+          fieldName: trimmedName,
+          initializer: edit.fieldInitializer
         });
         applyWorkspaceResult(result, { selectTypeName: type.name, selectFieldName: trimmedName });
         setDirtyStructuralEdits((current) => {
@@ -1376,6 +1383,7 @@ function App(): React.JSX.Element {
     if (!(await openTypeTab(type, field.id))) return;
     setFieldType(field.type);
     setFieldName(field.name);
+    setFieldInitializer(field.initializer ?? "");
     setEditingFieldId(field.id);
     setActiveAction("edit-field");
   }
@@ -1620,6 +1628,7 @@ function App(): React.JSX.Element {
           fieldTypeOptions={selectedFieldTypeOptions}
           fieldType={fieldType}
           fieldName={fieldName}
+          fieldInitializer={fieldInitializer}
           enumValueName={enumValueName}
           enumValueNumber={enumValueNumber}
           onHeaderRelativePathChange={setHeaderRelativePath}
@@ -1633,6 +1642,7 @@ function App(): React.JSX.Element {
           onEnumEditNameChange={setEnumEditName}
           onFieldTypeChange={setFieldType}
           onFieldNameChange={setFieldName}
+          onFieldInitializerChange={setFieldInitializer}
           onEnumValueNameChange={setEnumValueName}
           onEnumValueNumberChange={setEnumValueNumber}
           onCancel={() => setActiveAction(null)}
@@ -2219,6 +2229,7 @@ function StructuredActionPanel({
   fieldTypeOptions,
   fieldType,
   fieldName,
+  fieldInitializer,
   enumValueName,
   enumValueNumber,
   onHeaderRelativePathChange,
@@ -2232,6 +2243,7 @@ function StructuredActionPanel({
   onEnumEditNameChange,
   onFieldTypeChange,
   onFieldNameChange,
+  onFieldInitializerChange,
   onEnumValueNameChange,
   onEnumValueNumberChange,
   onCancel,
@@ -2269,6 +2281,7 @@ function StructuredActionPanel({
   fieldTypeOptions: FieldTypeOption[];
   fieldType: string;
   fieldName: string;
+  fieldInitializer: string;
   enumValueName: string;
   enumValueNumber: string;
   onHeaderRelativePathChange(value: string): void;
@@ -2282,6 +2295,7 @@ function StructuredActionPanel({
   onEnumEditNameChange(value: string): void;
   onFieldTypeChange(value: string): void;
   onFieldNameChange(value: string): void;
+  onFieldInitializerChange(value: string): void;
   onEnumValueNameChange(value: string): void;
   onEnumValueNumberChange(value: string): void;
   onCancel(): void;
@@ -2448,6 +2462,10 @@ function StructuredActionPanel({
         <span>字段名称</span>
         <input value={fieldName} onChange={(event) => onFieldNameChange(event.target.value)} placeholder="value" />
       </label>
+      <label>
+        <span>初始值</span>
+        <input value={fieldInitializer} onChange={(event) => onFieldInitializerChange(event.target.value)} placeholder="可空，例如 0 / false / {}" />
+      </label>
       <small>当前目标：{selectedType?.qualifiedName ?? "未选择 struct"}</small>
       <button type="submit" disabled={loading || selectedType?.kind !== "struct"}>添加字段</button>
     </form>}
@@ -2457,6 +2475,10 @@ function StructuredActionPanel({
       <label>
         <span>字段名称</span>
         <input value={fieldName} onChange={(event) => onFieldNameChange(event.target.value)} placeholder="value" />
+      </label>
+      <label>
+        <span>初始值</span>
+        <input value={fieldInitializer} onChange={(event) => onFieldInitializerChange(event.target.value)} placeholder="可空，例如 0 / false / {}" />
       </label>
       <div className="form-actions">
         <button type="submit" disabled={loading || selectedType?.kind !== "struct"}>保存修改</button>
@@ -2629,9 +2651,9 @@ function ProtocolEditor({
   dirtyNotes: Record<string, string>;
   dirtyStructuralEdits: Record<string, DirtyStructuralEdit>;
   onEditType(): void;
-  onAddFieldInline(type: WorkspaceTypeView, fieldType: string, fieldName: string): Promise<boolean>;
+  onAddFieldInline(type: WorkspaceTypeView, fieldType: string, fieldName: string, initializer: string): Promise<boolean>;
   onAddEnumValueInline(type: WorkspaceTypeView, valueName: string, valueNumber: string): Promise<boolean>;
-  onFieldDraftChange(type: WorkspaceTypeView, field: WorkspaceFieldView, fieldType: string, fieldName: string): void;
+  onFieldDraftChange(type: WorkspaceTypeView, field: WorkspaceFieldView, fieldType: string, fieldName: string, initializer: string): void;
   onEnumValueDraftChange(type: WorkspaceTypeView, value: WorkspaceEnumValueView, valueName: string, valueNumber: string): void;
   onSaveStructuralEdit(targetId: string): Promise<boolean>;
   onJumpToType(type: WorkspaceTypeView): void;
@@ -2644,6 +2666,7 @@ function ProtocolEditor({
   const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
   const [draftFieldType, setDraftFieldType] = React.useState("std::uint32_t");
   const [draftFieldName, setDraftFieldName] = React.useState("value");
+  const [draftFieldInitializer, setDraftFieldInitializer] = React.useState("");
   const [addingEnumValue, setAddingEnumValue] = React.useState(false);
   const [editingEnumValueId, setEditingEnumValueId] = React.useState<string | null>(null);
   const [draftEnumValueName, setDraftEnumValueName] = React.useState("NewValue");
@@ -2654,6 +2677,7 @@ function ProtocolEditor({
     setEditingFieldId(null);
     setDraftFieldType("std::uint32_t");
     setDraftFieldName("value");
+    setDraftFieldInitializer("");
     setAddingEnumValue(false);
     setEditingEnumValueId(null);
     setDraftEnumValueName("NewValue");
@@ -2665,6 +2689,7 @@ function ProtocolEditor({
     setEditingFieldId(null);
     setDraftFieldType("std::uint32_t");
     setDraftFieldName(`field${type.fields.length + 1}`);
+    setDraftFieldInitializer("");
   }
 
   function beginEditField(field: WorkspaceFieldView): void {
@@ -2673,6 +2698,7 @@ function ProtocolEditor({
     setEditingFieldId(field.id);
     setDraftFieldType(edit?.kind === "field" ? edit.fieldType : field.type);
     setDraftFieldName(edit?.kind === "field" ? edit.fieldName : field.name);
+    setDraftFieldInitializer(edit?.kind === "field" ? edit.fieldInitializer : field.initializer ?? "");
     onSelectMember(field.id);
   }
 
@@ -2700,7 +2726,7 @@ function ProtocolEditor({
   }
 
   async function saveAddedField(): Promise<void> {
-    const ok = await onAddFieldInline(type, draftFieldType, draftFieldName);
+    const ok = await onAddFieldInline(type, draftFieldType, draftFieldName, draftFieldInitializer);
     if (ok) setAddingField(false);
   }
 
@@ -2730,10 +2756,11 @@ function ProtocolEditor({
     </div>;
   }
 
-  function changeFieldDraft(field: WorkspaceFieldView, nextFieldType: string, nextFieldName: string): void {
+  function changeFieldDraft(field: WorkspaceFieldView, nextFieldType: string, nextFieldName: string, nextInitializer: string): void {
     setDraftFieldType(nextFieldType);
     setDraftFieldName(nextFieldName);
-    onFieldDraftChange(type, field, nextFieldType, nextFieldName);
+    setDraftFieldInitializer(nextInitializer);
+    onFieldDraftChange(type, field, nextFieldType, nextFieldName, nextInitializer);
   }
 
   function changeEnumValueDraft(value: WorkspaceEnumValueView, nextValueName: string, nextValueNumber: string): void {
@@ -2802,16 +2829,17 @@ function ProtocolEditor({
     <section className="editor-note-card" aria-label={`${type.name} 注释编辑`}>
       <div>
         <h3>类型注释</h3>
-        <p>注释会同步到 Header 上方的 <code>/// @brief</code>，并兼容读取旧 <code>@protovault-note:</code> 与常见 C++ 注释块。</p>
+        <p>类型注释同步到 Header 上方的 <code>/// @brief</code>；字段注释同步到字段声明同行的 <code>// 注释</code>。</p>
       </div>
       {noteEditor(type, `${type.name} 类型注释`)}
     </section>
     <div className="table-scroll">
-    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>注释</th><th>位置</th></tr></thead><tbody>
+    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>初始值</th><th>注释</th><th>位置</th></tr></thead><tbody>
       {type.fields.map((field) => {
         const editing = editingFieldId === field.id;
         const edit = dirtyStructuralEdits[field.id];
         const displayName = edit?.kind === "field" ? edit.fieldName : field.name;
+        const displayInitializer = edit?.kind === "field" ? edit.fieldInitializer : field.initializer ?? "";
         const dirty = edit !== undefined || dirtyNotes[field.id] !== undefined;
         return <tr
           className={`${field.id === selectedMemberId ? "selected-row" : ""}${dirty ? " dirty-row" : ""}`.trim() || undefined}
@@ -2822,14 +2850,16 @@ function ProtocolEditor({
         >
           {editing
             ? <>
-                <td><input className="table-input" aria-label="字段名称" value={draftFieldName} onChange={(event) => changeFieldDraft(field, draftFieldType, event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditingFieldId(null); }} autoFocus /></td>
-                <td><FieldTypeInput compact label="字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={(value) => changeFieldDraft(field, value, draftFieldName)} /></td>
+                <td><input className="table-input" aria-label="字段名称" value={draftFieldName} onChange={(event) => changeFieldDraft(field, draftFieldType, event.target.value, draftFieldInitializer)} onKeyDown={(event) => { if (event.key === "Escape") setEditingFieldId(null); }} autoFocus /></td>
+                <td><FieldTypeInput compact label="字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={(value) => changeFieldDraft(field, value, draftFieldName, draftFieldInitializer)} /></td>
+                <td><input className="table-input mono" aria-label="字段初始值" value={draftFieldInitializer} onChange={(event) => changeFieldDraft(field, draftFieldType, draftFieldName, event.target.value)} placeholder="可空" /></td>
                 <td>{noteEditor(field, `${field.name} 字段注释`, true)}</td>
                 <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
               </>
             : <>
                 <td>{displayName}</td>
                 <td>{fieldTypeDisplay(field)}</td>
+                <td>{displayInitializer ? <code>{displayInitializer}</code> : "—"}</td>
                 <td>{noteEditor(field, `${field.name} 字段注释`, true)}</td>
                 <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
               </>}
@@ -2838,6 +2868,7 @@ function ProtocolEditor({
       {addingField && <tr className="draft-row">
         <td><input className="table-input" aria-label="新增字段名称" value={draftFieldName} onChange={(event) => setDraftFieldName(event.target.value)} autoFocus /></td>
         <td><FieldTypeInput compact label="新增字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={setDraftFieldType} /></td>
+        <td><input className="table-input mono" aria-label="新增字段初始值" value={draftFieldInitializer} onChange={(event) => setDraftFieldInitializer(event.target.value)} placeholder="可空" /></td>
         <td>—</td>
         <td><div className="row-actions"><span>新增</span><button className="inline-action" disabled={loading} onClick={() => void saveAddedField()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingField(false)}>取消</button></div></td>
       </tr>}

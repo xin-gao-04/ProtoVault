@@ -2,6 +2,7 @@ export interface WorkspaceFieldView {
   id: string;
   name: string;
   type: string;
+  initializer?: string;
   note?: string;
   location?: { file: string; line: number; column: number };
 }
@@ -174,6 +175,7 @@ export interface AddFieldInput {
   typeId: string;
   fieldType: string;
   fieldName: string;
+  initializer?: string;
 }
 
 export interface UpdateFieldInput {
@@ -182,6 +184,7 @@ export interface UpdateFieldInput {
   fieldId: string;
   fieldType: string;
   fieldName: string;
+  initializer?: string;
 }
 
 export interface DeleteFieldInput {

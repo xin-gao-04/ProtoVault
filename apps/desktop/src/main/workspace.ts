@@ -219,6 +219,14 @@ function sanitizeCppType(type: string): string {
   return trimmed;
 }
 
+function sanitizeFieldInitializer(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (/[;]|\/\//.test(trimmed) || /\/\*/.test(trimmed)) throw new Error("字段初始化值不能包含注释或分号。");
+  if (/[{}]/.test(trimmed) && trimmed !== "{}") throw new Error("当前只支持空聚合初始化 {}，或基础字面量初始化。");
+  return trimmed;
+}
+
 function normalizeRelativePath(value: string): string {
   return value.replaceAll("\\", "/").replace(/^\/+/, "");
 }
@@ -327,6 +335,29 @@ function stripCommentTag(text: string): string {
 function lineCommentText(line: string): string | undefined {
   const match = line.match(/^\s*\/\/\/?!?\s?(.*)$/);
   return match ? stripCommentTag(match[1] ?? "") : undefined;
+}
+
+function splitInlineLineComment(line: string): { code: string; note?: string } {
+  const index = line.indexOf("//");
+  if (index < 0) return { code: line };
+  const note = line.slice(index + 2).trim();
+  return { code: line.slice(0, index).trimEnd(), note: note || undefined };
+}
+
+function inlineFieldComment(lines: string[], line?: number): string | undefined {
+  if (!line) return undefined;
+  const text = lines[line - 1];
+  if (text === undefined) return undefined;
+  return splitInlineLineComment(text).note;
+}
+
+function fieldInitializerFromLine(lines: string[], line?: number): string | undefined {
+  if (!line) return undefined;
+  const raw = lines[line - 1];
+  if (raw === undefined) return undefined;
+  const code = splitInlineLineComment(raw).code;
+  const match = code.match(/=\s*(.*?)\s*;?\s*$/);
+  return match?.[1]?.trim() || undefined;
 }
 
 function blockCommentText(lines: string[]): string {
@@ -475,7 +506,8 @@ async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<SourceNot
     if (typeNote) notes[type.id] = typeNote;
     for (const field of type.fields) {
       targetIds.add(field.id);
-      const fieldNote = await noteBefore(type.file, field.location?.line);
+      const lines = await linesFor(type.file);
+      const fieldNote = inlineFieldComment(lines, field.location?.line) ?? await noteBefore(type.file, field.location?.line);
       if (fieldNote) notes[field.id] = fieldNote;
     }
     for (const value of type.values) {
@@ -730,6 +762,7 @@ function collectTypes(root: AstNode, workspaceRoot: string, defaultFile: string)
 }
 
 function applyHeaderLayoutHints(types: WorkspaceTypeView[], content: string): WorkspaceTypeView[] {
+  const lines = content.split(/\r?\n/);
   return types.map((type) => {
     const line = type.location?.line;
     const pack = line ? detectPackAtLine(content, line) : undefined;
@@ -737,7 +770,11 @@ function applyHeaderLayoutHints(types: WorkspaceTypeView[], content: string): Wo
     return {
       ...type,
       pack,
-      underlyingType: underlyingType ?? type.underlyingType
+      underlyingType: underlyingType ?? type.underlyingType,
+      fields: type.fields.map((field) => ({
+        ...field,
+        initializer: fieldInitializerFromLine(lines, field.location?.line)
+      }))
     };
   });
 }
@@ -1562,6 +1599,7 @@ export async function addField(input: AddFieldInput): Promise<WorkspaceView> {
   const header = assertWorkspaceFile(root, targetType.file);
   const fieldType = sanitizeCppType(input.fieldType);
   const fieldName = sanitizeCppIdentifier(input.fieldName, "字段名称");
+  const initializer = sanitizeFieldInitializer(input.initializer);
   if (targetType.fields.some((field) => field.name === fieldName)) throw new Error(`字段已存在：${fieldName}`);
 
   const content = await fs.readFile(header, "utf8");
@@ -1569,7 +1607,7 @@ export async function addField(input: AddFieldInput): Promise<WorkspaceView> {
   const match = pattern.exec(content);
   if (!match) throw new Error(`无法在 Header 中定位 struct ${targetType.name} 的受控编辑区域。`);
   const body = match[2].trimEnd();
-  const nextBody = `${body}\n  ${renderFieldDeclaration(fieldType, fieldName)}`;
+  const nextBody = `${body}\n  ${renderFieldDeclaration(fieldType, fieldName, initializer)}`;
   const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
   await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
@@ -1607,12 +1645,14 @@ export async function updateField(input: UpdateFieldInput): Promise<WorkspaceVie
   const { workspace, targetType, targetField, header, lines, lineIndex } = await findEditableField(root, input.typeId, input.fieldId);
   const fieldType = sanitizeCppType(input.fieldType);
   const fieldName = sanitizeCppIdentifier(input.fieldName, "字段名称");
+  const initializer = sanitizeFieldInitializer(input.initializer);
   if (fieldName !== targetField.name && targetType.fields.some((field) => field.name === fieldName)) {
     throw new Error(`字段已存在：${fieldName}`);
   }
   void workspace;
   const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "  ";
-  lines[lineIndex] = `${indent}${renderFieldDeclaration(fieldType, fieldName)}`;
+  const inlineNote = splitInlineLineComment(lines[lineIndex] ?? "").note;
+  lines[lineIndex] = `${indent}${renderFieldDeclaration(fieldType, fieldName, initializer)}${inlineNote ? ` // ${inlineNote}` : ""}`;
   const nextContent = lines.join("\n");
   await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
@@ -1733,6 +1773,7 @@ export async function updateDataFlow(input: UpdateDataFlowInput): Promise<Worksp
 type NoteSourceTarget = {
   header: string;
   lineIndex: number;
+  targetKind: "type" | "field" | "enum-value";
   declarationKind?: WorkspaceTypeView["kind"];
   declarationName?: string;
 };
@@ -1743,15 +1784,15 @@ function findNoteTarget(workspace: WorkspaceView, targetId: string): NoteSourceT
       return findTypeDeclarationLine(type);
     }
     const field = type.fields.find((item) => item.id === targetId);
-    if (field?.location?.line) return { header: type.file, lineIndex: field.location.line - 1 };
+    if (field?.location?.line) return { header: type.file, lineIndex: field.location.line - 1, targetKind: "field" };
     const enumValue = type.values.find((item) => item.id === targetId);
-    if (enumValue?.location?.line) return { header: type.file, lineIndex: enumValue.location.line - 1 };
+    if (enumValue?.location?.line) return { header: type.file, lineIndex: enumValue.location.line - 1, targetKind: "enum-value" };
   }
   return null;
 }
 
 function findTypeDeclarationLine(type: WorkspaceTypeView): NoteSourceTarget | null {
-  return { header: type.file, lineIndex: -1, declarationKind: type.kind, declarationName: type.name };
+  return { header: type.file, lineIndex: -1, targetKind: "type", declarationKind: type.kind, declarationName: type.name };
 }
 
 async function syncNoteToSource(root: string, target: NoteSourceTarget, note: string): Promise<void> {
@@ -1764,6 +1805,19 @@ async function syncNoteToSource(root: string, target: NoteSourceTarget, note: st
   }
   if (lineIndex < 0) throw new Error("该对象缺少源码位置，暂不能同步注释到 Header。");
   if (lineIndex >= lines.length) throw new Error("注释同步目标行超出 Header 范围。");
+
+  if (target.targetKind === "field") {
+    const existingBlock = commentBlockBefore(lines, lineIndex);
+    if (existingBlock) {
+      lines.splice(existingBlock.start, existingBlock.end - existingBlock.start);
+      lineIndex -= existingBlock.end - existingBlock.start;
+    }
+    const current = lines[lineIndex] ?? "";
+    const { code } = splitInlineLineComment(current);
+    lines[lineIndex] = note ? `${code} // ${note.replace(/\r?\n/g, " ").trim()}` : code;
+    await atomicWriteFile(header, lines.join("\n"));
+    return;
+  }
 
   const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "";
   const existingBlock = commentBlockBefore(lines, lineIndex);

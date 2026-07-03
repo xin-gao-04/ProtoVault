@@ -23,10 +23,10 @@ export function renderNewHeader(relativePath: string): string {
   ].join("\n");
 }
 
-export function renderStructDeclaration(structName: string, fields: Array<{ type: string; name: string }> = [{ type: "std::uint32_t", name: "id" }]): string {
+export function renderStructDeclaration(structName: string, fields: Array<{ type: string; name: string; initializer?: string }> = [{ type: "std::uint32_t", name: "id" }]): string {
   return [
     `struct ${structName} {`,
-    ...fields.map((field) => `  ${renderFieldDeclaration(field.type, field.name)}`),
+    ...fields.map((field) => `  ${renderFieldDeclaration(field.type, field.name, field.initializer)}`),
     "};"
   ].join("\n");
 }
@@ -39,10 +39,11 @@ export function renderEnumDeclaration(enumName: string, values: Array<{ name: st
   ].join("\n");
 }
 
-export function renderFieldDeclaration(fieldType: string, fieldName: string): string {
+export function renderFieldDeclaration(fieldType: string, fieldName: string, initializer?: string): string {
+  const init = initializer?.trim() ? ` = ${initializer.trim()}` : "";
   const arrayMatch = fieldType.match(/^(.*?)(\[[0-9]+\])$/);
-  if (arrayMatch) return `${arrayMatch[1].trim()} ${fieldName}${arrayMatch[2]};`;
-  return `${fieldType} ${fieldName};`;
+  if (arrayMatch) return `${arrayMatch[1].trim()} ${fieldName}${arrayMatch[2]}${init};`;
+  return `${fieldType} ${fieldName}${init};`;
 }
 
 export function renderEnumValueDeclaration(valueName: string, value?: number): string {

@@ -316,12 +316,13 @@ describe("scanWorkspace", () => {
         workspaceRoot: root,
         typeId: packet!.id,
         fieldType: "std::uint16_t",
-        fieldName: "flags"
+        fieldName: "flags",
+        initializer: "0"
       });
       const updatedPacket = afterField.types.find((type) => type.qualifiedName === "protovault::PacketHeader");
-      expect(updatedPacket?.fields.map((field) => [field.type, field.name])).toEqual([
-        ["std::uint32_t", "id"],
-        ["std::uint16_t", "flags"]
+      expect(updatedPacket?.fields.map((field) => [field.type, field.name, field.initializer ?? ""])).toEqual([
+        ["std::uint32_t", "id", ""],
+        ["std::uint16_t", "flags", "0"]
       ]);
 
       const afterUpdate = await updateField({
@@ -329,12 +330,13 @@ describe("scanWorkspace", () => {
         typeId: updatedPacket!.id,
         fieldId: updatedPacket!.fields.find((field) => field.name === "flags")!.id,
         fieldType: "std::uint8_t",
-        fieldName: "status"
+        fieldName: "status",
+        initializer: "1"
       });
       const packetAfterUpdate = afterUpdate.types.find((type) => type.qualifiedName === "protovault::PacketHeader");
-      expect(packetAfterUpdate?.fields.map((field) => [field.type, field.name])).toEqual([
-        ["std::uint32_t", "id"],
-        ["std::uint8_t", "status"]
+      expect(packetAfterUpdate?.fields.map((field) => [field.type, field.name, field.initializer ?? ""])).toEqual([
+        ["std::uint32_t", "id", ""],
+        ["std::uint8_t", "status", "1"]
       ]);
 
       const afterDelete = await deleteField({
@@ -567,7 +569,7 @@ enum class Broken : std::uint8_t {
 
       const headerContent = await readFile(resolve(root, "headers", "meta.hpp"), "utf8");
       expect(headerContent).toContain("/// @brief 协议包头结构");
-      expect(headerContent).toContain("/// @brief 业务侧稳定 ID");
+      expect(headerContent).toContain("std::uint32_t id; // 业务侧稳定 ID");
       expect(headerContent).toContain("/// @brief 消息类型枚举");
       expect(headerContent).toContain("/// @brief 缺省值");
     } finally {
@@ -646,8 +648,7 @@ namespace demo {
 
 /** @brief 源码结构注释 */
 struct Packet {
-  /// 源码字段注释
-  std::uint32_t id;
+  std::uint32_t id = 7; // 源码字段注释
 };
 
 /*!
@@ -667,6 +668,7 @@ enum class PacketState : std::uint8_t {
 
       expect(packet.note).toBe("源码结构注释");
       expect(packet.fields.find((field) => field.name === "id")?.note).toBe("源码字段注释");
+      expect(packet.fields.find((field) => field.name === "id")?.initializer).toBe("7");
       expect(state.note).toBe("源码枚举注释");
       expect(state.values.find((value) => value.name === "Ready")?.note).toBe("源码枚举项注释");
 

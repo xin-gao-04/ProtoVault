@@ -181,6 +181,7 @@ export const workspaceFieldViewSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   type: z.string().min(1),
+  initializer: z.string().optional(),
   note: z.string().optional(),
   location: workspaceViewLocationSchema.optional()
 });
