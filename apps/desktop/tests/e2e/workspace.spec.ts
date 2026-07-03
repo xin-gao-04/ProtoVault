@@ -95,6 +95,13 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByText("已删除协议绑定：E2E RadarTrack@20Hz")).toBeVisible();
     await network.getByRole("button", { name: "拓扑预览" }).click();
     await expect(network.getByText("E2E DDS Link")).toBeVisible();
+    await network.getByRole("button", { name: "协议绑定" }).click();
+    await network.getByLabel("名称").fill("E2E RadarTrack@15Hz");
+    await network.getByLabel("链路").selectOption({ label: "E2E DDS Link" });
+    await network.getByLabel("协议类型").selectOption({ label: "demo::radar::RadarTrack" });
+    await network.getByLabel("频率 Hz").fill("15");
+    await network.getByRole("button", { name: "添加绑定" }).click();
+    await expect(page.getByText("已创建协议绑定：E2E RadarTrack@15Hz")).toBeVisible();
 
     await page.getByRole("button", { name: "关系图谱" }).click();
     const graph = page.getByRole("region", { name: "协议关系图谱" });
@@ -122,8 +129,10 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "切换到 Vec3", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "关系图谱" }).click();
     await graph.getByRole("button", { name: "数据流" }).click();
-    await expect(graph.getByRole("button", { name: `图谱节点 producer ${flowProducer}` })).toBeVisible();
-    await expect(graph.getByRole("button", { name: "图谱节点 consumer Tracker" })).toBeVisible();
+    await expect(page.getByLabel("图谱数据流视图")).toBeVisible();
+    await expect(graph.getByRole("button", { name: "图谱节点 network-node E2E RadarModel" })).toBeVisible();
+    await expect(graph.getByRole("button", { name: "图谱节点 network-node E2E TrackService" })).toBeVisible();
+    await expect(graph.getByRole("button", { name: "图谱节点 protocol-binding E2E RadarTrack@15Hz" })).toBeVisible();
     await graph.getByRole("button", { name: "依赖" }).click();
     await expect(page.getByRole("button", { name: "demo::common::Vec3", exact: true })).toBeVisible();
     await graph.getByRole("button", { name: "图谱节点 struct RadarTrack" }).dblclick();

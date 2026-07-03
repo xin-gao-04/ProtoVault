@@ -366,6 +366,7 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .network-form { display: grid; gap: 10px; padding: 15px; }
 .network-form h3, .network-table-card h3 { margin: 0 0 4px; color: var(--text-muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
 .network-form label { display: grid; gap: 5px; color: var(--text-faint); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.network-form label small { color: var(--text-faint); font-size: 10px; letter-spacing: 0; line-height: 1.35; text-transform: none; }
 .network-form input, .network-form select, .network-form textarea { width: 100%; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-modifier-form-field); color: var(--text-normal); padding: 7px 9px; outline: none; }
 .network-form textarea { min-height: 54px; resize: vertical; line-height: 1.45; }
 .network-form input:focus, .network-form select:focus, .network-form textarea:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 18%, transparent); }
@@ -425,8 +426,9 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .graph-title p { margin: 4px 0 0; max-width: 720px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
 .graph-title .eyebrow { margin: 0 0 3px; }
 .graph-title-actions { display: flex; align-items: center; gap: 10px; }
-.graph-title-actions input { width: min(320px, 28vw); height: 32px; border: 1px solid rgba(114, 129, 151, .28); border-radius: var(--radius-m); background: rgba(8, 12, 18, .68); color: var(--text-normal); padding: 6px 10px; outline: none; }
-.graph-title-actions input:focus { border-color: rgba(229, 173, 85, .58); box-shadow: 0 0 0 2px rgba(229, 173, 85, .13); }
+.graph-title-actions input, .graph-title-actions select { width: min(320px, 28vw); height: 32px; border: 1px solid rgba(114, 129, 151, .28); border-radius: var(--radius-m); background: rgba(8, 12, 18, .68); color: var(--text-normal); padding: 6px 10px; outline: none; }
+.graph-title-actions select { width: min(210px, 20vw); }
+.graph-title-actions input:focus, .graph-title-actions select:focus { border-color: rgba(229, 173, 85, .58); box-shadow: 0 0 0 2px rgba(229, 173, 85, .13); }
 .graph-mode-toggle { display: flex; gap: 2px; padding: 2px; border: 1px solid rgba(114, 129, 151, .22); border-radius: 999px; background: rgba(8, 12, 18, .58); }
 .graph-mode-toggle button { min-width: 52px; height: 26px; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font-size: 11px; }
 .graph-mode-toggle button.active, .graph-mode-toggle button:hover { background: rgba(86, 188, 170, .16); color: #c4fff2; }
@@ -437,7 +439,7 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .graph-theme-obsidian-light { background: #dfe5ee; }
 .graph-theme-obsidian-light .graph-title { border-bottom-color: rgba(94, 108, 130, .24); background: #eef1f5; color: #253041; }
 .graph-theme-obsidian-light .graph-title p, .graph-theme-obsidian-light .graph-legend, .graph-theme-obsidian-light .graph-floating-tools { color: rgba(37, 48, 65, .68); }
-.graph-theme-obsidian-light .graph-title-actions input, .graph-theme-obsidian-light .graph-mode-toggle { border-color: rgba(94, 108, 130, .26); background: rgba(255, 255, 255, .72); color: #253041; }
+.graph-theme-obsidian-light .graph-title-actions input, .graph-theme-obsidian-light .graph-title-actions select, .graph-theme-obsidian-light .graph-mode-toggle { border-color: rgba(94, 108, 130, .26); background: rgba(255, 255, 255, .72); color: #253041; }
 .graph-theme-obsidian-light .graph-mode-toggle button { color: rgba(37, 48, 65, .68); }
 .graph-theme-obsidian-light .graph-mode-toggle button.active, .graph-theme-obsidian-light .graph-mode-toggle button:hover { background: rgba(109, 91, 208, .12); color: #253041; }
 .graph-theme-obsidian-light .graph-floating-tools, .graph-theme-obsidian-light .graph-hover-card { border-color: rgba(94, 108, 130, .22); background: rgba(255, 255, 255, .74); color: #253041; }
@@ -446,7 +448,7 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .graph-theme-obsidian-light .graph-node-shortcuts button:hover { border-color: rgba(109, 91, 208, .38); color: #253041; background: rgba(255, 255, 255, .88); }
 .graph-theme-ink .graph-title { border-bottom-color: rgba(92, 72, 46, .24); background: #e7dcc4; color: #203336; }
 .graph-theme-ink .graph-title p, .graph-theme-ink .graph-legend, .graph-theme-ink .graph-floating-tools { color: rgba(32, 51, 54, .68); }
-.graph-theme-ink .graph-title-actions input, .graph-theme-ink .graph-mode-toggle { border-color: rgba(92, 72, 46, .26); background: rgba(248, 241, 226, .72); color: #203336; }
+.graph-theme-ink .graph-title-actions input, .graph-theme-ink .graph-title-actions select, .graph-theme-ink .graph-mode-toggle { border-color: rgba(92, 72, 46, .26); background: rgba(248, 241, 226, .72); color: #203336; }
 .graph-theme-ink .graph-mode-toggle button { color: rgba(32, 51, 54, .68); }
 .graph-theme-ink .graph-mode-toggle button.active, .graph-theme-ink .graph-mode-toggle button:hover { background: rgba(47, 125, 104, .14); color: #203336; }
 .graph-theme-ink .graph-floating-tools, .graph-theme-ink .graph-hover-card { border-color: rgba(92, 72, 46, .22); background: rgba(238, 230, 211, .74); color: #203336; }
@@ -461,6 +463,7 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .risk-dot.warning { border: 1px solid #e5ad55; background: transparent; }
 .risk-dot.critical { border: 1px solid #e6524b; background: transparent; }
 .producer-dot { background: #56bcaa; }
+.binding-dot { background: #8b7cf6; }
 .edge-dot { width: 18px !important; height: 3px !important; border-radius: 999px !important; transform: translateY(-2px); }
 .edge-dot.outgoing { background: #56bcaa; }
 .edge-dot.incoming { background: #e5ad55; }

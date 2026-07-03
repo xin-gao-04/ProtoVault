@@ -2,6 +2,77 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-03 Loop 2：关系图谱接入网络数据流
+
+### 目标
+
+修复 P13 Loop 1 后暴露出的模型断层：网络地图已经采用“实体节点 + 链路 + 协议绑定 + FlowView”，但关系图谱的数据流模式仍然展示旧的协议类型 producer / consumer 标签。
+
+本轮目标是让关系图谱的数据流模式读取网络事实，并按 FlowView 展示节点、协议载荷和协议类型关系。
+
+### 基线状态
+
+- 当前提交：`954eed5 feat: add network flow views`。
+- P13 Loop 1 已完成 FlowView CRUD、派生视图和示例网络配置。
+- 本轮开始时仍存在未归属示例 Header 改动和一个 `.tmp` 文件：
+  - `examples/radar-workspace/headers/common/geometry.hpp`
+  - `examples/radar-workspace/headers/common/time.hpp`
+  - `examples/radar-workspace/headers/diagnostics/faults.hpp`
+  - `examples/radar-workspace/headers/telemetry/status.hpp`
+  - `examples/radar-workspace/headers/common/.time.hpp.29896.1783053185857.tmp`
+- 这些 Header 改动不归本轮处理，未纳入提交范围。
+
+### 行动
+
+- 扩展关系图谱节点类型：
+  - `network-node`
+  - `protocol-binding`
+- 修改数据流模式构图规则：
+  - 有网络协议绑定时：展示 `NetworkNode → ProtocolBinding → Protocol Type → NetworkNode`。
+  - 无网络协议绑定时：回退旧 `producer → type → consumer` 标签模型。
+- 图谱顶部增加 FlowView 选择器。
+- 图例和节点索引改为实体节点 / 协议载荷语义。
+- 协议载荷节点双击打开绑定的协议类型。
+- 实体节点双击切换到网络地图。
+- 增强图谱搜索文本，支持网络节点、子系统、协议绑定、业务数据名和协议名。
+- 为协议绑定表单的“峰值系数”增加 tooltip 和说明。
+- E2E 从旧 producer/consumer 断言改为 network-node / protocol-binding 断言。
+
+### 验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm --filter @protovault/contracts test
+pnpm test:e2e
+pnpm agent:loop
+pnpm release:check
+```
+
+结果通过：
+
+- contracts：2 个测试文件、6 个测试通过。
+- desktop typecheck：通过。
+- desktop：3 个测试文件、20 个测试通过。
+- Electron E2E：1 个测试通过。
+- C++ core：CMake configure/build 通过，CTest `core-self-test` 通过。
+
+### 收获
+
+- “数据流”在关系图谱中应表达系统事实，不应再以协议类型上的 producer / consumer 标签为主。
+- FlowView 适合作为图谱过滤器，而不是独立图谱类型。
+- 图谱中引入协议载荷节点后，能够在视觉上表达“一条链路上承载多个协议”的情况，比直接把协议画成边更可扩展。
+
+### 下一轮
+
+建议进入 P13 Loop 3：
+
+1. 右侧 Inspector 支持网络图谱上下文：选中实体节点/协议载荷时显示节点画像、链路、吞吐和风险。
+2. FlowView Markdown 报告生成。
+3. 基于节点硬件/软件画像的瓶颈解释。
+
 ## 2026-07-03 Loop 1：P13 FlowView 与示例网络
 
 ### 目标

@@ -57,6 +57,8 @@ type ContextMenuState = {
 type ProtocolGraphNode =
   | { id: string; kind: "file"; label: string; file: WorkspaceFileView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
   | { id: string; kind: "struct" | "enum"; label: string; type: WorkspaceTypeView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
+  | { id: string; kind: "network-node"; label: string; networkNode: WorkspaceNetworkNodeView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
+  | { id: string; kind: "protocol-binding"; label: string; binding: WorkspaceProtocolBindingView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
   | { id: string; kind: "producer" | "consumer"; label: string; x: number; y: number; z: number; metrics: GraphNodeMetrics };
 type ProtocolGraphMode = "dependency" | "data-flow";
 type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; kind: "contains" | "references" | "flow" };
@@ -451,6 +453,12 @@ function App(): React.JSX.Element {
   function selectGraphNode(node: ProtocolGraphNode): void {
     if (node.kind === "file") locateFileInTree(node.file);
     else if (node.kind === "struct" || node.kind === "enum") locateTypeInTree(node.type);
+    else if (node.kind === "network-node") {
+      setCenterViewMode("network");
+      setUiNotice(`网络节点：${node.networkNode.name}`);
+    } else if (node.kind === "protocol-binding") {
+      setUiNotice(`协议载荷：${node.binding.name} · ${node.binding.protocolName ?? node.binding.typeId}`);
+    }
     else setUiNotice(`${node.kind === "producer" ? "生产节点" : "消费节点"}：${node.label}`);
   }
 
@@ -459,6 +467,11 @@ function App(): React.JSX.Element {
       if (await openFileTab(node.file)) setCenterViewMode("workspace");
     } else if (node.kind === "struct" || node.kind === "enum") {
       if (await openTypeTab(node.type)) setCenterViewMode("workspace");
+    } else if (node.kind === "protocol-binding") {
+      await openProtocolTypeById(node.binding.typeId);
+    } else if (node.kind === "network-node") {
+      setCenterViewMode("network");
+      setUiNotice(`已切换到网络地图：${node.networkNode.name}`);
     } else {
       setCenterViewMode("graph");
     }
@@ -3219,6 +3232,14 @@ function emptyFlowViewForm(): FlowViewFormState {
   return { name: "", description: "", filter: "" };
 }
 
+function networkFlowViewOptions(workspace: WorkspaceView): WorkspaceFlowView[] {
+  return [
+    { id: "derived:all", name: "全量网络", description: "展示当前网络地图的所有节点、链路和协议载荷。", filter: "", source: "derived" },
+    { id: "derived:critical", name: "关键与高风险", description: "自动聚合关键链路、高关键等级绑定和超过带宽上限的链路。", filter: "critical", source: "derived" },
+    ...workspace.network.views
+  ];
+}
+
 function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpenProtocolType }: {
   workspace: WorkspaceView;
   loading: boolean;
@@ -3238,11 +3259,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
   const [bindingForm, setBindingForm] = React.useState<ProtocolBindingFormState>(() => emptyBindingForm(workspace));
   const [flowViewForm, setFlowViewForm] = React.useState<FlowViewFormState>(() => emptyFlowViewForm());
   const busy = loading || pending;
-  const flowViews = React.useMemo<WorkspaceFlowView[]>(() => [
-    { id: "derived:all", name: "全量网络", description: "展示当前网络地图的所有节点、链路和协议载荷。", filter: "", source: "derived" },
-    { id: "derived:critical", name: "关键与高风险", description: "自动聚合关键链路、高关键等级绑定和超过带宽上限的链路。", filter: "critical", source: "derived" },
-    ...workspace.network.views
-  ], [workspace.network.views]);
+  const flowViews = React.useMemo<WorkspaceFlowView[]>(() => networkFlowViewOptions(workspace), [workspace]);
   const selectedFlowView = flowViews.find((view) => view.id === selectedFlowViewId) ?? flowViews[0];
   const selectedFlowAnalysis = React.useMemo(() => deriveFlowViewAnalysis(workspace, selectedFlowView), [selectedFlowView, workspace]);
 
@@ -3558,7 +3575,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
         <label>业务数据名<input value={bindingForm.dataName} onChange={(event) => setBindingForm({ ...bindingForm, dataName: event.target.value })} placeholder="detections" /></label>
         <label>频率 Hz<input value={bindingForm.frequencyHz} onChange={(event) => setBindingForm({ ...bindingForm, frequencyHz: event.target.value })} inputMode="decimal" /></label>
         <label>批量大小<input value={bindingForm.batchSize} onChange={(event) => setBindingForm({ ...bindingForm, batchSize: event.target.value })} inputMode="numeric" /></label>
-        <label>峰值系数<input value={bindingForm.peakMultiplier} onChange={(event) => setBindingForm({ ...bindingForm, peakMultiplier: event.target.value })} inputMode="decimal" /></label>
+        <label title="把平均吞吐放大为峰值吞吐，1.0 表示无突发；例如 1.8 表示按平均值的 1.8 倍预留链路压力。">峰值系数<input value={bindingForm.peakMultiplier} onChange={(event) => setBindingForm({ ...bindingForm, peakMultiplier: event.target.value })} inputMode="decimal" /><small>平均吞吐的放大倍率，1.0 表示不放大。</small></label>
         <label>关键等级<select value={bindingForm.criticality} onChange={(event) => setBindingForm({ ...bindingForm, criticality: event.target.value as ProtocolBindingCriticality })}>{PROTOCOL_BINDING_CRITICALITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label>备注<textarea value={bindingForm.notes} onChange={(event) => setBindingForm({ ...bindingForm, notes: event.target.value })} /></label>
         <div className="network-form-actions">
@@ -3671,7 +3688,7 @@ function FlowViewPanel({ view, analysis, onOpenProtocolType }: {
         <td><b>{binding.name}</b><small>{binding.dataName || "未命名业务数据"}</small></td>
         <td>{binding.linkName ?? binding.linkId}</td>
         <td><button className="link-button" onClick={() => onOpenProtocolType(binding.typeId)}>{binding.protocolName ?? binding.typeId}</button></td>
-        <td>{binding.payloadSize === undefined ? "未知" : formatBytes(binding.payloadSize)} · {binding.frequencyHz} Hz · x{binding.batchSize}</td>
+        <td>{binding.payloadSize === undefined ? "未知" : formatBytes(binding.payloadSize)} · {binding.frequencyHz} Hz · 批量 x{binding.batchSize} · 峰值 x{binding.peakMultiplier}</td>
         <td>{formatBandwidth(binding.estimatedBandwidthBps)}</td>
       </tr>)}
     </NetworkTable>
@@ -3918,14 +3935,22 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
   const [hoveredLabel, setHoveredLabel] = React.useState<string | null>(null);
   const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
   const [graphMode, setGraphMode] = React.useState<ProtocolGraphMode>("dependency");
+  const [selectedGraphFlowViewId, setSelectedGraphFlowViewId] = React.useState("derived:all");
   const graphTheme = graphThemeForAppTheme(appThemeId);
-  const graph = React.useMemo(() => buildProtocolGraph(workspace, graphMode), [workspace, graphMode]);
+  const graphFlowViews = React.useMemo(() => networkFlowViewOptions(workspace), [workspace]);
+  const selectedGraphFlowView = graphFlowViews.find((view) => view.id === selectedGraphFlowViewId) ?? graphFlowViews[0];
+  const graph = React.useMemo(() => buildProtocolGraph(workspace, graphMode, selectedGraphFlowView), [workspace, graphMode, selectedGraphFlowView]);
   const focusedNodeId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
   const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
   const normalizedGraphSearch = graphSearchQuery.trim().toLowerCase();
   const graphSearchMatches = React.useMemo(() => normalizedGraphSearch
     ? new Set(graph.nodes.filter((node) => graphNodeSearchText(node).includes(normalizedGraphSearch)).map((node) => node.id))
     : new Set<string>(), [graph.nodes, normalizedGraphSearch]);
+  React.useEffect(() => {
+    if (!graphFlowViews.some((view) => view.id === selectedGraphFlowViewId)) {
+      setSelectedGraphFlowViewId(graphFlowViews[0]?.id ?? "derived:all");
+    }
+  }, [graphFlowViews, selectedGraphFlowViewId]);
   React.useEffect(() => {
     renderOptionsRef.current = {
       selectedTypeId,
@@ -4012,7 +4037,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
   function setHover(node: GraphSimNode | null): void {
     const sim = simulationRef.current;
     if (sim) sim.hovered = node;
-    const next = node ? `${node.kind === "file" ? "Header" : node.kind} · ${node.label}` : null;
+    const next = node ? `${graphNodeKindLabel(node)} · ${node.label}` : null;
     setHoveredLabel((current) => current === next ? current : next);
   }
 
@@ -4111,6 +4136,9 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
           <button className={graphMode === "dependency" ? "active" : ""} onClick={() => setGraphMode("dependency")}>依赖</button>
           <button className={graphMode === "data-flow" ? "active" : ""} onClick={() => setGraphMode("data-flow")}>数据流</button>
         </div>
+        {graphMode === "data-flow" && <select aria-label="图谱数据流视图" value={selectedGraphFlowView.id} onChange={(event) => setSelectedGraphFlowViewId(event.target.value)}>
+          {graphFlowViews.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
+        </select>}
         <input
           aria-label="图谱搜索"
           value={graphSearchQuery}
@@ -4142,7 +4170,8 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
       <span><i className="file-dot" /> Header</span>
       <span><i className="struct-dot" /> Struct</span>
       <span><i className="enum-dot" /> Enum</span>
-      {graphMode === "data-flow" && <span><i className="producer-dot" /> 生产/消费节点</span>}
+      {graphMode === "data-flow" && <span><i className="producer-dot" /> 实体节点</span>}
+      {graphMode === "data-flow" && <span><i className="binding-dot" /> 协议载荷</span>}
       <span><i className="risk-dot warning" /> 布局/质量关注</span>
       <span><i className="risk-dot critical" /> 高风险</span>
       <span><i className="edge-dot outgoing" /> 选中节点向外引用/包含</span>
@@ -4166,14 +4195,30 @@ function graphNodeShortKind(node: ProtocolGraphNode): string {
   if (node.kind === "file") return "H";
   if (node.kind === "struct") return "S";
   if (node.kind === "enum") return "E";
+  if (node.kind === "network-node") return "N";
+  if (node.kind === "protocol-binding") return "B";
   return node.kind === "producer" ? "P" : "C";
 }
 
-function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
+function graphNodeKindLabel(node: ProtocolGraphNode): string {
+  if (node.kind === "file") return "Header";
+  if (node.kind === "struct") return "Struct";
+  if (node.kind === "enum") return "Enum";
+  if (node.kind === "network-node") return "网络节点";
+  if (node.kind === "protocol-binding") return "协议载荷";
+  return node.kind === "producer" ? "生产节点" : "消费节点";
+}
+
+function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode, flowView?: WorkspaceFlowView): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
   const files = workspace.files;
   const types = workspace.types;
+  const flowAnalysis = mode === "data-flow" && flowView ? deriveFlowViewAnalysis(workspace, flowView) : null;
+  const flowTypeIds = new Set(flowAnalysis?.bindings.map((binding) => binding.typeId) ?? []);
+  const visibleTypes = mode === "data-flow" && flowAnalysis && workspace.network.bindings.length > 0
+    ? types.filter((type) => flowTypeIds.has(type.id))
+    : types;
   const fileRadius = 330;
-  const typeRadius = Math.max(115, Math.min(240, 105 + types.length * 4));
+  const typeRadius = Math.max(115, Math.min(240, 105 + visibleTypes.length * 4));
   const emptyMetrics: GraphNodeMetrics = {
     inboundReferences: 0,
     outboundReferences: 0,
@@ -4189,8 +4234,8 @@ function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode): 
       const point = radialPoint(index, Math.max(files.length, 1), fileRadius, 0, 0, -Math.PI / 2);
       return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point, z: Math.sin(index * 1.9) * 90, metrics: { ...emptyMetrics } };
     }) : []),
-    ...types.map((type, index) => {
-      const point = radialPoint(index, Math.max(types.length, 1), typeRadius, 0, 0, -Math.PI / 2 + Math.PI / Math.max(types.length, 2));
+    ...visibleTypes.map((type, index) => {
+      const point = radialPoint(index, Math.max(visibleTypes.length, 1), typeRadius, 0, 0, -Math.PI / 2 + Math.PI / Math.max(visibleTypes.length, 2));
       return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point, z: Math.cos(index * 1.35) * 70, metrics: { ...emptyMetrics } };
     })
   ];
@@ -4209,7 +4254,64 @@ function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode): 
       edges.push({ id: `ref:${field.id}:${target.id}`, from: sourceTypeId, to: `type:${target.id}`, label: field.name, kind: "references" });
     }
   }
-  if (mode === "data-flow") {
+  if (mode === "data-flow" && flowAnalysis && workspace.network.bindings.length > 0) {
+    const nodeTotal = Math.max(flowAnalysis.nodes.length, 1);
+    for (const [index, node] of flowAnalysis.nodes.entries()) {
+      const point = radialPoint(index, nodeTotal, 390, 0, 0, -Math.PI / 2);
+      nodes.push({
+        id: `network-node:${node.id}`,
+        kind: "network-node",
+        label: node.name,
+        networkNode: node,
+        ...point,
+        z: Math.sin(index * 1.2) * 105,
+        metrics: {
+          ...emptyMetrics,
+          inboundReferences: node.incomingLinkCount,
+          outboundReferences: node.outgoingLinkCount,
+          impactScore: Math.max(2, node.incomingLinkCount + node.outgoingLinkCount + Math.log2(node.incomingBandwidthBps + node.outgoingBandwidthBps + 1)),
+          layoutRisk: node.incomingBandwidthBps + node.outgoingBandwidthBps >= 1024 * 1024 ? "warning" : "normal",
+          layoutRiskLabel: `出 ${formatBandwidth(node.outgoingBandwidthBps)} / 入 ${formatBandwidth(node.incomingBandwidthBps)}`
+        }
+      });
+    }
+
+    const bindingTotal = Math.max(flowAnalysis.bindings.length, 1);
+    const linkById = new Map(flowAnalysis.links.map((link) => [link.id, link]));
+    for (const [index, binding] of flowAnalysis.bindings.entries()) {
+      const point = radialPoint(index, bindingTotal, 250, 0, 0, Math.PI / 2);
+      const risk = riskForBinding(binding);
+      nodes.push({
+        id: `binding:${binding.id}`,
+        kind: "protocol-binding",
+        label: binding.name,
+        binding,
+        ...point,
+        z: Math.cos(index * 1.7) * 72,
+        metrics: {
+          ...emptyMetrics,
+          inboundReferences: 1,
+          outboundReferences: binding.protocolName ? 2 : 1,
+          impactScore: Math.max(2, Math.log2(binding.estimatedBandwidthBps + 1) + (binding.criticality === "critical" ? 5 : binding.criticality === "high" ? 3 : 0)),
+          layoutRisk: risk.level,
+          layoutRiskLabel: risk.label
+        }
+      });
+      const link = linkById.get(binding.linkId);
+      if (!link) continue;
+      const fromId = `network-node:${link.fromNodeId}`;
+      const toId = `network-node:${link.toNodeId}`;
+      const bindingId = `binding:${binding.id}`;
+      const typeId = `type:${binding.typeId}`;
+      edges.push({ id: `flow:${fromId}:${bindingId}`, from: fromId, to: bindingId, label: link.name, kind: "flow" });
+      if (flowTypeIds.has(binding.typeId)) {
+        edges.push({ id: `flow:${bindingId}:${typeId}`, from: bindingId, to: typeId, label: binding.protocolName ?? binding.typeId, kind: "flow" });
+        edges.push({ id: `flow:${typeId}:${toId}`, from: typeId, to: toId, label: `${binding.frequencyHz} Hz`, kind: "flow" });
+      } else {
+        edges.push({ id: `flow:${bindingId}:${toId}`, from: bindingId, to: toId, label: `${binding.frequencyHz} Hz`, kind: "flow" });
+      }
+    }
+  } else if (mode === "data-flow") {
     const actorNodes = new Map<string, ProtocolGraphNode>();
     function actorNode(label: string, kind: "producer" | "consumer", index: number): ProtocolGraphNode {
       const id = `${kind}:${label}`;
@@ -4283,6 +4385,14 @@ function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode): 
       };
       continue;
     }
+    if (node.kind === "network-node" || node.kind === "protocol-binding") {
+      node.metrics = {
+        ...node.metrics,
+        inboundReferences: inbound.get(node.id) ?? node.metrics.inboundReferences,
+        outboundReferences: outbound.get(node.id) ?? node.metrics.outboundReferences
+      };
+      continue;
+    }
     if (!isProtocolTypeNode(node)) continue;
     const diagnosticCount = diagnosticsForFile(workspace, node.type.file).length;
     const layoutRisk = riskForType(node.type, diagnosticCount);
@@ -4326,13 +4436,23 @@ function riskForType(type: WorkspaceTypeView, diagnosticCount: number): { level:
   return { level: "normal", label: "布局稳定", paddingRatio };
 }
 
+function riskForBinding(binding: WorkspaceProtocolBindingView): { level: GraphRiskLevel; label: string } {
+  if (binding.payloadSize === undefined) return { level: "warning", label: "未知载荷大小" };
+  if (binding.criticality === "critical") return { level: "critical", label: `关键协议 · ${formatBandwidth(binding.estimatedBandwidthBps)}` };
+  if (binding.criticality === "high") return { level: "warning", label: `高优先级 · ${formatBandwidth(binding.estimatedBandwidthBps)}` };
+  if (binding.estimatedBandwidthBps >= 1024 * 1024) return { level: "warning", label: `高吞吐 · ${formatBandwidth(binding.estimatedBandwidthBps)}` };
+  return { level: "normal", label: `${formatBandwidth(binding.estimatedBandwidthBps)} · ${binding.frequencyHz} Hz` };
+}
+
 function graphNodeRadius(node: ProtocolGraphNode): number {
-  const base = node.kind === "file" ? 4.8 : node.kind === "struct" ? 6.8 : node.kind === "enum" ? 6 : 6.4;
+  const base = node.kind === "file" ? 4.8 : node.kind === "struct" ? 6.8 : node.kind === "enum" ? 6 : node.kind === "network-node" ? 7.2 : node.kind === "protocol-binding" ? 5.8 : 6.4;
   return clamp(base + Math.sqrt(node.metrics.impactScore) * 1.7, base, node.kind === "file" ? 13 : 19);
 }
 
 function graphNodeSearchText(node: ProtocolGraphNode): string {
   if (node.kind === "file") return `${node.label} ${node.file.relativePath}`.toLowerCase();
+  if (node.kind === "network-node") return `${node.label} ${node.networkNode.kind} ${node.networkNode.role ?? ""} ${node.networkNode.subsystem ?? ""} ${node.networkNode.host ?? ""} ${node.networkNode.process ?? ""} 网络节点 entity node`.toLowerCase();
+  if (node.kind === "protocol-binding") return `${node.label} ${node.binding.protocolName ?? ""} ${node.binding.dataName ?? ""} ${node.binding.linkName ?? ""} ${node.binding.criticality} 协议载荷 binding payload`.toLowerCase();
   if (node.kind === "producer" || node.kind === "consumer") return `${node.label} ${node.kind === "producer" ? "生产节点 producer" : "消费节点 consumer"}`.toLowerCase();
   if (!isProtocolTypeNode(node)) return node.label.toLowerCase();
   const memberText = node.type.kind === "struct"
@@ -4609,6 +4729,8 @@ function graphNodeFill(node: GraphSimNode, theme: GraphThemePreset): string {
   if (node.kind === "file") return theme.file;
   if (node.kind === "struct") return theme.struct;
   if (node.kind === "enum") return theme.enum;
+  if (node.kind === "network-node") return theme.producer;
+  if (node.kind === "protocol-binding") return theme.consumer;
   if (node.kind === "producer") return theme.producer;
   return theme.consumer;
 }
