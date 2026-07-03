@@ -24,6 +24,30 @@ body[data-app-theme="obsidian"] {
   --color-green: #6fbe8d;
   --color-yellow: #e4bc70;
 }
+body[data-app-theme="obsidian-light"] {
+  color-scheme: light;
+  --background-primary: #f6f7f9;
+  --background-primary-alt: #eceff4;
+  --background-secondary: #eef1f5;
+  --background-secondary-alt: #ffffff;
+  --background-modifier-border: #d8dde6;
+  --background-modifier-hover: #e6eaf1;
+  --background-modifier-active-hover: #dfe8f7;
+  --background-modifier-form-field: #ffffff;
+  --text-normal: #253041;
+  --text-muted: #637086;
+  --text-faint: #8a94a5;
+  --text-on-accent: #ffffff;
+  --text-accent: #6d5bd0;
+  --text-accent-hover: #3f63b5;
+  --interactive-normal: #ffffff;
+  --interactive-hover: #e9edf5;
+  --interactive-accent: #6d5bd0;
+  --interactive-accent-hover: #3f63b5;
+  --color-red: #b85050;
+  --color-green: #2d8d7a;
+  --color-yellow: #ad7d2d;
+}
 body[data-app-theme="ink"] {
   color-scheme: light;
   --background-primary: #efe6d2;
@@ -334,6 +358,16 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .graph-canvas:active { cursor: grabbing; }
 .graph-canvas canvas { display: block; width: 100%; height: 100%; outline: none; }
 .graph-theme-ink { background: #c7b797; }
+.graph-theme-obsidian-light { background: #dfe5ee; }
+.graph-theme-obsidian-light .graph-title { border-bottom-color: rgba(94, 108, 130, .24); background: #eef1f5; color: #253041; }
+.graph-theme-obsidian-light .graph-title p, .graph-theme-obsidian-light .graph-legend, .graph-theme-obsidian-light .graph-floating-tools { color: rgba(37, 48, 65, .68); }
+.graph-theme-obsidian-light .graph-title-actions input, .graph-theme-obsidian-light .graph-mode-toggle { border-color: rgba(94, 108, 130, .26); background: rgba(255, 255, 255, .72); color: #253041; }
+.graph-theme-obsidian-light .graph-mode-toggle button { color: rgba(37, 48, 65, .68); }
+.graph-theme-obsidian-light .graph-mode-toggle button.active, .graph-theme-obsidian-light .graph-mode-toggle button:hover { background: rgba(109, 91, 208, .12); color: #253041; }
+.graph-theme-obsidian-light .graph-floating-tools, .graph-theme-obsidian-light .graph-hover-card { border-color: rgba(94, 108, 130, .22); background: rgba(255, 255, 255, .74); color: #253041; }
+.graph-theme-obsidian-light .graph-legend, .graph-theme-obsidian-light .graph-node-shortcuts { background: #dfe5ee; }
+.graph-theme-obsidian-light .graph-node-shortcuts button { border-color: rgba(94, 108, 130, .22); background: rgba(255, 255, 255, .62); color: rgba(37, 48, 65, .78); }
+.graph-theme-obsidian-light .graph-node-shortcuts button:hover { border-color: rgba(109, 91, 208, .38); color: #253041; background: rgba(255, 255, 255, .88); }
 .graph-theme-ink .graph-title { border-bottom-color: rgba(92, 72, 46, .24); background: #e7dcc4; color: #203336; }
 .graph-theme-ink .graph-title p, .graph-theme-ink .graph-legend, .graph-theme-ink .graph-floating-tools { color: rgba(32, 51, 54, .68); }
 .graph-theme-ink .graph-title-actions input, .graph-theme-ink .graph-mode-toggle { border-color: rgba(92, 72, 46, .26); background: rgba(248, 241, 226, .72); color: #203336; }

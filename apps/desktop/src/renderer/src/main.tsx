@@ -53,9 +53,9 @@ type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; 
 type GraphSimNode = ProtocolGraphNode & { vx: number; vy: number; vz: number; radius: number; screenX: number; screenY: number; screenRadius: number };
 type GraphSimEdge = ProtocolGraphEdge & { source: GraphSimNode; target: GraphSimNode };
 type GraphRiskLevel = "normal" | "warning" | "critical";
-type AppThemeId = "tokyo" | "obsidian" | "ink";
+type AppThemeId = "tokyo" | "obsidian" | "obsidian-light" | "ink";
 type AppThemePreset = { id: AppThemeId; name: string; description: string };
-type GraphThemeId = "obsidian" | "tokyo" | "ink";
+type GraphThemeId = "obsidian" | "obsidian-light" | "tokyo" | "ink";
 type GraphThemePreset = {
   id: GraphThemeId;
   name: string;
@@ -107,6 +107,7 @@ const SUPPORTED_BASE_FIELD_TYPES = [
 const APP_THEMES: AppThemePreset[] = [
   { id: "tokyo", name: "Tokyo Night", description: "沿用本地 Obsidian Tokyo Night 变量" },
   { id: "obsidian", name: "Obsidian Dark", description: "低饱和暗色，接近默认 Obsidian" },
+  { id: "obsidian-light", name: "Obsidian Light", description: "默认 Obsidian 浅色风格，冷白灰底" },
   { id: "ink", name: "简墨", description: "中国风简洁浅色，宣纸底与朱砂强调" }
 ];
 
@@ -152,6 +153,27 @@ const GRAPH_THEMES: GraphThemePreset[] = [
     labelActive: "#ffffff",
     selected: "rgba(224, 175, 104, 0.62)",
     hovered: "rgba(122, 162, 247, 0.45)"
+  },
+  {
+    id: "obsidian-light",
+    name: "Obsidian Light",
+    background: ["rgba(250, 251, 253, 0.98)", "rgba(239, 242, 247, 0.99)", "rgba(223, 229, 238, 1)"],
+    star: "rgba(69, 86, 112, 0.035)",
+    starBright: "rgba(69, 86, 112, 0.09)",
+    file: "#6b7788",
+    struct: "#2f3a4a",
+    enum: "#ad7d2d",
+    producer: "#2d8d7a",
+    consumer: "#7867d8",
+    outgoing: "45, 141, 122",
+    incoming: "173, 125, 45",
+    reference: "174, 76, 72",
+    contains: "111, 124, 145",
+    flow: "45, 141, 122",
+    labelText: "rgba(35, 45, 60, 0.88)",
+    labelActive: "#172033",
+    selected: "rgba(173, 125, 45, 0.58)",
+    hovered: "rgba(83, 112, 178, 0.34)"
   },
   {
     id: "ink",
@@ -329,8 +351,9 @@ function App(): React.JSX.Element {
 
   React.useEffect(() => {
     document.body.dataset.appTheme = appThemeId;
-    document.body.classList.toggle("theme-light", appThemeId === "ink");
-    document.body.classList.toggle("theme-dark", appThemeId !== "ink");
+    const lightTheme = appThemeId === "ink" || appThemeId === "obsidian-light";
+    document.body.classList.toggle("theme-light", lightTheme);
+    document.body.classList.toggle("theme-dark", !lightTheme);
     window.localStorage.setItem("protovault:app-theme", appThemeId);
   }, [appThemeId]);
 
@@ -3679,8 +3702,9 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
       context.font = `${Math.max(10, Math.min(13, 10.5 * item.scale))}px Segoe UI, sans-serif`;
       context.textAlign = "center";
       context.textBaseline = "top";
-      context.lineWidth = options.theme.id === "ink" ? 1.1 : 2.25;
-      context.strokeStyle = options.theme.id === "ink" ? "rgba(247, 240, 227, 0.82)" : "rgba(5, 8, 12, 0.96)";
+      const lightGraph = options.theme.id === "ink" || options.theme.id === "obsidian-light";
+      context.lineWidth = lightGraph ? 1.1 : 2.25;
+      context.strokeStyle = lightGraph ? "rgba(255, 255, 255, 0.82)" : "rgba(5, 8, 12, 0.96)";
       context.fillStyle = hovered || selected ? options.theme.labelActive : options.theme.labelText;
       const label = node.label.length > 24 ? `${node.label.slice(0, 23)}…` : node.label;
       context.strokeText(label, item.x, item.y + item.radius + 6);
