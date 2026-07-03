@@ -35,6 +35,7 @@ import type {
   DeleteStructInput,
   DiffProtocolInput,
   GenerateDocumentInput,
+  GenerateNetworkReportInput,
   GeneratedDocumentReport,
   RenameEnumInput,
   RenameHeaderInput,
@@ -1565,6 +1566,292 @@ export async function generateProtocolDocument(input: GenerateDocumentInput): Pr
 
   const content = `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
   const target = join(workspace.rootPath, ".protocol", "reports", "protocol-documentation.md");
+  await atomicWriteFile(target, content);
+  return { generatedAt, path: target, relativePath: reportRelativePath(workspace.rootPath, target), content };
+}
+
+interface NetworkReportAnalysis {
+  nodes: WorkspaceNetworkNodeView[];
+  links: WorkspaceNetworkLinkView[];
+  bindings: WorkspaceProtocolBindingView[];
+  totalBandwidthBps: number;
+  busiestNode?: WorkspaceNetworkNodeView;
+  busiestLink?: WorkspaceNetworkLinkView;
+  warnings: string[];
+}
+
+function networkReportFlowViewOptions(workspace: WorkspaceView): WorkspaceFlowView[] {
+  return [
+    { id: "derived:all", name: "全量网络", description: "展示当前网络地图的所有节点、链路和协议载荷。", filter: "", source: "derived" },
+    { id: "derived:critical", name: "关键与高风险", description: "自动聚合关键链路、高关键等级绑定和超过带宽上限的链路。", filter: "critical", source: "derived" },
+    ...workspace.network.views
+  ];
+}
+
+function networkReportFilterTerms(filter?: string): string[] {
+  return [...new Set((filter ?? "")
+    .split(/[,，;\s]+/u)
+    .map((term) => term.trim().toLowerCase())
+    .filter(Boolean))];
+}
+
+function networkReportEntityText(workspace: WorkspaceView, context: {
+  node?: WorkspaceNetworkNodeView;
+  link?: WorkspaceNetworkLinkView;
+  binding?: WorkspaceProtocolBindingView;
+}): string {
+  const type = context.binding ? workspace.types.find((item) => item.id === context.binding?.typeId) : undefined;
+  const link = context.link ?? (context.binding ? workspace.network.links.find((item) => item.id === context.binding?.linkId) : undefined);
+  const fromNode = link ? workspace.network.nodes.find((node) => node.id === link.fromNodeId) : undefined;
+  const toNode = link ? workspace.network.nodes.find((node) => node.id === link.toNodeId) : undefined;
+  return [
+    context.node?.name,
+    context.node?.kind,
+    context.node?.role,
+    context.node?.subsystem,
+    context.node?.host,
+    context.node?.process,
+    context.node?.hardwareProfile,
+    context.node?.softwareProfile,
+    context.node?.notes,
+    link?.name,
+    link?.transport,
+    link?.endpoint,
+    link?.notes,
+    fromNode?.name,
+    fromNode?.kind,
+    fromNode?.subsystem,
+    toNode?.name,
+    toNode?.kind,
+    toNode?.subsystem,
+    context.binding?.name,
+    context.binding?.dataName,
+    context.binding?.protocolName,
+    context.binding?.criticality,
+    context.binding?.notes,
+    type?.name,
+    type?.qualifiedName,
+    type?.note
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function networkReportEntityMatches(terms: string[], workspace: WorkspaceView, context: {
+  node?: WorkspaceNetworkNodeView;
+  link?: WorkspaceNetworkLinkView;
+  binding?: WorkspaceProtocolBindingView;
+}): boolean {
+  if (terms.length === 0) return true;
+  const link = context.link ?? (context.binding ? workspace.network.links.find((item) => item.id === context.binding?.linkId) : undefined);
+  const overLimit = link ? isNetworkReportLinkOverLimit(link) : false;
+  const critical = Boolean(link?.critical)
+    || context.binding?.criticality === "high"
+    || context.binding?.criticality === "critical"
+    || overLimit;
+  const highRate = (context.binding?.frequencyHz ?? 0) >= 30 || (context.binding?.estimatedBandwidthBps ?? link?.estimatedBandwidthBps ?? 0) >= 1024 * 64;
+  const text = networkReportEntityText(workspace, context);
+  return terms.some((term) => {
+    if (["critical", "关键", "risk", "风险"].includes(term)) return critical;
+    if (["high", "高频", "大流量", "hot"].includes(term)) return highRate || critical;
+    if (["over", "over-limit", "超限", "瓶颈"].includes(term)) return overLimit;
+    return text.includes(term);
+  });
+}
+
+function isNetworkReportLinkOverLimit(link: WorkspaceNetworkLinkView): boolean {
+  if (!link.bandwidthLimitMbps || link.bandwidthLimitMbps <= 0) return false;
+  return link.estimatedBandwidthBps > link.bandwidthLimitMbps * 125_000;
+}
+
+function networkNodeBottleneckHints(node: WorkspaceNetworkNodeView): string[] {
+  const hints: string[] = [];
+  const total = node.incomingBandwidthBps + node.outgoingBandwidthBps;
+  if (total >= 1024 * 1024 && !node.hardwareProfile?.trim()) {
+    hints.push(`节点 ${node.name} 吞吐已到 ${formatReportBandwidth(total)}，建议补充 CPU/GPU/网卡/内存画像。`);
+  }
+  if (total >= 1024 * 1024 && !node.softwareProfile?.trim()) {
+    hints.push(`节点 ${node.name} 吞吐较高，建议补充线程、队列、运行时和序列化策略。`);
+  }
+  if (node.outgoingLinkCount + node.incomingLinkCount >= 4) {
+    hints.push(`节点 ${node.name} 连接数较多（出 ${node.outgoingLinkCount} / 入 ${node.incomingLinkCount}），适合作为架构评审重点。`);
+  }
+  if (node.kind === "gateway" && total >= 512 * 1024) {
+    hints.push(`网关节点 ${node.name} 存在汇聚压力，建议检查转发队列、背压和丢包策略。`);
+  }
+  if (node.kind === "storage" && node.incomingBandwidthBps >= 512 * 1024) {
+    hints.push(`存储节点 ${node.name} 写入压力较高，建议补充落盘频率、批量策略和 IO 上限。`);
+  }
+  return hints;
+}
+
+function protocolBindingBottleneckHints(binding: WorkspaceProtocolBindingView, link?: WorkspaceNetworkLinkView): string[] {
+  const hints: string[] = [];
+  if (binding.payloadSize === undefined) {
+    hints.push(`协议 ${binding.name} 缺少载荷大小，带宽估算可靠性不足。`);
+  }
+  if (binding.peakMultiplier > 2) {
+    hints.push(`协议 ${binding.name} 峰值系数为 x${binding.peakMultiplier}，建议确认突发来源和缓冲策略。`);
+  }
+  if (binding.estimatedBandwidthBps >= 1024 * 1024) {
+    hints.push(`协议 ${binding.name} 单项吞吐 ${formatReportBandwidth(binding.estimatedBandwidthBps)}，建议优先审查字段布局和传输频率。`);
+  }
+  if (link && isNetworkReportLinkOverLimit(link)) {
+    hints.push(`链路 ${link.name} 已超过配置带宽上限，${binding.name} 可能参与瓶颈。`);
+  }
+  return hints;
+}
+
+function deriveNetworkReportAnalysis(workspace: WorkspaceView, view: WorkspaceFlowView): NetworkReportAnalysis {
+  const terms = networkReportFilterTerms(view.filter);
+  const linkById = new Map(workspace.network.links.map((link) => [link.id, link]));
+  const nodeById = new Map(workspace.network.nodes.map((node) => [node.id, node]));
+
+  const matchedBindings = workspace.network.bindings.filter((binding) => {
+    const link = linkById.get(binding.linkId);
+    return networkReportEntityMatches(terms, workspace, { binding, link });
+  });
+  const matchedLinkIds = new Set(matchedBindings.map((binding) => binding.linkId));
+  const matchedLinks = workspace.network.links.filter((link) => {
+    if (matchedLinkIds.has(link.id)) return true;
+    if (networkReportEntityMatches(terms, workspace, { link })) return true;
+    const from = nodeById.get(link.fromNodeId);
+    const to = nodeById.get(link.toNodeId);
+    return networkReportEntityMatches(terms, workspace, { node: from }) || networkReportEntityMatches(terms, workspace, { node: to });
+  });
+  for (const link of matchedLinks) matchedLinkIds.add(link.id);
+  const nodeIds = new Set<string>();
+  for (const link of matchedLinks) {
+    nodeIds.add(link.fromNodeId);
+    nodeIds.add(link.toNodeId);
+  }
+  for (const node of workspace.network.nodes) {
+    if (networkReportEntityMatches(terms, workspace, { node })) nodeIds.add(node.id);
+  }
+  const matchedNodes = workspace.network.nodes.filter((node) => nodeIds.has(node.id));
+  const matchedBindingIds = new Set(matchedBindings.map((binding) => binding.id));
+  for (const binding of workspace.network.bindings) {
+    if (matchedLinkIds.has(binding.linkId)) matchedBindingIds.add(binding.id);
+  }
+  const bindings = workspace.network.bindings.filter((binding) => matchedBindingIds.has(binding.id));
+  const links = matchedLinks.length > 0 || terms.length > 0 ? matchedLinks : workspace.network.links;
+  const nodes = matchedNodes.length > 0 || terms.length > 0 ? matchedNodes : workspace.network.nodes;
+  const totalBandwidthBps = bindings.reduce((sum, binding) => sum + binding.estimatedBandwidthBps, 0);
+  const busiestNode = [...nodes].sort((a, b) => (b.incomingBandwidthBps + b.outgoingBandwidthBps) - (a.incomingBandwidthBps + a.outgoingBandwidthBps))[0];
+  const busiestLink = [...links].sort((a, b) => b.estimatedBandwidthBps - a.estimatedBandwidthBps)[0];
+  const warnings = new Set<string>();
+  for (const link of links) {
+    if (link.critical) warnings.add(`关键链路：${link.name}`);
+    if (isNetworkReportLinkOverLimit(link)) warnings.add(`链路超限：${link.name} ${formatReportBandwidth(link.estimatedBandwidthBps)} / ${link.bandwidthLimitMbps} Mbps`);
+  }
+  for (const binding of bindings) {
+    if (binding.criticality === "critical") warnings.add(`关键协议：${binding.name}`);
+    if (binding.criticality === "high") warnings.add(`高优先级协议：${binding.name}`);
+    const link = linkById.get(binding.linkId);
+    for (const hint of protocolBindingBottleneckHints(binding, link)) warnings.add(hint);
+  }
+  for (const node of nodes) {
+    for (const hint of networkNodeBottleneckHints(node)) warnings.add(hint);
+  }
+  return { nodes, links, bindings, totalBandwidthBps, busiestNode, busiestLink, warnings: [...warnings] };
+}
+
+function formatReportBandwidth(value: number): string {
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB/s`;
+  if (value >= 1024) return `${(value / 1024).toFixed(2)} KB/s`;
+  return `${Math.round(value)} B/s`;
+}
+
+function safeReportId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "network-flow";
+}
+
+export async function generateNetworkReport(input: GenerateNetworkReportInput): Promise<GeneratedDocumentReport> {
+  const workspace = await scanWorkspace(input.workspaceRoot);
+  const flowViews = networkReportFlowViewOptions(workspace);
+  const selectedView = (input.flowViewId ? flowViews.find((view) => view.id === input.flowViewId) : undefined) ?? flowViews[0];
+  const analysis = deriveNetworkReportAnalysis(workspace, selectedView);
+  const generatedAt = new Date().toISOString();
+  const lines: string[] = [
+    `# ${workspace.name} 网络数据流报告`,
+    "",
+    `生成时间：${generatedAt}`,
+    "",
+    "## 视图摘要",
+    "",
+    markdownTable([
+      ["指标", "值"],
+      ["视图", selectedView.name],
+      ["来源", selectedView.source],
+      ["过滤条件", selectedView.filter || "全量"],
+      ["节点", String(analysis.nodes.length)],
+      ["链路", String(analysis.links.length)],
+      ["协议载荷", String(analysis.bindings.length)],
+      ["估算总量", formatReportBandwidth(analysis.totalBandwidthBps)]
+    ]),
+    "",
+    selectedView.description ? `说明：${selectedView.description}` : "说明：从网络事实层派生的业务观察视角。",
+    "",
+    "## 关键观察",
+    ""
+  ];
+
+  if (analysis.busiestLink) lines.push(`- 最高链路：${analysis.busiestLink.name}，${formatReportBandwidth(analysis.busiestLink.estimatedBandwidthBps)}。`);
+  if (analysis.busiestNode) lines.push(`- 最高节点：${analysis.busiestNode.name}，入 ${formatReportBandwidth(analysis.busiestNode.incomingBandwidthBps)} / 出 ${formatReportBandwidth(analysis.busiestNode.outgoingBandwidthBps)}。`);
+  if (!analysis.busiestLink && !analysis.busiestNode) lines.push("- 当前视图没有匹配到网络事实。");
+  lines.push("", "## 风险与瓶颈提示", "");
+  if (analysis.warnings.length === 0) {
+    lines.push("当前视图未发现关键风险。", "");
+  } else {
+    lines.push(...analysis.warnings.map((warning) => `- ${warning}`), "");
+  }
+
+  lines.push("## 协议载荷", "");
+  lines.push(markdownTable([
+    ["名称", "业务数据", "协议", "链路", "频率", "批量", "峰值系数", "估算带宽", "关键等级"],
+    ...analysis.bindings.map((binding) => [
+      binding.name,
+      binding.dataName || "—",
+      binding.protocolName ?? binding.typeId,
+      binding.linkName ?? binding.linkId,
+      `${binding.frequencyHz} Hz`,
+      String(binding.batchSize),
+      `x${binding.peakMultiplier}`,
+      formatReportBandwidth(binding.estimatedBandwidthBps),
+      binding.criticality
+    ])
+  ]), "");
+
+  lines.push("## 通信链路", "");
+  lines.push(markdownTable([
+    ["名称", "方向", "传输", "Endpoint", "协议数", "估算带宽", "上限", "关键"],
+    ...analysis.links.map((link) => [
+      link.name,
+      `${link.fromNodeName ?? link.fromNodeId} → ${link.toNodeName ?? link.toNodeId}`,
+      link.transport,
+      link.endpoint || "—",
+      String(link.bindingCount),
+      formatReportBandwidth(link.estimatedBandwidthBps),
+      link.bandwidthLimitMbps === undefined ? "—" : `${link.bandwidthLimitMbps} Mbps`,
+      link.critical ? "是" : "否"
+    ])
+  ]), "");
+
+  lines.push("## 实体节点", "");
+  lines.push(markdownTable([
+    ["名称", "类型", "角色", "分系统", "主机/进程", "入", "出", "画像完整度"],
+    ...analysis.nodes.map((node) => [
+      node.name,
+      node.kind,
+      node.role || "—",
+      node.subsystem || "—",
+      [node.host, node.process].filter(Boolean).join(" / ") || "—",
+      formatReportBandwidth(node.incomingBandwidthBps),
+      formatReportBandwidth(node.outgoingBandwidthBps),
+      [node.hardwareProfile ? "硬件" : "", node.softwareProfile ? "软件" : ""].filter(Boolean).join("+") || "待补充"
+    ])
+  ]), "");
+
+  const content = `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  const target = join(workspace.rootPath, ".protocol", "reports", `network-flow-${safeReportId(selectedView.id)}.md`);
   await atomicWriteFile(target, content);
   return { generatedAt, path: target, relativePath: reportRelativePath(workspace.rootPath, target), content };
 }

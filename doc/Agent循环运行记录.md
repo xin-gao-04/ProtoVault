@@ -2,6 +2,80 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-03 Loop 3-5：网络上下文、报告与瓶颈提示收束
+
+### 目标
+
+把 P13 从“能画网络数据流”推进到“能解释网络数据流”：图谱选中节点后能看到有效上下文，数据流视图能导出报告，节点画像和链路配置能转化为基础瓶颈线索。
+
+### 基线状态
+
+- 当前提交：`6e8f8db feat: render network flows in graph`。
+- P13 Loop 2 已完成关系图谱数据流模式。
+- 本轮开始时仍存在未归属示例 Header 改动和一个 `.tmp` 文件：
+  - `examples/radar-workspace/headers/common/geometry.hpp`
+  - `examples/radar-workspace/headers/common/time.hpp`
+  - `examples/radar-workspace/headers/diagnostics/faults.hpp`
+  - `examples/radar-workspace/headers/telemetry/status.hpp`
+  - `examples/radar-workspace/headers/common/.time.hpp.29896.1783053185857.tmp`
+- 这些文件继续保留，不纳入提交范围。
+
+### 行动
+
+- 修正图谱选中状态：
+  - `ProtocolGraphView` 将当前 graph 与 selected node 回传给 App。
+  - 右侧 Inspector 使用真实数据流图谱上下文，而不是固定依赖图谱。
+  - 单击节点查看上下文，双击才打开 tab 或切换网络地图。
+- 扩展 GraphInspector：
+  - `network-node` 显示节点画像、入出带宽、链路、协议载荷和瓶颈提示。
+  - `protocol-binding` 显示协议、链路方向、频率、批量、峰值系数、估算带宽和链路约束。
+  - 方向说明改为“我流向的 / 流向我的”。
+- 新增 FlowView Markdown 报告：
+  - shared 契约、main IPC、preload API、后端生成函数和 UI 按钮。
+  - 报告输出到 `.protocol/reports/network-flow-*.md`。
+- 增强瓶颈提示：
+  - 高吞吐节点、高连接度节点、高吞吐协议、高峰值系数、链路超限、画像缺失、网关汇聚、存储写入。
+- 补充测试：
+  - 单元测试覆盖网络报告生成和写盘。
+  - E2E 覆盖网络地图中“生成视图报告”按钮。
+  - E2E 超时从 30 秒调到 90 秒，适配当前完整纵切流程。
+
+### 验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm --filter @protovault/contracts test
+pnpm --filter @protovault/desktop build
+pnpm --filter @protovault/desktop test:e2e
+pnpm release:check
+```
+
+结果通过：
+
+- contracts：2 个测试文件、6 个测试通过。
+- desktop typecheck：通过。
+- desktop：3 个测试文件、20 个测试通过。
+- Electron E2E：1 个测试通过。
+- C++ core：CMake configure/build 通过，CTest `core-self-test` 通过。
+- 完整 `pnpm release:check` 通过。
+
+### 收获
+
+- P13 的核心价值不在“多一个漂亮图”，而在把网络事实转成可审计的系统理解：谁产生、经哪条链路、承载什么协议、可能哪里堵。
+- FlowView 报告是后续智能化接入的自然材料：它比截图更适合作为上下文输入，也能被版本化审计。
+- 图谱节点不宜承担编辑入口；它更适合作为浏览、跳转和解释层，编辑仍放在网络地图表格里。
+
+### 下一轮
+
+P13 的 MVP 闭环已经完成。建议下一阶段进入 P14 或回补 P10/P11 深化：
+
+1. 语义 Diff 纳入网络事实层，识别节点、链路、协议绑定和 FlowView 的变化。
+2. 文档生成器把网络报告和协议文档组合成项目架构报告。
+3. 引入真实运行采样接口之前，先定义性能指标契约：吞吐、延迟、丢包、队列深度、CPU/GPU、磁盘 IO。
+
 ## 2026-07-03 Loop 2：关系图谱接入网络数据流
 
 ### 目标

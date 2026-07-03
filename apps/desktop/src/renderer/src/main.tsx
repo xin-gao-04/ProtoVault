@@ -143,6 +143,7 @@ function App(): React.JSX.Element {
   const [workspaceReport, setWorkspaceReport] = React.useState<WorkspaceReportState | null>(null);
   const [externalChange, setExternalChange] = React.useState<WorkspaceExternalChange | null>(null);
   const [centerViewMode, setCenterViewMode] = React.useState<CenterViewMode>("workspace");
+  const [graphInspectorState, setGraphInspectorState] = React.useState<{ graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] }; selectedNodeId: string | null } | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const selectedField = selectedType?.fields.find((field) => field.id === selectedMemberId);
@@ -164,12 +165,16 @@ function App(): React.JSX.Element {
   );
   const selectedLayout = selectedType?.layout ?? null;
   const rawTree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
-  const graphContext = React.useMemo(() => workspace ? buildProtocolGraph(workspace, "dependency") : null, [workspace]);
+  const dependencyGraphContext = React.useMemo(() => workspace ? buildProtocolGraph(workspace, "dependency") : null, [workspace]);
+  const graphContext = centerViewMode === "graph" && graphInspectorState ? graphInspectorState.graph : dependencyGraphContext;
   const selectedGraphNode = React.useMemo(() => {
     if (!graphContext) return null;
+    if (centerViewMode === "graph" && graphInspectorState?.selectedNodeId) {
+      return graphContext.nodes.find((node) => node.id === graphInspectorState.selectedNodeId) ?? null;
+    }
     const selectedId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
     return selectedId ? graphContext.nodes.find((node) => node.id === selectedId) ?? null : null;
-  }, [graphContext, selectedFilePath, selectedTypeId]);
+  }, [centerViewMode, graphContext, graphInspectorState?.selectedNodeId, selectedFilePath, selectedTypeId]);
   const treeSearchResult = React.useMemo(() => filterProtocolTree(rawTree, treeSearchQuery), [rawTree, treeSearchQuery]);
   const tree = treeSearchResult.nodes;
   const effectiveExpandedNodeIds = React.useMemo(() => {
@@ -216,6 +221,10 @@ function App(): React.JSX.Element {
     setWorkspace(result);
     setExternalChange(null);
     setTabs((current) => reconcileTabs(current, result));
+  }, []);
+
+  const handleGraphContextChange = React.useCallback((graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] }, selectedNodeId: string | null): void => {
+    setGraphInspectorState((current) => current?.graph === graph && current.selectedNodeId === selectedNodeId ? current : { graph, selectedNodeId });
   }, []);
 
   React.useEffect(() => {
@@ -454,7 +463,6 @@ function App(): React.JSX.Element {
     if (node.kind === "file") locateFileInTree(node.file);
     else if (node.kind === "struct" || node.kind === "enum") locateTypeInTree(node.type);
     else if (node.kind === "network-node") {
-      setCenterViewMode("network");
       setUiNotice(`网络节点：${node.networkNode.name}`);
     } else if (node.kind === "protocol-binding") {
       setUiNotice(`协议载荷：${node.binding.name} · ${node.binding.protocolName ?? node.binding.typeId}`);
@@ -727,6 +735,15 @@ function App(): React.JSX.Element {
       const report = await window.protoVault.generateDocument({ workspaceRoot: workspace.rootPath });
       setWorkspaceReport({ kind: "document", report });
       setUiNotice(`协议文档已生成：${report.relativePath}`);
+    });
+  }
+
+  async function generateNetworkReport(flowViewId?: string): Promise<void> {
+    if (!workspace) return;
+    await runWorkspaceAction(async () => {
+      const report = await window.protoVault.generateNetworkReport({ workspaceRoot: workspace.rootPath, flowViewId });
+      setWorkspaceReport({ kind: "document", report });
+      setUiNotice(`网络数据流报告已生成：${report.relativePath}`);
     });
   }
 
@@ -1673,12 +1690,14 @@ function App(): React.JSX.Element {
           appThemeId={appThemeId}
           onSelectNode={selectGraphNode}
           onOpenNode={openGraphNode}
+          onGraphContextChange={handleGraphContextChange}
           onClose={() => setCenterViewMode("workspace")}
         />}
         {workspace && centerViewMode === "network" && <NetworkMapView
           workspace={workspace}
           loading={loading}
           onWorkspaceChange={replaceWorkspaceResult}
+          onGenerateFlowReport={(flowViewId) => void generateNetworkReport(flowViewId)}
           onNotice={setUiNotice}
           onOpenProtocolType={(typeId) => void openProtocolTypeById(typeId)}
         />}
@@ -3042,12 +3061,13 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
   workspaceRoot: string;
   onClose(): void;
 }): React.JSX.Element {
+  const documentTitle = report.kind === "document" && report.report.relativePath.includes("network-flow-") ? "网络数据流报告" : "协议文档";
   return <section className="report-panel" aria-label="协议报告">
     <div className="report-panel-title">
       <div>
         <p className="eyebrow">REPORT</p>
         <h2>{report.kind === "lint" ? "协议 Lint"
-          : report.kind === "document" ? "协议文档"
+          : report.kind === "document" ? documentTitle
             : report.kind === "snapshot" ? "协议快照"
               : "语义 Diff"}</h2>
       </div>
@@ -3073,7 +3093,7 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
     </>}
 
     {report.kind === "document" && <>
-      <p>Markdown 协议文档已生成：</p>
+      <p>Markdown {documentTitle}已生成：</p>
       <code>{report.report.relativePath}</code>
       <pre className="report-preview">{report.report.content.slice(0, 4000)}</pre>
     </>}
@@ -3240,10 +3260,11 @@ function networkFlowViewOptions(workspace: WorkspaceView): WorkspaceFlowView[] {
   ];
 }
 
-function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpenProtocolType }: {
+function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowReport, onNotice, onOpenProtocolType }: {
   workspace: WorkspaceView;
   loading: boolean;
   onWorkspaceChange: (workspace: WorkspaceView) => void;
+  onGenerateFlowReport: (flowViewId: string) => void;
   onNotice: (message: string) => void;
   onOpenProtocolType: (typeId: string) => void;
 }): React.JSX.Element {
@@ -3623,7 +3644,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
           })}
         </div>
       </div>
-      <FlowViewPanel view={selectedFlowView} analysis={selectedFlowAnalysis} onOpenProtocolType={onOpenProtocolType} />
+      <FlowViewPanel view={selectedFlowView} analysis={selectedFlowAnalysis} onGenerateReport={() => onGenerateFlowReport(selectedFlowView.id)} onOpenProtocolType={onOpenProtocolType} />
     </div>}
 
     {mode === "topology" && <div className="network-topology">
@@ -3646,9 +3667,10 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onNotice, onOpe
   </section>;
 }
 
-function FlowViewPanel({ view, analysis, onOpenProtocolType }: {
+function FlowViewPanel({ view, analysis, onGenerateReport, onOpenProtocolType }: {
   view: WorkspaceFlowView;
   analysis: FlowViewAnalysis;
+  onGenerateReport: () => void;
   onOpenProtocolType: (typeId: string) => void;
 }): React.JSX.Element {
   return <div className="flow-analysis-panel">
@@ -3664,6 +3686,10 @@ function FlowViewPanel({ view, analysis, onOpenProtocolType }: {
         <span><b>{analysis.bindings.length}</b><small>协议</small></span>
         <span><b>{formatBandwidth(analysis.totalBandwidthBps)}</b><small>估算总量</small></span>
       </div>
+    </div>
+
+    <div className="flow-analysis-actions">
+      <button className="inline-action" onClick={onGenerateReport}>生成视图报告</button>
     </div>
 
     {view.filter && <p className="flow-filter-chip">过滤：{view.filter}</p>}
@@ -3836,6 +3862,7 @@ function flowEntityMatches(terms: string[], context: {
 
 function flowWarnings(links: WorkspaceNetworkLinkView[], bindings: WorkspaceProtocolBindingView[], nodeById: Map<string, WorkspaceNetworkNodeView>): string[] {
   const warnings: string[] = [];
+  const linkById = new Map(links.map((link) => [link.id, link]));
   for (const link of links) {
     if (link.critical) warnings.push(`关键链路：${link.name}`);
     if (isLinkOverBandwidthLimit(link)) warnings.push(`带宽超限：${link.name} 估算 ${formatBandwidth(link.estimatedBandwidthBps)} / 上限 ${link.bandwidthLimitMbps} Mbps`);
@@ -3843,13 +3870,33 @@ function flowWarnings(links: WorkspaceNetworkLinkView[], bindings: WorkspaceProt
   for (const binding of bindings) {
     if (binding.criticality === "critical") warnings.push(`关键协议：${binding.name}`);
     else if (binding.criticality === "high") warnings.push(`高优先级协议：${binding.name}`);
-    if (binding.payloadSize === undefined) warnings.push(`未知载荷大小：${binding.name}`);
+    for (const hint of protocolBindingBottleneckHints(binding, linkById.get(binding.linkId))) warnings.push(hint);
   }
   for (const node of nodeById.values()) {
-    const total = node.incomingBandwidthBps + node.outgoingBandwidthBps;
-    if (total >= 1024 * 1024) warnings.push(`高吞吐节点：${node.name} ${formatBandwidth(total)}`);
+    for (const hint of networkNodeBottleneckHints(node)) warnings.push(hint);
   }
   return [...new Set(warnings)];
+}
+
+function networkNodeBottleneckHints(node: WorkspaceNetworkNodeView): string[] {
+  const hints: string[] = [];
+  const total = node.incomingBandwidthBps + node.outgoingBandwidthBps;
+  if (total >= 1024 * 1024) hints.push(`高吞吐节点：${node.name} ${formatBandwidth(total)}`);
+  if (total >= 1024 * 1024 && !node.hardwareProfile?.trim()) hints.push(`建议补充硬件画像：${node.name}`);
+  if (total >= 1024 * 1024 && !node.softwareProfile?.trim()) hints.push(`建议补充软件画像：${node.name}`);
+  if (node.outgoingLinkCount + node.incomingLinkCount >= 4) hints.push(`高连接度节点：${node.name} 出 ${node.outgoingLinkCount} / 入 ${node.incomingLinkCount}`);
+  if (node.kind === "gateway" && total >= 512 * 1024) hints.push(`网关汇聚压力：${node.name}，建议检查队列、背压和转发策略`);
+  if (node.kind === "storage" && node.incomingBandwidthBps >= 512 * 1024) hints.push(`存储写入压力：${node.name}，建议检查落盘频率和 IO 上限`);
+  return hints;
+}
+
+function protocolBindingBottleneckHints(binding: WorkspaceProtocolBindingView, link?: WorkspaceNetworkLinkView): string[] {
+  const hints: string[] = [];
+  if (binding.payloadSize === undefined) hints.push(`未知载荷大小：${binding.name}`);
+  if (binding.peakMultiplier > 2) hints.push(`高峰值系数：${binding.name} x${binding.peakMultiplier}`);
+  if (binding.estimatedBandwidthBps >= 1024 * 1024) hints.push(`高吞吐协议：${binding.name} ${formatBandwidth(binding.estimatedBandwidthBps)}`);
+  if (link && isLinkOverBandwidthLimit(link)) hints.push(`可能参与链路超限：${binding.name} → ${link.name}`);
+  return hints;
 }
 
 function isLinkOverBandwidthLimit(link: WorkspaceNetworkLinkView): boolean {
@@ -3897,13 +3944,14 @@ function formatBandwidth(value: number): string {
   return `${Math.round(value)} B/s`;
 }
 
-function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThemeId, onSelectNode, onOpenNode, onClose }: {
+function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThemeId, onSelectNode, onOpenNode, onGraphContextChange, onClose }: {
   workspace: WorkspaceView;
   selectedTypeId: string | null;
   selectedFilePath: string | null;
   appThemeId: AppThemeId;
   onSelectNode(node: ProtocolGraphNode): void;
   onOpenNode(node: ProtocolGraphNode): void;
+  onGraphContextChange(graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] }, selectedNodeId: string | null): void;
   onClose(): void;
 }): React.JSX.Element {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -3936,11 +3984,12 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
   const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
   const [graphMode, setGraphMode] = React.useState<ProtocolGraphMode>("dependency");
   const [selectedGraphFlowViewId, setSelectedGraphFlowViewId] = React.useState("derived:all");
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = React.useState<string | null>(null);
   const graphTheme = graphThemeForAppTheme(appThemeId);
   const graphFlowViews = React.useMemo(() => networkFlowViewOptions(workspace), [workspace]);
   const selectedGraphFlowView = graphFlowViews.find((view) => view.id === selectedGraphFlowViewId) ?? graphFlowViews[0];
   const graph = React.useMemo(() => buildProtocolGraph(workspace, graphMode, selectedGraphFlowView), [workspace, graphMode, selectedGraphFlowView]);
-  const focusedNodeId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
+  const focusedNodeId = selectedGraphNodeId ?? (selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null);
   const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
   const normalizedGraphSearch = graphSearchQuery.trim().toLowerCase();
   const graphSearchMatches = React.useMemo(() => normalizedGraphSearch
@@ -3951,6 +4000,13 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
       setSelectedGraphFlowViewId(graphFlowViews[0]?.id ?? "derived:all");
     }
   }, [graphFlowViews, selectedGraphFlowViewId]);
+  React.useEffect(() => {
+    if (selectedGraphNodeId && !graph.nodes.some((node) => node.id === selectedGraphNodeId)) {
+      setSelectedGraphNodeId(null);
+      return;
+    }
+    onGraphContextChange(graph, selectedGraphNodeId);
+  }, [graph, onGraphContextChange, selectedGraphNodeId]);
   React.useEffect(() => {
     renderOptionsRef.current = {
       selectedTypeId,
@@ -4067,6 +4123,16 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
     canvas.setPointerCapture(event.pointerId);
   }
 
+  function selectNode(node: ProtocolGraphNode): void {
+    setSelectedGraphNodeId(node.id);
+    onSelectNode(node);
+  }
+
+  function openNode(node: ProtocolGraphNode): void {
+    setSelectedGraphNodeId(node.id);
+    onOpenNode(node);
+  }
+
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>): void {
     const sim = simulationRef.current;
     if (!sim) return;
@@ -4099,12 +4165,12 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
     sim.draggingNode = null;
     sim.panning = false;
     canvas.releasePointerCapture(event.pointerId);
-    if (node && !sim.moved) onSelectNode(node);
+    if (node && !sim.moved) selectNode(node);
   }
 
   function handleDoubleClick(event: React.MouseEvent<HTMLCanvasElement>): void {
     const node = hitTest(event.clientX, event.clientY);
-    if (node) onOpenNode(node);
+    if (node) openNode(node);
   }
 
   function handleWheel(event: React.WheelEvent<HTMLCanvasElement>): void {
@@ -4184,8 +4250,8 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
         .map((node) => <button
         key={node.id}
         aria-label={`图谱节点 ${node.kind} ${node.label}`}
-        onClick={() => onSelectNode(node)}
-        onDoubleClick={() => onOpenNode(node)}
+        onClick={() => selectNode(node)}
+        onDoubleClick={() => openNode(node)}
       >{graphNodeShortKind(node)} · {node.label} · {node.metrics.impactScore}</button>)}
     </div>
   </section>;
@@ -4991,6 +5057,22 @@ function ContextMenu({
   </div>;
 }
 
+function optionLabel<T extends string>(options: Array<{ value: T; label: string }>, value: T): string {
+  return options.find((option) => option.value === value)?.label ?? value;
+}
+
+function networkNodeKindLabel(kind: NetworkNodeKind): string {
+  return optionLabel(NETWORK_NODE_KIND_OPTIONS, kind);
+}
+
+function networkTransportLabel(transport: NetworkTransportKind): string {
+  return optionLabel(NETWORK_TRANSPORT_OPTIONS, transport);
+}
+
+function protocolBindingCriticalityLabel(criticality: ProtocolBindingCriticality): string {
+  return optionLabel(PROTOCOL_BINDING_CRITICALITY_OPTIONS, criticality);
+}
+
 function GraphInspector({ workspace, graph, selectedNode, dirtyDataFlows, onOpenNode, onSelectNode, onDataFlowDraftChange, onUpdateDataFlow }: {
   workspace: WorkspaceView;
   graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] };
@@ -5044,6 +5126,121 @@ function GraphInspector({ workspace, graph, selectedNode, dirtyDataFlows, onOpen
   const selectedNodeName = selectedNode.kind === "file"
     ? selectedNode.file.relativePath
     : isProtocolTypeNode(selectedNode) ? selectedNode.type.qualifiedName : selectedNode.label;
+
+  if (selectedNode.kind === "network-node") {
+    const node = selectedNode.networkNode;
+    const relatedLinks = workspace.network.links.filter((link) => link.fromNodeId === node.id || link.toNodeId === node.id);
+    const relatedBindings = workspace.network.bindings.filter((binding) => relatedLinks.some((link) => link.id === binding.linkId));
+    const outgoingFlowNodes = graph.edges
+      .filter((edge) => edge.kind === "flow" && edge.from === selectedNode.id)
+      .map((edge) => nodeById.get(edge.to))
+      .filter(Boolean) as ProtocolGraphNode[];
+    const incomingFlowNodes = graph.edges
+      .filter((edge) => edge.kind === "flow" && edge.to === selectedNode.id)
+      .map((edge) => nodeById.get(edge.from))
+      .filter(Boolean) as ProtocolGraphNode[];
+    const hints = networkNodeBottleneckHints(node);
+    return <div className="inspector-stack">
+      <dl>
+        <dt>名称</dt><dd>{node.name}</dd>
+        <dt>类型</dt><dd>{networkNodeKindLabel(node.kind)}</dd>
+        <dt>角色</dt><dd>{node.role || "—"}</dd>
+        <dt>分系统</dt><dd>{node.subsystem || "—"}</dd>
+        <dt>主机</dt><dd>{node.host || "—"}</dd>
+        <dt>进程</dt><dd>{node.process || "—"}</dd>
+        <dt>出/入链路</dt><dd>{node.outgoingLinkCount} / {node.incomingLinkCount}</dd>
+        <dt>出/入带宽</dt><dd>{formatBandwidth(node.outgoingBandwidthBps)} / {formatBandwidth(node.incomingBandwidthBps)}</dd>
+      </dl>
+      <section className="property-card">
+        <h3>节点画像</h3>
+        <p className="graph-inspector-caption">硬件</p>
+        <p className="readonly-note">{node.hardwareProfile || "尚未记录硬件画像。"}</p>
+        <p className="graph-inspector-caption">软件</p>
+        <p className="readonly-note">{node.softwareProfile || "尚未记录软件画像。"}</p>
+        {node.notes && <p className="readonly-note">{node.notes}</p>}
+      </section>
+      <section className="property-card flow-warnings">
+        <h3>瓶颈提示</h3>
+        {hints.length === 0 ? <p className="ok">暂无明显瓶颈线索。</p> : <ul>{hints.map((hint) => <li key={hint}>{hint}</li>)}</ul>}
+      </section>
+      <section className="property-card">
+        <h3>链路与协议</h3>
+        {relatedLinks.length === 0 ? <p className="readonly-note">暂无关联链路。</p> : <div className="graph-inspector-list">
+          {relatedLinks.map((link) => <button key={link.id}>
+            <span>{link.fromNodeName ?? link.fromNodeId} → {link.toNodeName ?? link.toNodeId}</span>
+            <small>{link.name} · {networkTransportLabel(link.transport)} · {formatBandwidth(link.estimatedBandwidthBps)}</small>
+          </button>)}
+        </div>}
+        {relatedBindings.length > 0 && <div className="tag-list">{relatedBindings.map((binding) => <span key={binding.id}>{binding.name}</span>)}</div>}
+      </section>
+      <section className="property-card">
+        <h3>图谱方向</h3>
+        <p className="graph-inspector-caption">我流向的</p>
+        <GraphNodeList nodes={outgoingFlowNodes} emptyText="暂无向外数据流" onSelectNode={onSelectNode} onOpenNode={onOpenNode} />
+        <p className="graph-inspector-caption">流向我的</p>
+        <GraphNodeList nodes={incomingFlowNodes} emptyText="暂无输入数据流" onSelectNode={onSelectNode} onOpenNode={onOpenNode} />
+      </section>
+      <section className="property-card">
+        <h3>快捷操作</h3>
+        <div className="graph-inspector-actions">
+          <button className="inline-action" onClick={() => onOpenNode(selectedNode)}>打开网络地图</button>
+          <button className="inline-action" onClick={() => onSelectNode(selectedNode)}>保持选中</button>
+        </div>
+      </section>
+    </div>;
+  }
+
+  if (selectedNode.kind === "protocol-binding") {
+    const binding = selectedNode.binding;
+    const link = workspace.network.links.find((item) => item.id === binding.linkId);
+    const sourceNode = link ? workspace.network.nodes.find((node) => node.id === link.fromNodeId) : undefined;
+    const targetNode = link ? workspace.network.nodes.find((node) => node.id === link.toNodeId) : undefined;
+    const typeNode = graph.nodes.find((node) => isProtocolTypeNode(node) && node.type.id === binding.typeId);
+    const hints = protocolBindingBottleneckHints(binding, link);
+    return <div className="inspector-stack">
+      <dl>
+        <dt>名称</dt><dd>{binding.name}</dd>
+        <dt>协议</dt><dd>{binding.protocolName ?? binding.typeId}</dd>
+        <dt>业务数据</dt><dd>{binding.dataName || "—"}</dd>
+        <dt>链路</dt><dd>{link?.name ?? binding.linkName ?? binding.linkId}</dd>
+        <dt>方向</dt><dd>{sourceNode?.name ?? link?.fromNodeName ?? "—"} → {targetNode?.name ?? link?.toNodeName ?? "—"}</dd>
+        <dt>频率</dt><dd>{binding.frequencyHz} Hz</dd>
+        <dt>批量/峰值</dt><dd>x{binding.batchSize} / x{binding.peakMultiplier}</dd>
+        <dt>载荷</dt><dd>{binding.payloadSize === undefined ? "未知" : formatBytes(binding.payloadSize)}</dd>
+        <dt>估算带宽</dt><dd>{formatBandwidth(binding.estimatedBandwidthBps)}</dd>
+        <dt>关键等级</dt><dd>{protocolBindingCriticalityLabel(binding.criticality)}</dd>
+      </dl>
+      <section className="property-card">
+        <h3>链路约束</h3>
+        {link ? <dl>
+          <dt>传输</dt><dd>{networkTransportLabel(link.transport)}</dd>
+          <dt>Endpoint</dt><dd>{link.endpoint || "—"}</dd>
+          <dt>延迟预算</dt><dd>{link.latencyBudgetMs === undefined ? "—" : `${link.latencyBudgetMs} ms`}</dd>
+          <dt>带宽上限</dt><dd>{link.bandwidthLimitMbps === undefined ? "—" : `${link.bandwidthLimitMbps} Mbps`}</dd>
+          <dt>状态</dt><dd>{isLinkOverBandwidthLimit(link) ? "超过上限" : "未超限"}</dd>
+        </dl> : <p className="readonly-note">没有找到关联链路。</p>}
+      </section>
+      <section className="property-card flow-warnings">
+        <h3>瓶颈提示</h3>
+        {hints.length === 0 ? <p className="ok">暂无明显瓶颈线索。</p> : <ul>{hints.map((hint) => <li key={hint}>{hint}</li>)}</ul>}
+      </section>
+      <section className="property-card">
+        <h3>备注</h3>
+        <p className="readonly-note">{binding.notes || "暂无备注。"}</p>
+      </section>
+      {typeNode && <section className="property-card">
+        <h3>协议类型</h3>
+        <GraphNodeList nodes={[typeNode]} emptyText="没有关联协议节点" onSelectNode={onSelectNode} onOpenNode={onOpenNode} />
+      </section>}
+      <section className="property-card">
+        <h3>快捷操作</h3>
+        <div className="graph-inspector-actions">
+          <button className="inline-action" onClick={() => onOpenNode(selectedNode)}>打开协议 tab</button>
+          <button className="inline-action" onClick={() => onSelectNode(selectedNode)}>保持选中</button>
+        </div>
+      </section>
+    </div>;
+  }
 
   return <div className="inspector-stack">
     <dl>

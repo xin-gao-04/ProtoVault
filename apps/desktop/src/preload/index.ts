@@ -21,6 +21,7 @@ import type {
   DeleteStructInput,
   DiffProtocolInput,
   GenerateDocumentInput,
+  GenerateNetworkReportInput,
   GeneratedDocumentReport,
   RenameEnumInput,
   RenameHeaderInput,
@@ -85,6 +86,7 @@ export interface ProtoVaultDesktopApi {
   deleteNetworkFlowView(input: DeleteNetworkFlowViewInput): Promise<WorkspaceView>;
   lint(workspaceRoot: string): Promise<WorkspaceLintReport>;
   generateDocument(input: GenerateDocumentInput): Promise<GeneratedDocumentReport>;
+  generateNetworkReport(input: GenerateNetworkReportInput): Promise<GeneratedDocumentReport>;
   createSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary>;
   diff(input: DiffProtocolInput): Promise<SemanticDiffReport>;
 }
@@ -139,6 +141,7 @@ contextBridge.exposeInMainWorld("protoVault", {
   deleteNetworkFlowView: (input) => ipcRenderer.invoke("network:delete-flow-view", input),
   lint: (workspaceRoot) => ipcRenderer.invoke("protocol:lint", workspaceRoot),
   generateDocument: (input) => ipcRenderer.invoke("protocol:generate-document", input),
+  generateNetworkReport: (input) => ipcRenderer.invoke("network:generate-report", input),
   createSnapshot: (input) => ipcRenderer.invoke("protocol:create-snapshot", input),
   diff: (input) => ipcRenderer.invoke("protocol:diff", input)
 } satisfies ProtoVaultDesktopApi);

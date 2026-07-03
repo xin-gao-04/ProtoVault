@@ -410,6 +410,7 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .flow-analysis-hero { display: flex; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: radial-gradient(circle at top left, color-mix(in srgb, var(--interactive-accent) 12%, transparent), transparent 42%), color-mix(in srgb, var(--background-secondary) 84%, transparent); }
 .flow-analysis-hero h3 { margin: 2px 0 6px; font-size: 24px; }
 .flow-analysis-hero p { margin: 0; max-width: 620px; color: var(--text-muted); line-height: 1.55; }
+.flow-analysis-actions { display: flex; justify-content: flex-end; margin-top: -6px; }
 .flow-kpis { min-width: 220px; }
 .flow-filter-chip { width: fit-content; margin: 0; padding: 5px 9px; border: 1px solid var(--background-modifier-border); border-radius: 999px; background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-secondary)); color: var(--text-muted); font-size: 11px; }
 .flow-risk-grid { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 12px; }

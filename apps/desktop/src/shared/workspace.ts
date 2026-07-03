@@ -418,6 +418,11 @@ export interface GenerateDocumentInput {
   workspaceRoot: string;
 }
 
+export interface GenerateNetworkReportInput {
+  workspaceRoot: string;
+  flowViewId?: string;
+}
+
 export interface GeneratedDocumentReport {
   generatedAt: string;
   path: string;

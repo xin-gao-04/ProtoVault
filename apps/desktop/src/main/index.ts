@@ -26,6 +26,7 @@ import type {
   DeleteStructInput,
   DiffProtocolInput,
   GenerateDocumentInput,
+  GenerateNetworkReportInput,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
@@ -64,6 +65,7 @@ import {
   deleteProtocolBinding,
   deleteStruct,
   diffProtocolSnapshot,
+  generateNetworkReport,
   generateProtocolDocument,
   lintWorkspace,
   renameEnum,
@@ -307,6 +309,7 @@ app.whenReady().then(() => {
   ipcMain.handle("network:delete-flow-view", (event, input: DeleteNetworkFlowViewInput) => runWorkspaceMutation(event.sender, input, deleteNetworkFlowView));
   ipcMain.handle("protocol:lint", (_event, workspaceRoot: string) => lintWorkspace(workspaceRoot));
   ipcMain.handle("protocol:generate-document", (_event, input: GenerateDocumentInput) => generateProtocolDocument(input));
+  ipcMain.handle("network:generate-report", (_event, input: GenerateNetworkReportInput) => generateNetworkReport(input));
   ipcMain.handle("protocol:create-snapshot", (_event, input: CreateSnapshotInput) => createProtocolSnapshot(input));
   ipcMain.handle("protocol:diff", (_event, input: DiffProtocolInput) => diffProtocolSnapshot(input));
   createWindow();

@@ -2,6 +2,8 @@ import { _electron as electron, expect, test } from "@playwright/test";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+test.setTimeout(90_000);
+
 test("opens the sample workspace and navigates headers and protocol types", async () => {
   const desktopRoot = resolve(import.meta.dirname, "../..");
   const fixtureRoot = resolve(desktopRoot, "../../fixtures");
@@ -85,6 +87,10 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByText("已创建数据流视图：E2E Tracking Flow")).toBeVisible();
     await expect(network.getByRole("heading", { name: "E2E Tracking Flow" })).toBeVisible();
     await expect(network.getByText("E2E RadarTrack@20Hz")).toBeVisible();
+    await network.getByRole("button", { name: "生成视图报告" }).click();
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText("网络数据流报告");
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText("network-flow-");
+    await page.getByRole("button", { name: "关闭报告" }).click();
     await network.getByRole("button", { name: "协议绑定" }).click();
     const bindingRow = network.getByRole("row", { name: /E2E RadarTrack@20Hz/ });
     page.once("dialog", async (dialog) => {

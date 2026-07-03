@@ -26,6 +26,7 @@ import {
   deleteProtocolBinding,
   deleteStruct,
   diffProtocolSnapshot,
+  generateNetworkReport,
   generateProtocolDocument,
   lintWorkspace,
   renameEnum,
@@ -769,6 +770,13 @@ enum class Broken : std::uint8_t {
       };
       expect(storedWithView.views).toEqual([expect.objectContaining({ name: "Tracking High Rate", filter: "RadarFrame high" })]);
       expect(storedWithView.views[0].estimatedBandwidthBps).toBeUndefined();
+
+      const networkReport = await generateNetworkReport({ workspaceRoot: root, flowViewId: updatedFlowView.id });
+      expect(networkReport.relativePath).toMatch(/^\.protocol\/reports\/network-flow-/);
+      expect(networkReport.content).toContain("Tracking High Rate");
+      expect(networkReport.content).toContain("RadarFrame@25Hz");
+      expect(networkReport.content).toContain("Radar DDS Stream");
+      expect(await readFile(networkReport.path, "utf8")).toBe(networkReport.content);
 
       workspace = await deleteNetworkFlowView({ workspaceRoot: root, viewId: flowView.id });
       expect(workspace.network.views).toHaveLength(0);
