@@ -4,6 +4,15 @@ import { promises as fs } from "node:fs";
 import { cpus } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
+import { workspaceViewSchema } from "@protovault/contracts";
+import {
+  nextEnumValue,
+  renderEnumDeclaration,
+  renderEnumValueDeclaration,
+  renderFieldDeclaration,
+  renderNewHeader,
+  renderStructDeclaration
+} from "./header-generator";
 import type {
   AddFieldInput,
   AddEnumValueInput,
@@ -210,12 +219,6 @@ function sanitizeCppType(type: string): string {
   return trimmed;
 }
 
-function fieldDeclaration(fieldType: string, fieldName: string): string {
-  const arrayMatch = fieldType.match(/^(.*?)(\[[0-9]+\])$/);
-  if (arrayMatch) return `${arrayMatch[1].trim()} ${fieldName}${arrayMatch[2]};`;
-  return `${fieldType} ${fieldName};`;
-}
-
 function normalizeRelativePath(value: string): string {
   return value.replaceAll("\\", "/").replace(/^\/+/, "");
 }
@@ -284,18 +287,6 @@ function enumPattern(enumName: string): RegExp {
 
 function enumBlockPattern(enumName: string): RegExp {
   return new RegExp(`(enum\\s+(?:class\\s+)?${enumName}[^\\{]*\\{)([\\s\\S]*?)(\\n\\s*\\};)`);
-}
-
-function enumValueDeclaration(valueName: string, value?: number): string {
-  return `${valueName}${value === undefined ? "" : ` = ${value}`},`;
-}
-
-function nextEnumValue(type: WorkspaceTypeView): number {
-  const numericValues = type.values
-    .map((value) => value.value)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  if (numericValues.length === 0) return 0;
-  return Math.max(...numericValues) + 1;
 }
 
 function ensureEnumBodyTrailingComma(body: string): string {
@@ -499,6 +490,11 @@ async function collectSourceNotes(types: WorkspaceTypeView[]): Promise<SourceNot
 
 function emitProgress(options: ScanWorkspaceOptions | undefined, progress: WorkspaceScanProgress): void {
   options?.onProgress?.(progress);
+}
+
+function validateWorkspaceContract(workspace: WorkspaceView): WorkspaceView {
+  workspaceViewSchema.parse(workspace);
+  return workspace;
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -961,10 +957,11 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
   }
 
   emitProgress(options, { phase: "done", message: `扫描完成：${files.length} Headers · ${types.length} Types`, current: 1, total: 1 });
-  return workspace;
+  return validateWorkspaceContract(workspace);
 }
 
 export function sampleWorkspacePath(appPath: string): string {
+  if (process.env.PROTOVAULT_SAMPLE_WORKSPACE) return resolve(process.env.PROTOVAULT_SAMPLE_WORKSPACE);
   return resolve(appPath, "..", "..", "examples");
 }
 
@@ -1370,8 +1367,7 @@ export async function createHeader(input: CreateHeaderInput): Promise<WorkspaceV
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
-  const guard = `PROTOVAULT_${relativePath.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
-  await atomicWriteFile(target, `#ifndef ${guard}\n#define ${guard}\n\n#include <cstdint>\n\nnamespace protovault {\n\n// 在这里添加协议结构体。\n\n} // namespace protovault\n\n#endif // ${guard}\n`);
+  await atomicWriteFile(target, renderNewHeader(relativePath));
   return scanWorkspace(root);
 }
 
@@ -1381,7 +1377,7 @@ export async function createStruct(input: CreateStructInput): Promise<WorkspaceV
   const structName = sanitizeCppIdentifier(input.structName, "结构体名称");
   const content = await fs.readFile(header, "utf8");
   if (new RegExp(`\\bstruct\\s+${structName}\\b`).test(content)) throw new Error(`结构体已存在：${structName}`);
-  const insertion = `\nstruct ${structName} {\n  std::uint32_t id;\n};\n`;
+  const insertion = `\n${renderStructDeclaration(structName)}\n`;
   const namespaceMarker = content.match(/\n}\s*\/\/\s*namespace\s+[A-Za-z0-9_:]+\s*(?=\n|$)/);
   const nextContent = namespaceMarker?.index !== undefined
     ? `${content.slice(0, namespaceMarker.index)}${insertion}${content.slice(namespaceMarker.index)}`
@@ -1397,7 +1393,7 @@ export async function createEnum(input: CreateEnumInput): Promise<WorkspaceView>
   const enumName = sanitizeCppIdentifier(input.enumName, "枚举名称");
   const content = await fs.readFile(header, "utf8");
   if (new RegExp(`\\benum\\s+(?:class\\s+)?${enumName}\\b`).test(content)) throw new Error(`枚举已存在：${enumName}`);
-  const insertion = `\nenum class ${enumName} : std::uint8_t {\n  Unknown = 0,\n};\n`;
+  const insertion = `\n${renderEnumDeclaration(enumName)}\n`;
   const namespaceMarker = content.match(/\n}\s*\/\/\s*namespace\s+[A-Za-z0-9_:]+\s*(?=\n|$)/);
   const nextContent = namespaceMarker?.index !== undefined
     ? `${content.slice(0, namespaceMarker.index)}${insertion}${content.slice(namespaceMarker.index)}`
@@ -1573,7 +1569,7 @@ export async function addField(input: AddFieldInput): Promise<WorkspaceView> {
   const match = pattern.exec(content);
   if (!match) throw new Error(`无法在 Header 中定位 struct ${targetType.name} 的受控编辑区域。`);
   const body = match[2].trimEnd();
-  const nextBody = `${body}\n  ${fieldDeclaration(fieldType, fieldName)}`;
+  const nextBody = `${body}\n  ${renderFieldDeclaration(fieldType, fieldName)}`;
   const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
   await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
@@ -1616,7 +1612,7 @@ export async function updateField(input: UpdateFieldInput): Promise<WorkspaceVie
   }
   void workspace;
   const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "  ";
-  lines[lineIndex] = `${indent}${fieldDeclaration(fieldType, fieldName)}`;
+  lines[lineIndex] = `${indent}${renderFieldDeclaration(fieldType, fieldName)}`;
   const nextContent = lines.join("\n");
   await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
@@ -1671,7 +1667,7 @@ export async function addEnumValue(input: AddEnumValueInput): Promise<WorkspaceV
   if (!match) throw new Error(`无法在 Header 中定位 enum ${targetType.name} 的受控编辑区域。`);
   const body = ensureEnumBodyTrailingComma(match[2]);
   const explicitValue = input.value ?? nextEnumValue(targetType);
-  const nextBody = `${body}\n  ${enumValueDeclaration(valueName, explicitValue)}`;
+  const nextBody = `${body}\n  ${renderEnumValueDeclaration(valueName, explicitValue)}`;
   const nextContent = `${content.slice(0, match.index)}${match[1]}${nextBody}${match[3]}${content.slice(match.index + match[0].length)}`;
   await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);
@@ -1686,7 +1682,7 @@ export async function updateEnumValue(input: UpdateEnumValueInput): Promise<Work
     throw new Error(`枚举项已存在：${valueName}`);
   }
   const indent = lines[lineIndex]?.match(/^\s*/)?.[0] ?? "  ";
-  lines[lineIndex] = `${indent}${enumValueDeclaration(valueName, input.value)}`;
+  lines[lineIndex] = `${indent}${renderEnumValueDeclaration(valueName, input.value)}`;
   const nextContent = lines.join("\n");
   await validateHeaderContent(root, header, nextContent);
   await atomicWriteFile(header, nextContent);

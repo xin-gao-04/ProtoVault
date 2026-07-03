@@ -28,6 +28,12 @@ pnpm core:build
 pnpm core:test
 ```
 
+Before treating a build as releasable, run the release gate:
+
+```powershell
+pnpm release:check
+```
+
 In the desktop app, choose **加载示例项目** to scan
 `examples` with Clang AST. The navigator can switch between
 Header source previews, structs, enums, field tables, and diagnostics.
@@ -56,4 +62,4 @@ The renderer consumes common Obsidian CSS variables such as
 `apps/desktop/src/renderer/src/themes/user-obsidian-theme.css` to reuse its
 color tokens where compatible.
 
-The product definition and phased delivery gates are documented in `doc/初版设计思路.md` and `doc/Agent开发计划.md`.
+The product definition, phased delivery gates, and release checklist are documented in `doc/初版设计思路.md`, `doc/Agent开发计划.md`, and `doc/发布检查清单.md`.

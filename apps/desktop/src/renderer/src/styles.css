@@ -153,6 +153,10 @@ input, select, textarea { font: inherit; color: var(--text-normal); }
 .scan-progress-track { height: 4px; overflow: hidden; border-radius: 999px; background: var(--background-modifier-border); }
 .scan-progress-track div { height: 100%; min-width: 8px; border-radius: inherit; background: var(--interactive-accent); transition: width .18s ease; }
 .scan-progress.active .scan-progress-track div { box-shadow: 0 0 14px color-mix(in srgb, var(--interactive-accent) 55%, transparent); }
+.external-change-panel { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 10px 24px 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--color-yellow) 58%, var(--background-modifier-border)); border-radius: var(--radius-l); background: color-mix(in srgb, var(--color-yellow) 10%, var(--background-secondary)); box-shadow: 0 12px 34px #00000024; }
+.external-change-panel strong { color: var(--text-normal); font-size: 13px; }
+.external-change-panel p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.external-change-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .tab-strip { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 1px; min-height: 38px; padding: 6px 18px 0; border-bottom: 1px solid var(--background-modifier-border); background: color-mix(in srgb, var(--background-primary-alt) 82%, transparent); overflow-x: auto; }
 .workspace-tab { display: flex; align-items: center; max-width: 220px; border: 1px solid transparent; border-bottom: 0; border-radius: var(--radius-m) var(--radius-m) 0 0; background: transparent; color: var(--text-muted); }
 .workspace-tab.active { border-color: var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); }

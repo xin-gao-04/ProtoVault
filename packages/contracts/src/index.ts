@@ -166,6 +166,105 @@ export const serviceRequestSchema = z.object({
   payload: z.unknown()
 });
 
+export const workspaceViewLocationSchema = z.object({
+  file: z.string().min(1),
+  line: z.number().int().positive(),
+  column: z.number().int().positive()
+});
+
+export const workspaceDataFlowMetadataSchema = z.object({
+  producers: z.array(z.string()),
+  consumers: z.array(z.string())
+});
+
+export const workspaceFieldViewSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: z.string().min(1),
+  note: z.string().optional(),
+  location: workspaceViewLocationSchema.optional()
+});
+
+export const workspaceEnumValueViewSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  value: z.number().int().optional(),
+  note: z.string().optional(),
+  location: workspaceViewLocationSchema.optional()
+});
+
+export const workspaceFieldLayoutViewSchema = z.object({
+  fieldId: z.string().min(1),
+  name: z.string().min(1),
+  type: z.string().min(1),
+  offset: z.number().int().nonnegative().optional(),
+  size: z.number().int().nonnegative().optional(),
+  alignment: z.number().int().positive().optional(),
+  paddingBefore: z.number().int().nonnegative(),
+  paddingAfter: z.number().int().nonnegative(),
+  supported: z.boolean(),
+  reason: z.string().optional()
+});
+
+export const workspaceMemoryLayoutViewSchema = z.object({
+  size: z.number().int().nonnegative().optional(),
+  alignment: z.number().int().positive().optional(),
+  dataSize: z.number().int().nonnegative(),
+  paddingBytes: z.number().int().nonnegative(),
+  partial: z.boolean(),
+  pack: z.number().int().positive().optional(),
+  source: z.literal("estimated"),
+  fields: z.array(workspaceFieldLayoutViewSchema)
+});
+
+export const workspaceTypeViewSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["struct", "enum"]),
+  name: z.string().min(1),
+  qualifiedName: z.string().min(1),
+  file: z.string().min(1),
+  note: z.string().optional(),
+  dataFlow: workspaceDataFlowMetadataSchema.optional(),
+  pack: z.number().int().positive().optional(),
+  underlyingType: z.string().optional(),
+  location: workspaceViewLocationSchema.optional(),
+  layout: workspaceMemoryLayoutViewSchema.optional(),
+  fields: z.array(workspaceFieldViewSchema),
+  values: z.array(workspaceEnumValueViewSchema)
+});
+
+export const workspaceFileViewSchema = z.object({
+  path: z.string().min(1),
+  relativePath: z.string().min(1),
+  includes: z.array(z.string()),
+  content: z.string(),
+  contentHash: z.string().min(1)
+});
+
+export const workspaceDirectoryViewSchema = z.object({
+  path: z.string().min(1),
+  relativePath: z.string().min(1)
+});
+
+export const workspaceDiagnosticViewSchema = z.object({
+  severity: z.enum(["error", "warning"]),
+  message: z.string().min(1),
+  file: z.string().optional(),
+  line: z.number().int().positive().optional(),
+  column: z.number().int().positive().optional()
+});
+
+export const workspaceViewSchema = z.object({
+  name: z.string().min(1),
+  rootPath: z.string().min(1),
+  metadataPath: z.string().optional(),
+  directories: z.array(workspaceDirectoryViewSchema),
+  files: z.array(workspaceFileViewSchema),
+  types: z.array(workspaceTypeViewSchema),
+  diagnostics: z.array(workspaceDiagnosticViewSchema),
+  scanner: z.string().min(1)
+});
+
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type ProtocolFile = z.infer<typeof protocolFileSchema>;
 export type ProtocolStruct = z.infer<typeof structSchema>;
@@ -177,3 +276,4 @@ export type ProtocolSnapshot = z.infer<typeof protocolSnapshotSchema>;
 export type SemanticChange = z.infer<typeof semanticChangeSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
 export type ServiceRequest = z.infer<typeof serviceRequestSchema>;
+export type WorkspaceViewContract = z.infer<typeof workspaceViewSchema>;

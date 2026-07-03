@@ -33,7 +33,7 @@ import {
 } from "./workspace";
 
 const execFileAsync = promisify(execFile);
-const examplesWorkspace = resolve(import.meta.dirname, "../../../../examples");
+const fixtureWorkspace = resolve(import.meta.dirname, "../../../../fixtures");
 
 type ProbeMetrics = Record<string, number>;
 
@@ -133,7 +133,7 @@ int main() {
   TYPE_METRIC("TrackState", TrackState)
 }
 `, "utf8");
-    await execFileAsync(clang, ["-std=c++20", sourcePath, "-I", examplesWorkspace, "-o", outputPath], {
+    await execFileAsync(clang, ["-std=c++20", sourcePath, "-I", fixtureWorkspace, "-o", outputPath], {
       cwd: root,
       windowsHide: true,
       maxBuffer: 16 * 1024 * 1024
@@ -161,8 +161,8 @@ function expectLayoutMatchesCompiler(type: WorkspaceTypeView, alias: string, pro
 }
 
 describe("scanWorkspace", () => {
-  it("loads headers when opening the examples parent folder", async () => {
-    const workspace = await scanWorkspace(examplesWorkspace);
+  it("loads headers when opening the fixture parent folder", async () => {
+    const workspace = await scanWorkspace(fixtureWorkspace);
 
     expect(workspace.diagnostics).toEqual([]);
     expect(workspace.directories.map((directory) => directory.relativePath)).toEqual(expect.arrayContaining([
@@ -225,7 +225,7 @@ describe("scanWorkspace", () => {
 
   it("emits scan progress for large workspace feedback", async () => {
     const events: string[] = [];
-    const workspace = await scanWorkspace(examplesWorkspace, {
+    const workspace = await scanWorkspace(fixtureWorkspace, {
       onProgress: (progress) => events.push(`${progress.phase}:${progress.current}/${progress.total}`)
     });
 
@@ -238,7 +238,7 @@ describe("scanWorkspace", () => {
   }, 30_000);
 
   it("matches compiler sizeof/offsetof for supported layout fixtures", async () => {
-    const workspace = await scanWorkspace(examplesWorkspace);
+    const workspace = await scanWorkspace(fixtureWorkspace);
     const probe = await runLayoutProbe();
     const byName = new Map(workspace.types.map((type) => [type.qualifiedName, type]));
 

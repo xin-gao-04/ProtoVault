@@ -25,6 +25,7 @@ import type {
   UpdateHeaderContentInput,
   UpdateHeaderIncludesInput,
   UpdateNoteInput,
+  WorkspaceExternalChange,
   WorkspaceScanProgress,
   WorkspaceLintReport,
   WorkspaceView
@@ -34,8 +35,10 @@ export interface ProtoVaultDesktopApi {
   health(): Promise<{ status: string; contractVersion: string }>;
   openSampleWorkspace(): Promise<WorkspaceView>;
   openWorkspace(): Promise<WorkspaceView | null>;
+  scanWorkspace(workspaceRoot: string): Promise<WorkspaceView>;
   restoreLastWorkspace(): Promise<WorkspaceView | null>;
   onScanProgress(listener: (progress: WorkspaceScanProgress) => void): () => void;
+  onExternalChange(listener: (change: WorkspaceExternalChange) => void): () => void;
   createHeader(input: CreateHeaderInput): Promise<WorkspaceView>;
   createStruct(input: CreateStructInput): Promise<WorkspaceView>;
   createEnum(input: CreateEnumInput): Promise<WorkspaceView>;
@@ -65,11 +68,17 @@ contextBridge.exposeInMainWorld("protoVault", {
   health: () => ipcRenderer.invoke("service:health"),
   openSampleWorkspace: () => ipcRenderer.invoke("workspace:open-sample"),
   openWorkspace: () => ipcRenderer.invoke("workspace:open"),
+  scanWorkspace: (workspaceRoot) => ipcRenderer.invoke("workspace:scan", workspaceRoot),
   restoreLastWorkspace: () => ipcRenderer.invoke("workspace:restore-last"),
   onScanProgress: (listener) => {
     const wrapped = (_event: IpcRendererEvent, progress: WorkspaceScanProgress): void => listener(progress);
     ipcRenderer.on("workspace:scan-progress", wrapped);
     return () => ipcRenderer.removeListener("workspace:scan-progress", wrapped);
+  },
+  onExternalChange: (listener) => {
+    const wrapped = (_event: IpcRendererEvent, change: WorkspaceExternalChange): void => listener(change);
+    ipcRenderer.on("workspace:external-change", wrapped);
+    return () => ipcRenderer.removeListener("workspace:external-change", wrapped);
   },
   createHeader: (input) => ipcRenderer.invoke("protocol:create-header", input),
   createStruct: (input) => ipcRenderer.invoke("protocol:create-struct", input),

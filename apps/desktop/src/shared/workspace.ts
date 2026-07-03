@@ -99,6 +99,13 @@ export interface WorkspaceScanProgress {
   file?: string;
 }
 
+export interface WorkspaceExternalChange {
+  workspaceRoot: string;
+  changedPath?: string;
+  relativePath?: string;
+  detectedAt: string;
+}
+
 export interface CreateHeaderInput {
   workspaceRoot: string;
   relativePath: string;

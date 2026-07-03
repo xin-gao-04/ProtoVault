@@ -4,18 +4,20 @@ import { resolve } from "node:path";
 
 test("opens the sample workspace and navigates headers and protocol types", async () => {
   const desktopRoot = resolve(import.meta.dirname, "../..");
-  const geometryHeader = resolve(desktopRoot, "../../examples/radar-workspace/headers/common/geometry.hpp");
+  const fixtureRoot = resolve(desktopRoot, "../../fixtures");
+  const geometryHeader = resolve(fixtureRoot, "radar-workspace/headers/common/geometry.hpp");
   const originalGeometryHeader = await readFile(geometryHeader, "utf8");
   const flowProducer = `RadarDriver${Date.now()}`;
   const application = await electron.launch({
     args: ["."],
     cwd: desktopRoot,
-    env: { ...process.env, PROTOVAULT_DISABLE_RESTORE: "1" }
+    env: { ...process.env, PROTOVAULT_DISABLE_RESTORE: "1", PROTOVAULT_SAMPLE_WORKSPACE: fixtureRoot }
   });
 
   try {
     const page = await application.firstWindow();
-    await expect(page.getByRole("heading", { name: "ProtoVault" })).toBeVisible();
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.getByRole("heading", { name: "ProtoVault" })).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: "加载示例项目" }).click();
     await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled();
@@ -141,7 +143,9 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(editor.getByLabel("新增字段名称")).toHaveValue("field9");
     await expect(editor.getByRole("textbox", { name: "新增字段类型", exact: true })).toHaveValue("std::uint32_t");
     await editor.getByLabel("新增字段类型 类型索引").click();
-    await expect(page.getByRole("heading", { name: "工作区类型" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /基础类型/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /组合类型/ })).toBeVisible();
+    await page.getByRole("button", { name: /基础类型/ }).click();
     await expect(page.getByRole("heading", { name: "基础支持类型" })).toBeVisible();
     await page.locator(".field-type-menu button", { hasText: "std::uint16_t" }).click();
     await expect(editor.getByRole("textbox", { name: "新增字段类型", exact: true })).toHaveValue("std::uint16_t");
