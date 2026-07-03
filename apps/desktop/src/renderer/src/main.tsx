@@ -170,7 +170,7 @@ const GRAPH_THEMES: GraphThemePreset[] = [
     contains: "88, 98, 91",
     flow: "47, 125, 104",
     labelText: "rgba(31, 39, 37, 0.86)",
-    labelActive: "#182523",
+    labelActive: "#172522",
     selected: "rgba(178, 75, 54, 0.62)",
     hovered: "rgba(47, 125, 104, 0.38)"
   }
@@ -1661,6 +1661,7 @@ function App(): React.JSX.Element {
           workspace={workspace}
           selectedTypeId={selectedTypeId}
           selectedFilePath={selectedFilePath}
+          appThemeId={appThemeId}
           onSelectNode={selectGraphNode}
           onOpenNode={openGraphNode}
           onClose={() => setCenterViewMode("workspace")}
@@ -2995,10 +2996,11 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
   </section>;
 }
 
-function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSelectNode, onOpenNode, onClose }: {
+function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThemeId, onSelectNode, onOpenNode, onClose }: {
   workspace: WorkspaceView;
   selectedTypeId: string | null;
   selectedFilePath: string | null;
+  appThemeId: AppThemeId;
   onSelectNode(node: ProtocolGraphNode): void;
   onOpenNode(node: ProtocolGraphNode): void;
   onClose(): void;
@@ -3032,8 +3034,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
   const [hoveredLabel, setHoveredLabel] = React.useState<string | null>(null);
   const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
   const [graphMode, setGraphMode] = React.useState<ProtocolGraphMode>("dependency");
-  const [graphThemeId, setGraphThemeId] = React.useState<GraphThemeId>("obsidian");
-  const graphTheme = GRAPH_THEMES.find((theme) => theme.id === graphThemeId) ?? GRAPH_THEMES[0];
+  const graphTheme = GRAPH_THEMES.find((theme) => theme.id === appThemeId) ?? GRAPH_THEMES[0];
   const graph = React.useMemo(() => buildProtocolGraph(workspace, graphMode), [workspace, graphMode]);
   const focusedNodeId = selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null;
   const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
@@ -3214,7 +3215,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
     sim.targetPanY = pointerY - beforeY * nextZoom;
   }
 
-  return <section className={`graph-view graph-theme-${graphTheme.id}`} aria-label="协议关系图谱">
+  return <section className={`graph-view graph-theme-${appThemeId}`} aria-label="协议关系图谱">
     <div className="graph-title">
       <div>
         <p className="eyebrow">GRAPH VIEW</p>
@@ -3226,13 +3227,6 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, onSele
           <button className={graphMode === "dependency" ? "active" : ""} onClick={() => setGraphMode("dependency")}>依赖</button>
           <button className={graphMode === "data-flow" ? "active" : ""} onClick={() => setGraphMode("data-flow")}>数据流</button>
         </div>
-        <select
-          aria-label="图谱主题"
-          value={graphThemeId}
-          onChange={(event) => setGraphThemeId(event.target.value as GraphThemeId)}
-        >
-          {GRAPH_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.name}</option>)}
-        </select>
         <input
           aria-label="图谱搜索"
           value={graphSearchQuery}
@@ -3685,8 +3679,8 @@ function drawGraph(canvas: HTMLCanvasElement, nodes: GraphSimNode[], edges: Grap
       context.font = `${Math.max(10, Math.min(13, 10.5 * item.scale))}px Segoe UI, sans-serif`;
       context.textAlign = "center";
       context.textBaseline = "top";
-      context.lineWidth = 2.25;
-      context.strokeStyle = "rgba(5, 8, 12, 0.96)";
+      context.lineWidth = options.theme.id === "ink" ? 1.1 : 2.25;
+      context.strokeStyle = options.theme.id === "ink" ? "rgba(247, 240, 227, 0.82)" : "rgba(5, 8, 12, 0.96)";
       context.fillStyle = hovered || selected ? options.theme.labelActive : options.theme.labelText;
       const label = node.label.length > 24 ? `${node.label.slice(0, 23)}…` : node.label;
       context.strokeText(label, item.x, item.y + item.radius + 6);
