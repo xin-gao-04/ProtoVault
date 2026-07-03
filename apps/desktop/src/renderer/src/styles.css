@@ -204,10 +204,11 @@ input, select, textarea { font: inherit; color: var(--text-normal); }
 .status.dirty { border-color: color-mix(in srgb, var(--interactive-accent) 60%, #315a41); color: var(--text-accent-hover); }
 .status.error { border-color: color-mix(in srgb, var(--color-red) 70%, #315a41); color: var(--color-red); }
 .table-scroll { max-width: 100%; overflow: auto; border-radius: var(--radius-m); }
-table { width: 100%; min-width: 720px; border-collapse: collapse; background: #191b21cc; font-size: 13px; }
-th, td { padding: 12px 15px; border-bottom: 1px solid #2b2e36; text-align: left; }
-th { color: #7e8491; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
-tr.selected-row { background: #2b251c; box-shadow: inset 3px 0 0 #d4a64f; }
+table { width: 100%; min-width: 720px; border-collapse: collapse; background: color-mix(in srgb, var(--background-secondary) 82%, transparent); color: var(--text-normal); font-size: 13px; }
+th, td { padding: 12px 15px; border-bottom: 1px solid var(--background-modifier-border); text-align: left; }
+th { color: var(--text-faint); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+tbody tr:hover { background: color-mix(in srgb, var(--background-modifier-hover) 70%, transparent); }
+tr.selected-row { background: color-mix(in srgb, var(--interactive-accent) 16%, var(--background-primary)); box-shadow: inset 3px 0 0 var(--interactive-accent); }
 tr.dirty-row { background: color-mix(in srgb, var(--interactive-accent) 8%, transparent); }
 .inline-action { padding: 4px 8px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--interactive-normal); color: var(--text-muted); font-size: 11px; }
 .inline-action:hover { border-color: var(--interactive-accent); color: var(--text-accent-hover); background: var(--interactive-hover); }
@@ -216,7 +217,7 @@ tr.dirty-row { background: color-mix(in srgb, var(--interactive-accent) 8%, tran
 .inline-action.ghost { opacity: .72; }
 .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .table-input { width: 100%; min-width: 110px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-modifier-form-field); padding: 6px 8px; outline: none; }
-.table-input.mono { font-family: var(--font-monospace); color: #e4bc70; }
+.table-input.mono { font-family: var(--font-monospace); color: var(--text-accent-hover); }
 .table-input:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent); }
 .inline-note-editor { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 6px; }
 .inline-note-editor textarea { width: 100%; min-height: 82px; resize: vertical; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-modifier-form-field); padding: 8px 10px; color: var(--text-normal); line-height: 1.5; outline: none; }
@@ -274,7 +275,7 @@ tr.dirty-row { background: color-mix(in srgb, var(--interactive-accent) 8%, tran
 .report-item.suggestion, .report-item.compatible { border-left-color: #73c590; }
 .report-empty { color: var(--text-muted); }
 .report-preview { max-height: 360px; overflow: auto; margin-top: 12px; padding: 14px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary); color: var(--text-muted); white-space: pre-wrap; }
-code { color: #e4bc70; font-family: "Cascadia Code", monospace; }
+code { color: var(--text-accent-hover); font-family: "Cascadia Code", monospace; }
 .source-editor-shell { position: relative; width: 100%; min-height: 520px; border: 1px solid #c8c8c8; border-radius: 6px; background: #fff; overflow: hidden; }
 .source-highlight, .source-editor { box-sizing: border-box; width: 100%; min-height: 520px; margin: 0; padding: 24px; font: 12px/1.65 "Cascadia Code", Consolas, monospace; white-space: pre; tab-size: 2; }
 .source-highlight { position: absolute; inset: 0; overflow: hidden; color: #000; pointer-events: none; }
