@@ -12,6 +12,9 @@
     "release:check": "pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e && pnpm core:configure && pnpm core:build && pnpm core:test",
     "core:configure": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 configure",
     "core:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 build",
-    "core:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 test"
+    "core:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 test",
+    "agent:loop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent-loop.ps1 quick",
+    "agent:loop:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent-loop.ps1 status",
+    "agent:loop:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent-loop.ps1 release"
   }
 }
