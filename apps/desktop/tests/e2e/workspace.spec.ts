@@ -11,7 +11,6 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
   const networkConfig = resolve(fixtureRoot, ".protocol/network/network.json");
   const originalGeometryHeader = await readFile(geometryHeader, "utf8");
   const originalNetworkConfig = await readFile(networkConfig, "utf8").catch(() => null);
-  const flowProducer = `RadarDriver${Date.now()}`;
   const application = await electron.launch({
     args: ["."],
     cwd: desktopRoot,
@@ -124,14 +123,9 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await graph.getByRole("button", { name: "图谱节点 struct Vec3" }).click();
     await expect(page.getByText("影响力")).toBeVisible();
     await expect(page.getByText("布局摘要")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "数据流标签" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "数据流标签" })).toHaveCount(0);
     await graph.getByRole("button", { name: "图谱节点 struct Vec3" }).dblclick();
     await expect(page.getByRole("button", { name: "切换到 Vec3" })).toBeVisible();
-    await page.getByLabel("Vec3 生产节点").fill(flowProducer);
-    await page.getByLabel("Vec3 消费节点").fill("Tracker, Telemetry");
-    await expect(page.getByRole("button", { name: "切换到 Vec3 未保存" })).toBeVisible();
-    await page.keyboard.press("Control+S");
-    await expect(page.getByText("数据流标签已保存到 .protocol/meta/metadata.json")).toBeVisible();
     await expect(page.getByRole("button", { name: "切换到 Vec3", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "关系图谱" }).click();
     await graph.getByRole("button", { name: "数据流" }).click();

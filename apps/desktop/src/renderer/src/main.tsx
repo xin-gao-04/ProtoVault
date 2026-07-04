@@ -2978,7 +2978,7 @@ function ProtocolEditor({
       {noteEditor(type, `${type.name} 类型注释`)}
     </section>
     <div className="table-scroll">
-    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>初始值</th><th>注释</th><th>位置</th></tr></thead><tbody>
+    {type.kind === "struct" ? <table><thead><tr><th>字段</th><th>类型</th><th>初始值</th><th>注释</th></tr></thead><tbody>
       {type.fields.map((field) => {
         const editing = editingFieldId === field.id;
         const edit = dirtyStructuralEdits[field.id];
@@ -2998,14 +2998,12 @@ function ProtocolEditor({
                 <td><FieldTypeInput compact label="字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={(value) => changeFieldDraft(field, value, draftFieldName, draftFieldInitializer)} /></td>
                 <td><input className="table-input mono" aria-label="字段初始值" value={draftFieldInitializer} onChange={(event) => changeFieldDraft(field, draftFieldType, draftFieldName, event.target.value)} placeholder="可空" /></td>
                 <td>{noteEditor(field, `${field.name} 字段注释`, true)}</td>
-                <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
               </>
             : <>
                 <td>{displayName}</td>
                 <td>{fieldTypeDisplay(field)}</td>
                 <td>{displayInitializer ? <code>{displayInitializer}</code> : "—"}</td>
                 <td>{noteEditor(field, `${field.name} 字段注释`, true)}</td>
-                <td>{field.location ? `${field.location.line}:${field.location.column}` : "—"}</td>
               </>}
         </tr>;
       })}
@@ -3013,10 +3011,9 @@ function ProtocolEditor({
         <td><input className="table-input" aria-label="新增字段名称" value={draftFieldName} onChange={(event) => setDraftFieldName(event.target.value)} autoFocus /></td>
         <td><FieldTypeInput compact label="新增字段类型" value={draftFieldType} options={fieldTypeOptions} onChange={setDraftFieldType} /></td>
         <td><input className="table-input mono" aria-label="新增字段初始值" value={draftFieldInitializer} onChange={(event) => setDraftFieldInitializer(event.target.value)} placeholder="可空" /></td>
-        <td>—</td>
         <td><div className="row-actions"><span>新增</span><button className="inline-action" disabled={loading} onClick={() => void saveAddedField()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingField(false)}>取消</button></div></td>
       </tr>}
-    </tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th><th>位置</th></tr></thead><tbody>
+    </tbody></table> : <table><thead><tr><th>枚举项</th><th>值</th><th>注释</th></tr></thead><tbody>
       {type.values.map((value) => {
         const editing = editingEnumValueId === value.id;
         const edit = dirtyStructuralEdits[value.id];
@@ -3035,20 +3032,17 @@ function ProtocolEditor({
                 <td><input className="table-input" aria-label="枚举项名称" value={draftEnumValueName} onChange={(event) => changeEnumValueDraft(value, event.target.value, draftEnumValueNumber)} onKeyDown={(event) => { if (event.key === "Escape") setEditingEnumValueId(null); }} autoFocus /></td>
                 <td><input className="table-input mono" aria-label="枚举值" value={draftEnumValueNumber} onChange={(event) => changeEnumValueDraft(value, draftEnumValueName, event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditingEnumValueId(null); }} placeholder="自动" /></td>
                 <td>{noteEditor(value, `${value.name} 枚举项注释`, true)}</td>
-                <td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td>
               </>
             : <>
                 <td>{displayName}</td>
                 <td>{displayValue}</td>
                 <td>{noteEditor(value, `${value.name} 枚举项注释`, true)}</td>
-                <td>{value.location ? `${value.location.line}:${value.location.column}` : "—"}</td>
               </>}
         </tr>;
       })}
       {addingEnumValue && <tr className="draft-row">
         <td><input className="table-input" aria-label="新增枚举项名称" value={draftEnumValueName} onChange={(event) => setDraftEnumValueName(event.target.value)} autoFocus /></td>
         <td><input className="table-input mono" aria-label="新增枚举值" value={draftEnumValueNumber} onChange={(event) => setDraftEnumValueNumber(event.target.value)} placeholder="自动" /></td>
-        <td>—</td>
         <td><div className="row-actions"><span>新增</span><button className="inline-action" disabled={loading} onClick={() => void saveAddedEnumValue()}>保存</button><button className="inline-action" disabled={loading} onClick={() => setAddingEnumValue(false)}>取消</button></div></td>
       </tr>}
     </tbody></table>}
@@ -5261,12 +5255,6 @@ function GraphInspector({ workspace, graph, selectedNode, dirtyDataFlows, onOpen
         <dt>状态</dt><dd>{layout.partial ? "部分解析" : "已完成"}</dd>
       </dl>
     </section>}
-    {selectedTypeForLayout && <DataFlowEditor
-      type={selectedTypeForLayout}
-      dirtyDataFlow={dirtyDataFlows[selectedTypeForLayout.id]}
-      onDraftChange={onDataFlowDraftChange}
-      onUpdateDataFlow={onUpdateDataFlow}
-    />}
     <section className="property-card">
       <h3>{selectedNode.kind === "file" ? "声明类型" : "影响范围"}</h3>
       {selectedNode.kind === "file"
@@ -5400,13 +5388,6 @@ function ProtocolInspector({ type, layout, selectedField, selectedEnumValue, dir
       <h3>{readonlyNoteLabel}</h3>
       <p className="readonly-note">{readonlyNote || "暂无注释；请在中间 Editor 中编辑。"}</p>
     </section>
-
-    <DataFlowEditor
-      type={type}
-      dirtyDataFlow={dirtyDataFlows[type.id]}
-      onDraftChange={onDataFlowDraftChange}
-      onUpdateDataFlow={onUpdateDataFlow}
-    />
 
     {layout && <section className="property-card">
       <h3>内存布局</h3>
