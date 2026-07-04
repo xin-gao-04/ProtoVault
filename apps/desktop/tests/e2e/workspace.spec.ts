@@ -90,6 +90,14 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("region", { name: "协议报告" })).toContainText("网络数据流报告");
     await expect(page.getByRole("region", { name: "协议报告" })).toContainText("network-flow-");
     await page.getByRole("button", { name: "关闭报告" }).click();
+    await network.getByRole("button", { name: "数据流画布" }).click();
+    const flowCanvas = network.getByRole("region", { name: "数据流画布" });
+    await expect(flowCanvas).toBeVisible();
+    await expect(flowCanvas).toContainText("E2E Tracking Flow");
+    await expect(flowCanvas).toContainText("E2E DDS Link");
+    await expect(flowCanvas).toContainText("E2E RadarModel");
+    await expect(flowCanvas).toContainText("E2E TrackService");
+    await expect(flowCanvas).toContainText("demo::radar::RadarTrack");
     await network.getByRole("button", { name: "协议绑定" }).click();
     const bindingRow = network.getByRole("row", { name: /E2E RadarTrack@20Hz/ });
     page.once("dialog", async (dialog) => {

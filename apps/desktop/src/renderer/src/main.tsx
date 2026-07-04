@@ -3151,7 +3151,7 @@ const PROTOCOL_BINDING_CRITICALITY_OPTIONS: Array<{ value: ProtocolBindingCritic
   { value: "critical", label: "关键" }
 ];
 
-type NetworkTabMode = "nodes" | "links" | "bindings" | "flows" | "topology";
+type NetworkTabMode = "nodes" | "links" | "bindings" | "flow-canvas" | "flows" | "topology";
 type NetworkNodeFormState = {
   name: string;
   kind: NetworkNodeKind;
@@ -3519,6 +3519,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
       <button className={mode === "nodes" ? "active" : ""} onClick={() => setMode("nodes")}>节点</button>
       <button className={mode === "links" ? "active" : ""} onClick={() => setMode("links")}>链路</button>
       <button className={mode === "bindings" ? "active" : ""} onClick={() => setMode("bindings")}>协议绑定</button>
+      <button className={mode === "flow-canvas" ? "active" : ""} onClick={() => setMode("flow-canvas")}>数据流画布</button>
       <button className={mode === "flows" ? "active" : ""} onClick={() => setMode("flows")}>数据流视图</button>
       <button className={mode === "topology" ? "active" : ""} onClick={() => setMode("topology")}>拓扑预览</button>
     </div>
@@ -3641,6 +3642,18 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
       <FlowViewPanel view={selectedFlowView} analysis={selectedFlowAnalysis} onGenerateReport={() => onGenerateFlowReport(selectedFlowView.id)} onOpenProtocolType={onOpenProtocolType} />
     </div>}
 
+    {mode === "flow-canvas" && <FlowCanvasView
+      workspace={workspace}
+      flowViews={flowViews}
+      selectedFlowView={selectedFlowView}
+      analysis={selectedFlowAnalysis}
+      onSelectFlowView={setSelectedFlowViewId}
+      onEditLink={editLink}
+      onEditBinding={editBinding}
+      onGenerateReport={() => onGenerateFlowReport(selectedFlowView.id)}
+      onOpenProtocolType={onOpenProtocolType}
+    />}
+
     {mode === "topology" && <div className="network-topology">
       {workspace.network.links.length === 0 ? <p className="scan-empty">还没有通信链路，先创建节点和链路。</p> : workspace.network.links.map((link) => {
         const bindings = workspace.network.bindings.filter((binding) => binding.linkId === link.id);
@@ -3659,6 +3672,239 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
       })}
     </div>}
   </section>;
+}
+
+type FlowCanvasRisk = "normal" | "warning" | "critical";
+type FlowCanvasRow = {
+  link: WorkspaceNetworkLinkView;
+  source?: WorkspaceNetworkNodeView;
+  target?: WorkspaceNetworkNodeView;
+  bindings: WorkspaceProtocolBindingView[];
+  risk: FlowCanvasRisk;
+  y: number;
+};
+
+function FlowCanvasView({ workspace, flowViews, selectedFlowView, analysis, onSelectFlowView, onEditLink, onEditBinding, onGenerateReport, onOpenProtocolType }: {
+  workspace: WorkspaceView;
+  flowViews: WorkspaceFlowView[];
+  selectedFlowView: WorkspaceFlowView;
+  analysis: FlowViewAnalysis;
+  onSelectFlowView(viewId: string): void;
+  onEditLink(link: WorkspaceNetworkLinkView): void;
+  onEditBinding(binding: WorkspaceProtocolBindingView): void;
+  onGenerateReport(): void;
+  onOpenProtocolType(typeId: string): void;
+}): React.JSX.Element {
+  const nodeById = React.useMemo(() => new Map(workspace.network.nodes.map((node) => [node.id, node])), [workspace.network.nodes]);
+  const bindingsByLink = React.useMemo(() => {
+    const result = new Map<string, WorkspaceProtocolBindingView[]>();
+    for (const binding of analysis.bindings) {
+      const current = result.get(binding.linkId) ?? [];
+      current.push(binding);
+      result.set(binding.linkId, current);
+    }
+    return result;
+  }, [analysis.bindings]);
+  const maxBandwidth = Math.max(1, ...analysis.links.map((link) => link.estimatedBandwidthBps));
+  const rowHeight = 132;
+  const topOffset = 112;
+  const stageWidth = 760;
+  const sourceX = 22;
+  const nodeWidth = 170;
+  const payloadX = 250;
+  const payloadWidth = 260;
+  const targetX = 574;
+  const rows = React.useMemo<FlowCanvasRow[]>(() => analysis.links.map((link, index) => {
+    const bindings = bindingsByLink.get(link.id) ?? [];
+    return {
+      link,
+      source: nodeById.get(link.fromNodeId),
+      target: nodeById.get(link.toNodeId),
+      bindings,
+      risk: flowCanvasRisk(link, bindings),
+      y: topOffset + index * rowHeight
+    };
+  }), [analysis.links, bindingsByLink, nodeById]);
+  const stageHeight = Math.max(420, topOffset + Math.max(rows.length, 1) * rowHeight + 70);
+  const [selectedLinkId, setSelectedLinkId] = React.useState<string | null>(rows[0]?.link.id ?? null);
+  React.useEffect(() => {
+    if (!rows.some((row) => row.link.id === selectedLinkId)) {
+      setSelectedLinkId(rows[0]?.link.id ?? null);
+    }
+  }, [rows, selectedLinkId]);
+  const selectedRow = rows.find((row) => row.link.id === selectedLinkId) ?? rows[0];
+
+  if (rows.length === 0) {
+    return <section className="flow-canvas-empty" aria-label="数据流画布">
+      <div>
+        <p className="eyebrow">DATA FLOW CANVAS</p>
+        <h3>{selectedFlowView.name}</h3>
+        <p>当前视图没有匹配到通信链路。可以调整 FlowView 过滤条件，或先在“节点 / 链路 / 协议绑定”中补充网络事实。</p>
+      </div>
+      <div className="flow-canvas-toolbar">
+        <select aria-label="数据流画布视图" value={selectedFlowView.id} onChange={(event) => onSelectFlowView(event.target.value)}>
+          {flowViews.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
+        </select>
+        <button className="inline-action" onClick={onGenerateReport}>生成视图报告</button>
+      </div>
+    </section>;
+  }
+
+  return <section className="flow-canvas-view" aria-label="数据流画布">
+    <div className="flow-canvas-header">
+      <div>
+        <p className="eyebrow">DATA FLOW CANVAS</p>
+        <h3>{selectedFlowView.name}</h3>
+        <p>{selectedFlowView.description || "按生产节点 → 链路 / 协议载荷 → 消费节点的方向展示数据流，线宽表示估算带宽，流光表示方向。"}</p>
+      </div>
+      <div className="flow-canvas-toolbar">
+        <select aria-label="数据流画布视图" value={selectedFlowView.id} onChange={(event) => onSelectFlowView(event.target.value)}>
+          {flowViews.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
+        </select>
+        <button className="inline-action" onClick={onGenerateReport}>生成视图报告</button>
+      </div>
+    </div>
+
+    <div className="flow-canvas-kpis">
+      <span><b>{analysis.nodes.length}</b><small>实体节点</small></span>
+      <span><b>{analysis.links.length}</b><small>通信链路</small></span>
+      <span><b>{analysis.bindings.length}</b><small>协议载荷</small></span>
+      <span><b>{formatBandwidth(analysis.totalBandwidthBps)}</b><small>估算总量</small></span>
+    </div>
+
+    <div className="flow-canvas-shell">
+      <div className="flow-canvas-stage-wrap">
+        <div className="flow-canvas-stage" style={{ width: `${stageWidth}px`, height: `${stageHeight}px` }}>
+          <div className="flow-canvas-column-label source">生产节点</div>
+          <div className="flow-canvas-column-label payload">链路 / 协议载荷</div>
+          <div className="flow-canvas-column-label target">消费节点</div>
+          <svg className="flow-canvas-svg" viewBox={`0 0 ${stageWidth} ${stageHeight}`} role="img" aria-label={`${selectedFlowView.name} 数据流连线`}>
+            <defs>
+              <marker id="flow-arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+                <path d="M2,2 L10,6 L2,10 Z" />
+              </marker>
+            </defs>
+            {rows.map((row) => {
+              const strokeWidth = flowCanvasStrokeWidth(row.link.estimatedBandwidthBps, maxBandwidth);
+              const selected = row.link.id === selectedRow?.link.id;
+              return <g key={row.link.id} className={`flow-canvas-edge ${row.risk}${selected ? " selected" : ""}`}>
+                <path
+                  d={`M ${sourceX + nodeWidth} ${row.y} C ${sourceX + nodeWidth + 110} ${row.y - 34}, ${targetX - 130} ${row.y + 34}, ${targetX} ${row.y}`}
+                  strokeWidth={strokeWidth}
+                  onClick={() => setSelectedLinkId(row.link.id)}
+                />
+                <path
+                  className="pulse"
+                  d={`M ${sourceX + nodeWidth} ${row.y} C ${sourceX + nodeWidth + 110} ${row.y - 34}, ${targetX - 130} ${row.y + 34}, ${targetX} ${row.y}`}
+                  strokeWidth={Math.max(2, strokeWidth * 0.32)}
+                  onClick={() => setSelectedLinkId(row.link.id)}
+                />
+              </g>;
+            })}
+          </svg>
+          {rows.map((row) => <React.Fragment key={row.link.id}>
+            <button
+              className={`flow-node-card source ${row.risk}${row.link.id === selectedRow?.link.id ? " selected" : ""}`}
+              style={{ left: sourceX, top: row.y - 42, width: nodeWidth }}
+              onClick={() => setSelectedLinkId(row.link.id)}
+              onDoubleClick={() => row.source && onEditLink(row.link)}
+            >
+              <b>{row.source?.name ?? row.link.fromNodeName ?? row.link.fromNodeId}</b>
+              <small>{row.source ? `${networkNodeKindLabel(row.source.kind)} · ${row.source.subsystem || "未分系统"}` : "未知源节点"}</small>
+              <span>出 {formatBandwidth(row.source?.outgoingBandwidthBps ?? row.link.estimatedBandwidthBps)}</span>
+            </button>
+            <div
+              className={`flow-payload-stack ${row.risk}${row.link.id === selectedRow?.link.id ? " selected" : ""}`}
+              style={{ left: payloadX, top: row.y - 50, width: payloadWidth }}
+              onClick={() => setSelectedLinkId(row.link.id)}
+            >
+              <button className="flow-link-chip" onDoubleClick={() => onEditLink(row.link)}>
+                <b>{row.link.name}</b>
+                <small>{networkTransportLabel(row.link.transport)} · {formatBandwidth(row.link.estimatedBandwidthBps)}{row.link.bandwidthLimitMbps ? ` / ${row.link.bandwidthLimitMbps} Mbps` : ""}</small>
+              </button>
+              <div className="flow-payload-chips">
+                {row.bindings.length === 0
+                  ? <span className="empty">暂无协议载荷</span>
+                  : row.bindings.slice(0, 4).map((binding) => <button key={binding.id} title="点击打开协议，双击编辑协议绑定" onClick={(event) => { event.stopPropagation(); onOpenProtocolType(binding.typeId); }} onDoubleClick={(event) => { event.stopPropagation(); onEditBinding(binding); }}>
+                    {binding.protocolName ?? binding.name}
+                    <small>{binding.frequencyHz} Hz · {formatBandwidth(binding.estimatedBandwidthBps)}</small>
+                  </button>)}
+                {row.bindings.length > 4 && <span className="more">+{row.bindings.length - 4}</span>}
+              </div>
+            </div>
+            <button
+              className={`flow-node-card target ${row.risk}${row.link.id === selectedRow?.link.id ? " selected" : ""}`}
+              style={{ left: targetX, top: row.y - 42, width: nodeWidth }}
+              onClick={() => setSelectedLinkId(row.link.id)}
+              onDoubleClick={() => row.target && onEditLink(row.link)}
+            >
+              <b>{row.target?.name ?? row.link.toNodeName ?? row.link.toNodeId}</b>
+              <small>{row.target ? `${networkNodeKindLabel(row.target.kind)} · ${row.target.subsystem || "未分系统"}` : "未知目标节点"}</small>
+              <span>入 {formatBandwidth(row.target?.incomingBandwidthBps ?? row.link.estimatedBandwidthBps)}</span>
+            </button>
+          </React.Fragment>)}
+        </div>
+      </div>
+
+      <aside className="flow-canvas-detail" aria-label="数据流详情">
+        {selectedRow ? <>
+          <p className="eyebrow">SELECTED LINK</p>
+          <h3>{selectedRow.link.name}</h3>
+          <dl>
+            <dt>方向</dt><dd>{selectedRow.source?.name ?? selectedRow.link.fromNodeName ?? selectedRow.link.fromNodeId} → {selectedRow.target?.name ?? selectedRow.link.toNodeName ?? selectedRow.link.toNodeId}</dd>
+            <dt>传输</dt><dd>{networkTransportLabel(selectedRow.link.transport)}</dd>
+            <dt>Endpoint</dt><dd>{selectedRow.link.endpoint || "—"}</dd>
+            <dt>延迟预算</dt><dd>{selectedRow.link.latencyBudgetMs === undefined ? "—" : `${selectedRow.link.latencyBudgetMs} ms`}</dd>
+            <dt>估算带宽</dt><dd>{formatBandwidth(selectedRow.link.estimatedBandwidthBps)}</dd>
+            <dt>上限</dt><dd>{selectedRow.link.bandwidthLimitMbps === undefined ? "—" : `${selectedRow.link.bandwidthLimitMbps} Mbps`}</dd>
+            <dt>风险</dt><dd>{flowCanvasRiskLabel(selectedRow)}</dd>
+          </dl>
+          <div className="flow-canvas-actions">
+            <button className="inline-action" onClick={() => onEditLink(selectedRow.link)}>编辑链路</button>
+          </div>
+          <section>
+            <h4>协议载荷</h4>
+            {selectedRow.bindings.length === 0 ? <p className="readonly-note">当前链路还没有协议绑定。</p> : <div className="flow-canvas-binding-list">
+              {selectedRow.bindings.map((binding) => <article key={binding.id}>
+                <button className="link-button" onClick={() => onOpenProtocolType(binding.typeId)}>{binding.protocolName ?? binding.name}</button>
+                <small>{binding.payloadSize === undefined ? "未知大小" : formatBytes(binding.payloadSize)} · {binding.frequencyHz} Hz · 批量 x{binding.batchSize} · 峰值 x{binding.peakMultiplier}</small>
+                <b>{formatBandwidth(binding.estimatedBandwidthBps)} · {protocolBindingCriticalityLabel(binding.criticality)}</b>
+                <button className="inline-action ghost" onClick={() => onEditBinding(binding)}>编辑绑定</button>
+              </article>)}
+            </div>}
+          </section>
+        </> : <p className="readonly-note">请选择一条数据流链路。</p>}
+      </aside>
+    </div>
+
+    <div className="flow-canvas-legend">
+      <span><i className="normal" /> 正常链路</span>
+      <span><i className="warning" /> 高优先级 / 信息缺失</span>
+      <span><i className="critical" /> 关键链路 / 超限</span>
+      <span><i className="motion" /> 流光方向表示数据流向</span>
+    </div>
+  </section>;
+}
+
+function flowCanvasRisk(link: WorkspaceNetworkLinkView, bindings: WorkspaceProtocolBindingView[]): FlowCanvasRisk {
+  if (link.critical || isLinkOverBandwidthLimit(link) || bindings.some((binding) => binding.criticality === "critical")) return "critical";
+  if (bindings.some((binding) => binding.criticality === "high" || binding.payloadSize === undefined || binding.peakMultiplier > 2)) return "warning";
+  return "normal";
+}
+
+function flowCanvasRiskLabel(row: FlowCanvasRow): string {
+  if (isLinkOverBandwidthLimit(row.link)) return "链路带宽超限";
+  if (row.link.critical) return "关键链路";
+  if (row.bindings.some((binding) => binding.criticality === "critical")) return "关键协议载荷";
+  if (row.bindings.some((binding) => binding.criticality === "high")) return "高优先级协议";
+  if (row.bindings.some((binding) => binding.payloadSize === undefined)) return "存在未知载荷大小";
+  if (row.bindings.some((binding) => binding.peakMultiplier > 2)) return "存在高峰值系数";
+  return "正常";
+}
+
+function flowCanvasStrokeWidth(value: number, maxValue: number): number {
+  const ratio = Math.sqrt(Math.max(0, value) / Math.max(1, maxValue));
+  return Math.round((3 + ratio * 13) * 10) / 10;
 }
 
 function FlowViewPanel({ view, analysis, onGenerateReport, onOpenProtocolType }: {
