@@ -38,7 +38,18 @@ type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; fieldInitializer: string; savedFieldName: string; savedFieldType: string; savedFieldInitializer: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
 type DirtyDataFlowEdit = { producers: string[]; consumers: string[] };
-type CenterViewMode = "workspace" | "graph" | "network";
+type CenterViewMode = "workspace" | "graph" | "network" | "manual";
+type NetworkTabMode = "nodes" | "links" | "bindings" | "flows" | "flow-canvas";
+type NavigationSnapshot = {
+  centerViewMode: CenterViewMode;
+  activeTabId: string | null;
+  selectedFilePath: string | null;
+  selectedTypeId: string | null;
+  selectedMemberId: string | null;
+  networkMode: NetworkTabMode;
+  networkSelectedFlowViewId: string;
+  graphSelectedNodeId: string | null;
+};
 type WorkspaceReportState =
   | { kind: "lint"; report: WorkspaceLintReport }
   | { kind: "document"; report: GeneratedDocumentReport }
@@ -91,6 +102,25 @@ const SUPPORTED_BASE_FIELD_TYPES = [
   "char",
   "std::byte"
 ];
+const MAX_NAVIGATION_HISTORY = 80;
+
+function navigationSnapshotEquals(a: NavigationSnapshot | null, b: NavigationSnapshot | null): boolean {
+  if (!a || !b) return a === b;
+  return a.centerViewMode === b.centerViewMode
+    && a.activeTabId === b.activeTabId
+    && a.selectedFilePath === b.selectedFilePath
+    && a.selectedTypeId === b.selectedTypeId
+    && a.selectedMemberId === b.selectedMemberId
+    && a.networkMode === b.networkMode
+    && a.networkSelectedFlowViewId === b.networkSelectedFlowViewId
+    && a.graphSelectedNodeId === b.graphSelectedNodeId;
+}
+
+function pushNavigationSnapshot(stack: NavigationSnapshot[], snapshot: NavigationSnapshot): NavigationSnapshot[] {
+  const last = stack.at(-1);
+  if (navigationSnapshotEquals(last ?? null, snapshot)) return stack;
+  return [...stack, snapshot].slice(-MAX_NAVIGATION_HISTORY);
+}
 
 function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
@@ -143,6 +173,14 @@ function App(): React.JSX.Element {
   const [workspaceReport, setWorkspaceReport] = React.useState<WorkspaceReportState | null>(null);
   const [externalChange, setExternalChange] = React.useState<WorkspaceExternalChange | null>(null);
   const [centerViewMode, setCenterViewMode] = React.useState<CenterViewMode>("workspace");
+  const [networkMode, setNetworkMode] = React.useState<NetworkTabMode>("nodes");
+  const [networkSelectedFlowViewId, setNetworkSelectedFlowViewId] = React.useState("derived:all");
+  const [navigationAvailability, setNavigationAvailability] = React.useState({ canGoBack: false, canGoForward: false });
+  const navigationBackStackRef = React.useRef<NavigationSnapshot[]>([]);
+  const navigationForwardStackRef = React.useRef<NavigationSnapshot[]>([]);
+  const lastNavigationSnapshotRef = React.useRef<NavigationSnapshot | null>(null);
+  const currentNavigationSnapshotRef = React.useRef<NavigationSnapshot | null>(null);
+  const restoringNavigationRef = React.useRef(false);
   const [graphInspectorState, setGraphInspectorState] = React.useState<{ graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] }; selectedNodeId: string | null } | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
@@ -181,11 +219,22 @@ function App(): React.JSX.Element {
     if (!treeSearchQuery.trim()) return expandedNodeIds;
     return new Set([...expandedNodeIds, ...treeSearchResult.expandedNodeIds]);
   }, [expandedNodeIds, treeSearchQuery, treeSearchResult.expandedNodeIds]);
+  const currentNavigationSnapshot = React.useMemo<NavigationSnapshot>(() => ({
+    centerViewMode,
+    activeTabId,
+    selectedFilePath,
+    selectedTypeId,
+    selectedMemberId,
+    networkMode,
+    networkSelectedFlowViewId,
+    graphSelectedNodeId: graphInspectorState?.selectedNodeId ?? null
+  }), [activeTabId, centerViewMode, graphInspectorState?.selectedNodeId, networkMode, networkSelectedFlowViewId, selectedFilePath, selectedMemberId, selectedTypeId]);
 
   const applyWorkspaceResult = React.useCallback((result: WorkspaceView, options?: {
     selectFileRelativePath?: string;
     selectTypeName?: string;
     selectFieldName?: string;
+    resetNavigationHistory?: boolean;
   }): void => {
     const nextTree = buildProtocolTree(result);
     const nextType = options?.selectTypeName
@@ -215,6 +264,18 @@ function App(): React.JSX.Element {
     setTabs((current) => reconcileTabs(current, result));
     setPreviewTab(nextActiveTab);
     setActiveTabId(nextActiveTab?.id ?? null);
+    if (options?.resetNavigationHistory) {
+      setCenterViewMode("workspace");
+      setNetworkMode("nodes");
+      setNetworkSelectedFlowViewId("derived:all");
+      setWorkspaceReport(null);
+      setActiveAction(null);
+      navigationBackStackRef.current = [];
+      navigationForwardStackRef.current = [];
+      lastNavigationSnapshotRef.current = null;
+      currentNavigationSnapshotRef.current = null;
+      refreshNavigationAvailability();
+    }
   }, []);
 
   const replaceWorkspaceResult = React.useCallback((result: WorkspaceView): void => {
@@ -226,6 +287,56 @@ function App(): React.JSX.Element {
   const handleGraphContextChange = React.useCallback((graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] }, selectedNodeId: string | null): void => {
     setGraphInspectorState((current) => current?.graph === graph && current.selectedNodeId === selectedNodeId ? current : { graph, selectedNodeId });
   }, []);
+
+  function refreshNavigationAvailability(): void {
+    setNavigationAvailability((current) => {
+      const next = {
+        canGoBack: navigationBackStackRef.current.length > 0,
+        canGoForward: navigationForwardStackRef.current.length > 0
+      };
+      return current.canGoBack === next.canGoBack && current.canGoForward === next.canGoForward ? current : next;
+    });
+  }
+
+  function applyNavigationSnapshot(snapshot: NavigationSnapshot): void {
+    setCenterViewMode(snapshot.centerViewMode);
+    setNetworkMode(snapshot.networkMode);
+    setNetworkSelectedFlowViewId(snapshot.networkSelectedFlowViewId);
+    setActiveTabId(snapshot.activeTabId);
+    setSelectedFilePath(snapshot.selectedFilePath);
+    setSelectedTypeId(snapshot.selectedTypeId);
+    setSelectedMemberId(snapshot.selectedMemberId);
+    setActiveAction(null);
+    setWorkspaceReport(null);
+    if (snapshot.selectedTypeId) {
+      setExpandedNodeIds((current) => new Set(current).add(`type:${snapshot.selectedTypeId}`));
+    }
+    if (snapshot.centerViewMode === "graph") {
+      setGraphInspectorState((current) => current ? { ...current, selectedNodeId: snapshot.graphSelectedNodeId } : current);
+    }
+  }
+
+  async function navigateHistory(direction: "back" | "forward"): Promise<void> {
+    const sourceStack = direction === "back" ? navigationBackStackRef.current : navigationForwardStackRef.current;
+    const target = sourceStack.at(-1);
+    if (!target) {
+      setUiNotice(direction === "back" ? "没有更早的操作界面" : "没有更后的操作界面");
+      return;
+    }
+    if (!(await ensureCanNavigateToTab(target.activeTabId ?? ""))) return;
+    const current = currentNavigationSnapshotRef.current ?? currentNavigationSnapshot;
+    if (direction === "back") {
+      navigationBackStackRef.current = sourceStack.slice(0, -1);
+      navigationForwardStackRef.current = pushNavigationSnapshot(navigationForwardStackRef.current, current);
+    } else {
+      navigationForwardStackRef.current = sourceStack.slice(0, -1);
+      navigationBackStackRef.current = pushNavigationSnapshot(navigationBackStackRef.current, current);
+    }
+    restoringNavigationRef.current = true;
+    applyNavigationSnapshot(target);
+    refreshNavigationAvailability();
+    setUiNotice(direction === "back" ? "已返回上一步界面" : "已前进到下一步界面");
+  }
 
   React.useEffect(() => {
     window.protoVault.health()
@@ -249,7 +360,7 @@ function App(): React.JSX.Element {
     window.protoVault.restoreLastWorkspace()
       .then((result) => {
         if (cancelled || !result) return;
-        applyWorkspaceResult(result);
+        applyWorkspaceResult(result, { resetNavigationHistory: true });
         setUiNotice(`已恢复上次工作区：${result.name}`);
       })
       .catch(() => {
@@ -276,11 +387,45 @@ function App(): React.JSX.Element {
   }, [appThemeId]);
 
   React.useEffect(() => {
+    currentNavigationSnapshotRef.current = currentNavigationSnapshot;
+    const previous = lastNavigationSnapshotRef.current;
+    if (!previous) {
+      lastNavigationSnapshotRef.current = currentNavigationSnapshot;
+      refreshNavigationAvailability();
+      return;
+    }
+    if (navigationSnapshotEquals(previous, currentNavigationSnapshot)) {
+      refreshNavigationAvailability();
+      return;
+    }
+    if (restoringNavigationRef.current) {
+      restoringNavigationRef.current = false;
+      lastNavigationSnapshotRef.current = currentNavigationSnapshot;
+      refreshNavigationAvailability();
+      return;
+    }
+    navigationBackStackRef.current = pushNavigationSnapshot(navigationBackStackRef.current, previous);
+    navigationForwardStackRef.current = [];
+    lastNavigationSnapshotRef.current = currentNavigationSnapshot;
+    refreshNavigationAvailability();
+  }, [currentNavigationSnapshot]);
+
+  React.useEffect(() => {
     function closeMenu(): void {
       setContextMenu(null);
       setTabContextMenu(null);
     }
     function handleKeyDown(event: KeyboardEvent): void {
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
+        event.preventDefault();
+        void navigateHistory("back");
+        return;
+      }
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowRight") {
+        event.preventDefault();
+        void navigateHistory("forward");
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void saveActiveChanges();
@@ -306,7 +451,7 @@ function App(): React.JSX.Element {
     try {
       const result = sample ? await window.protoVault.openSampleWorkspace() : await window.protoVault.openWorkspace();
       if (result) {
-        applyWorkspaceResult(result);
+        applyWorkspaceResult(result, { resetNavigationHistory: true });
         setUiNotice(result.metadataPath ? "目录记录已更新：.protocol/workspace.json" : "工作区已扫描");
       }
     } finally {
@@ -1538,6 +1683,7 @@ function App(): React.JSX.Element {
         <button className={centerViewMode === "workspace" ? "active" : ""} aria-label="协议工作区" title="协议工作区" onClick={() => setCenterViewMode("workspace")}>◇</button>
         <button className={centerViewMode === "graph" ? "active" : ""} aria-label="关系图谱" title="关系图谱" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("graph"); }}>⌬</button>
         <button className={centerViewMode === "network" ? "active" : ""} aria-label="网络地图" title="网络地图" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("network"); }}>⇄</button>
+        <button className={centerViewMode === "manual" ? "active" : ""} aria-label="使用手册" title="使用手册 / 设计思路" onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("manual"); }}>?</button>
         <button aria-label="问题面板">!</button>
       </aside>
       <aside className="navigator">
@@ -1643,6 +1789,8 @@ function App(): React.JSX.Element {
             <small>{workspace ? `${workspace.name} · ${workspace.files.length} Headers · ${workspace.types.length} Types` : "尚未打开协议工作区"}</small>
           </div>
           <div className="toolbar-actions">
+            <button className="inline-action icon-only" aria-label="返回上一步界面" title="返回上一步界面 · Alt+←" disabled={!navigationAvailability.canGoBack} onClick={() => void navigateHistory("back")}>←</button>
+            <button className="inline-action icon-only" aria-label="前进到下一步界面" title="前进到下一步界面 · Alt+→" disabled={!navigationAvailability.canGoForward} onClick={() => void navigateHistory("forward")}>→</button>
             {workspace && <>
               <button className="inline-action" disabled={loading} onClick={() => void runLintReport()}>Lint</button>
               <button className="inline-action" disabled={loading} onClick={() => void generateDocumentReport()}>文档</button>
@@ -1664,7 +1812,7 @@ function App(): React.JSX.Element {
           }}
           onDismiss={() => setExternalChange(null)}
         />}
-        {!workspace && <article>
+        {!workspace && <article className="welcome-panel">
           <p className="eyebrow">PROTO VAULT · MVP</p>
           <h2>让散落在 Header 中的协议<br />成为可管理的工程资产。</h2>
           <p className="lede">扫描 C++ 数据结构，理解字段布局，维护语义元数据，并用受控生成与语义差异守住协议演进。</p>
@@ -1696,11 +1844,16 @@ function App(): React.JSX.Element {
         {workspace && centerViewMode === "network" && <NetworkMapView
           workspace={workspace}
           loading={loading}
+          mode={networkMode}
+          selectedFlowViewId={networkSelectedFlowViewId}
+          onModeChange={setNetworkMode}
+          onSelectedFlowViewChange={setNetworkSelectedFlowViewId}
           onWorkspaceChange={replaceWorkspaceResult}
           onGenerateFlowReport={(flowViewId) => void generateNetworkReport(flowViewId)}
           onNotice={setUiNotice}
           onOpenProtocolType={(typeId) => void openProtocolTypeById(typeId)}
         />}
+        {centerViewMode === "manual" && <ManualView workspace={workspace} onBack={() => setCenterViewMode("workspace")} />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -3151,7 +3304,6 @@ const PROTOCOL_BINDING_CRITICALITY_OPTIONS: Array<{ value: ProtocolBindingCritic
   { value: "critical", label: "关键" }
 ];
 
-type NetworkTabMode = "nodes" | "links" | "bindings" | "flow-canvas" | "flows" | "topology";
 type NetworkNodeFormState = {
   name: string;
   kind: NetworkNodeKind;
@@ -3254,21 +3406,23 @@ function networkFlowViewOptions(workspace: WorkspaceView): WorkspaceFlowView[] {
   ];
 }
 
-function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowReport, onNotice, onOpenProtocolType }: {
+function NetworkMapView({ workspace, loading, mode, selectedFlowViewId, onModeChange, onSelectedFlowViewChange, onWorkspaceChange, onGenerateFlowReport, onNotice, onOpenProtocolType }: {
   workspace: WorkspaceView;
   loading: boolean;
+  mode: NetworkTabMode;
+  selectedFlowViewId: string;
+  onModeChange: (mode: NetworkTabMode) => void;
+  onSelectedFlowViewChange: (viewId: string) => void;
   onWorkspaceChange: (workspace: WorkspaceView) => void;
   onGenerateFlowReport: (flowViewId: string) => void;
   onNotice: (message: string) => void;
   onOpenProtocolType: (typeId: string) => void;
 }): React.JSX.Element {
-  const [mode, setMode] = React.useState<NetworkTabMode>("nodes");
   const [pending, setPending] = React.useState(false);
   const [editingNodeId, setEditingNodeId] = React.useState<string | null>(null);
   const [editingLinkId, setEditingLinkId] = React.useState<string | null>(null);
   const [editingBindingId, setEditingBindingId] = React.useState<string | null>(null);
   const [editingFlowViewId, setEditingFlowViewId] = React.useState<string | null>(null);
-  const [selectedFlowViewId, setSelectedFlowViewId] = React.useState("derived:all");
   const [nodeForm, setNodeForm] = React.useState<NetworkNodeFormState>(() => emptyNodeForm());
   const [linkForm, setLinkForm] = React.useState<NetworkLinkFormState>(() => emptyLinkForm(workspace));
   const [bindingForm, setBindingForm] = React.useState<ProtocolBindingFormState>(() => emptyBindingForm(workspace));
@@ -3294,9 +3448,9 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
       }));
     }
     if (!flowViews.some((view) => view.id === selectedFlowViewId)) {
-      setSelectedFlowViewId(flowViews[0]?.id ?? "derived:all");
+      onSelectedFlowViewChange(flowViews[0]?.id ?? "derived:all");
     }
-  }, [editingBindingId, editingLinkId, flowViews, selectedFlowViewId, workspace.network.links, workspace.network.nodes, workspace.types]);
+  }, [editingBindingId, editingLinkId, flowViews, onSelectedFlowViewChange, selectedFlowViewId, workspace.network.links, workspace.network.nodes, workspace.types]);
 
   async function run(action: () => Promise<WorkspaceView>, message: string): Promise<void> {
     setPending(true);
@@ -3332,7 +3486,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
   }
 
   function editNode(node: WorkspaceNetworkNodeView): void {
-    setMode("nodes");
+    onModeChange("nodes");
     setEditingNodeId(node.id);
     setNodeForm({
       name: node.name,
@@ -3348,7 +3502,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
   }
 
   function editLink(link: WorkspaceNetworkLinkView): void {
-    setMode("links");
+    onModeChange("links");
     setEditingLinkId(link.id);
     setLinkForm({
       name: link.name,
@@ -3364,7 +3518,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
   }
 
   function editBinding(binding: WorkspaceProtocolBindingView): void {
-    setMode("bindings");
+    onModeChange("bindings");
     setEditingBindingId(binding.id);
     setBindingForm({
       name: binding.name,
@@ -3381,8 +3535,8 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
 
   function editFlowView(view: WorkspaceFlowView): void {
     if (view.source !== "manual" && !workspace.network.views.some((item) => item.id === view.id)) return;
-    setMode("flows");
-    setSelectedFlowViewId(view.id);
+    onModeChange("flows");
+    onSelectedFlowViewChange(view.id);
     setEditingFlowViewId(view.id);
     setFlowViewForm({
       name: view.name,
@@ -3462,13 +3616,13 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
     };
     if (editingFlowViewId) {
       await run(() => window.protoVault.updateNetworkFlowView({ ...payload, viewId: editingFlowViewId }), `已更新数据流视图：${flowViewForm.name}`);
-      setSelectedFlowViewId(editingFlowViewId);
+      onSelectedFlowViewChange(editingFlowViewId);
     } else {
       const beforeIds = new Set(workspace.network.views.map((view) => view.id));
       await run(async () => {
         const result = await window.protoVault.createNetworkFlowView(payload);
         const created = result.network.views.find((view) => !beforeIds.has(view.id));
-        if (created) setSelectedFlowViewId(created.id);
+        if (created) onSelectedFlowViewChange(created.id);
         return result;
       }, `已创建数据流视图：${flowViewForm.name}`);
     }
@@ -3494,7 +3648,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
     if (!workspace.network.views.some((item) => item.id === view.id)) return;
     if (!window.confirm(`确认删除数据流视图？\n${view.name}`)) return;
     await run(() => window.protoVault.deleteNetworkFlowView({ workspaceRoot: workspace.rootPath, viewId: view.id }), `已删除数据流视图：${view.name}`);
-    setSelectedFlowViewId("derived:all");
+    onSelectedFlowViewChange("derived:all");
     resetFlowViewForm();
   }
 
@@ -3516,12 +3670,11 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
     </div>
 
     <div className="network-tabs" role="tablist">
-      <button className={mode === "nodes" ? "active" : ""} onClick={() => setMode("nodes")}>节点</button>
-      <button className={mode === "links" ? "active" : ""} onClick={() => setMode("links")}>链路</button>
-      <button className={mode === "bindings" ? "active" : ""} onClick={() => setMode("bindings")}>协议绑定</button>
-      <button className={mode === "flow-canvas" ? "active" : ""} onClick={() => setMode("flow-canvas")}>数据流画布</button>
-      <button className={mode === "flows" ? "active" : ""} onClick={() => setMode("flows")}>数据流视图</button>
-      <button className={mode === "topology" ? "active" : ""} onClick={() => setMode("topology")}>拓扑预览</button>
+      <button className={mode === "nodes" ? "active" : ""} onClick={() => onModeChange("nodes")}>节点</button>
+      <button className={mode === "links" ? "active" : ""} onClick={() => onModeChange("links")}>链路</button>
+      <button className={mode === "bindings" ? "active" : ""} onClick={() => onModeChange("bindings")}>协议绑定</button>
+      <button className={mode === "flows" ? "active" : ""} onClick={() => onModeChange("flows")}>数据流视角</button>
+      <button className={mode === "flow-canvas" ? "active" : ""} onClick={() => onModeChange("flow-canvas")}>数据流画布</button>
     </div>
 
     {mode === "nodes" && <div className="network-grid">
@@ -3627,7 +3780,7 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
           {flowViews.map((view) => {
             const stored = workspace.network.views.some((item) => item.id === view.id);
             return <article className={view.id === selectedFlowView.id ? "active" : ""} key={view.id}>
-              <button onClick={() => setSelectedFlowViewId(view.id)}>
+              <button onClick={() => onSelectedFlowViewChange(view.id)}>
                 <b>{view.name}</b>
                 <small>{flowViewSourceLabel(view.source)}{view.filter ? ` · ${view.filter}` : ""}</small>
               </button>
@@ -3647,30 +3800,13 @@ function NetworkMapView({ workspace, loading, onWorkspaceChange, onGenerateFlowR
       flowViews={flowViews}
       selectedFlowView={selectedFlowView}
       analysis={selectedFlowAnalysis}
-      onSelectFlowView={setSelectedFlowViewId}
+      onSelectFlowView={onSelectedFlowViewChange}
       onEditLink={editLink}
       onEditBinding={editBinding}
       onGenerateReport={() => onGenerateFlowReport(selectedFlowView.id)}
       onOpenProtocolType={onOpenProtocolType}
     />}
 
-    {mode === "topology" && <div className="network-topology">
-      {workspace.network.links.length === 0 ? <p className="scan-empty">还没有通信链路，先创建节点和链路。</p> : workspace.network.links.map((link) => {
-        const bindings = workspace.network.bindings.filter((binding) => binding.linkId === link.id);
-        return <div className="topology-link-card" key={link.id} onDoubleClick={() => editLink(link)}>
-          <div className="topology-node">{link.fromNodeName ?? link.fromNodeId}</div>
-          <div className="topology-edge">
-            <span>{link.name}</span>
-            <small>{NETWORK_TRANSPORT_OPTIONS.find((option) => option.value === link.transport)?.label ?? link.transport} · {formatBandwidth(link.estimatedBandwidthBps)}</small>
-            <i />
-          </div>
-          <div className="topology-node">{link.toNodeName ?? link.toNodeId}</div>
-          <div className="topology-bindings">
-            {bindings.length === 0 ? <small>暂无协议绑定</small> : bindings.map((binding) => <button key={binding.id} onClick={() => editBinding(binding)}>{binding.protocolName ?? binding.name} · {formatBandwidth(binding.estimatedBandwidthBps)}</button>)}
-          </div>
-        </div>;
-      })}
-    </div>}
   </section>;
 }
 
@@ -4178,6 +4314,78 @@ function NetworkInspector({ workspace }: { workspace: WorkspaceView }): React.JS
   </div>;
 }
 
+function ManualView({ workspace, onBack }: { workspace: WorkspaceView | null; onBack: () => void }): React.JSX.Element {
+  return <section className="manual-view" aria-label="使用手册">
+    <div className="manual-hero">
+      <div>
+        <p className="eyebrow">PROTO VAULT MANUAL</p>
+        <h2>使用手册与设计思路</h2>
+        <p>ProtoVault 的核心对象不是单个 Header，而是“协议类型 + 内存布局 + 网络事实 + 数据流视角”的工程资产。这里维护全局操作方法和建模约定，避免功能越做越散。</p>
+      </div>
+      <button className="inline-action" onClick={onBack}>返回工作台</button>
+    </div>
+
+    <div className="manual-grid">
+      <article className="manual-card">
+        <h3>一条推荐工作流</h3>
+        <ol>
+          <li>打开工作区或示例项目，等待 Header 扫描完成。</li>
+          <li>在左侧协议树中定位 Header、Struct、Enum 和字段。</li>
+          <li>在中间表格直接编辑字段、枚举值、注释和初始化值。</li>
+          <li>用协议关系图谱检查类型引用关系，用网络地图维护节点、链路和协议绑定。</li>
+          <li>先在“数据流视角”定义观察范围，再进入“数据流画布”查看生产节点、链路载荷和消费节点。</li>
+          <li>通过 Lint、文档、快照和 Diff 检查协议演进风险。</li>
+        </ol>
+      </article>
+
+      <article className="manual-card">
+        <h3>数据流建模原则</h3>
+        <p>节点和链路是事实层，协议绑定是传输事实，数据流视角是观察层。不要把业务流拆成一堆孤立小网络；应先维护实体节点和链路网络，再用视角筛选出目标跟踪、遥测、控制、回放等业务链路。</p>
+        <ul>
+          <li>“数据流视角”负责定义过滤条件和报告对象。</li>
+          <li>“数据流画布”负责展示方向、带宽、风险和协议载荷。</li>
+          <li>“协议关系图谱”只回答 Header / 类型之间的引用依赖。</li>
+        </ul>
+      </article>
+
+      <article className="manual-card">
+        <h3>链路字段解释</h3>
+        <dl>
+          <dt>延迟预算</dt>
+          <dd>由用户或团队录入的设计上限，例如某条 DDS 链路希望 20 ms 内送达。当前不是实测值，主要用于设计审查和后续与运行期观测对比。</dd>
+          <dt>带宽上限</dt>
+          <dd>链路可接受的吞吐边界。画布会把估算带宽超过上限的链路标成高风险。</dd>
+          <dt>峰值系数</dt>
+          <dd>协议绑定的平均吞吐放大倍率，用于表达突发负载；1 表示不放大，2 表示按平均值两倍估算。</dd>
+        </dl>
+      </article>
+
+      <article className="manual-card">
+        <h3>全局操作习惯</h3>
+        <ul>
+          <li><kbd>Ctrl</kbd> + <kbd>S</kbd>：保存当前 tab 的源码、结构化编辑或注释改动。</li>
+          <li><kbd>F2</kbd>：编辑当前选中的 Header、类型、字段或枚举项。</li>
+          <li><kbd>Alt</kbd> + <kbd>←</kbd> / <kbd>Alt</kbd> + <kbd>→</kbd>：在上一步 / 下一步界面之间导航。</li>
+          <li>单击树节点进入预览 tab，双击才固定到正式 tab。</li>
+          <li>关闭带脏标记的 tab 时会提示，避免静默丢失修改。</li>
+        </ul>
+      </article>
+
+      <article className="manual-card">
+        <h3>当前工作区摘要</h3>
+        {workspace ? <dl>
+          <dt>工作区</dt><dd>{workspace.name}</dd>
+          <dt>Header</dt><dd>{workspace.files.length}</dd>
+          <dt>协议类型</dt><dd>{workspace.types.length}</dd>
+          <dt>网络节点</dt><dd>{workspace.network.nodes.length}</dd>
+          <dt>通信链路</dt><dd>{workspace.network.links.length}</dd>
+          <dt>协议绑定</dt><dd>{workspace.network.bindings.length}</dd>
+        </dl> : <p>尚未打开工作区。可以先从左下角加载示例项目或打开本地目录。</p>}
+      </article>
+    </div>
+  </section>;
+}
+
 function formatBandwidth(value: number): string {
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB/s`;
   if (value >= 1024) return `${(value / 1024).toFixed(2)} KB/s`;
@@ -4222,24 +4430,15 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
   } | null>(null);
   const [hoveredLabel, setHoveredLabel] = React.useState<string | null>(null);
   const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
-  const [graphMode, setGraphMode] = React.useState<ProtocolGraphMode>("dependency");
-  const [selectedGraphFlowViewId, setSelectedGraphFlowViewId] = React.useState("derived:all");
   const [selectedGraphNodeId, setSelectedGraphNodeId] = React.useState<string | null>(null);
   const graphTheme = graphThemeForAppTheme(appThemeId);
-  const graphFlowViews = React.useMemo(() => networkFlowViewOptions(workspace), [workspace]);
-  const selectedGraphFlowView = graphFlowViews.find((view) => view.id === selectedGraphFlowViewId) ?? graphFlowViews[0];
-  const graph = React.useMemo(() => buildProtocolGraph(workspace, graphMode, selectedGraphFlowView), [workspace, graphMode, selectedGraphFlowView]);
+  const graph = React.useMemo(() => buildProtocolGraph(workspace, "dependency"), [workspace]);
   const focusedNodeId = selectedGraphNodeId ?? (selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null);
   const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
   const normalizedGraphSearch = graphSearchQuery.trim().toLowerCase();
   const graphSearchMatches = React.useMemo(() => normalizedGraphSearch
     ? new Set(graph.nodes.filter((node) => graphNodeSearchText(node).includes(normalizedGraphSearch)).map((node) => node.id))
     : new Set<string>(), [graph.nodes, normalizedGraphSearch]);
-  React.useEffect(() => {
-    if (!graphFlowViews.some((view) => view.id === selectedGraphFlowViewId)) {
-      setSelectedGraphFlowViewId(graphFlowViews[0]?.id ?? "derived:all");
-    }
-  }, [graphFlowViews, selectedGraphFlowViewId]);
   React.useEffect(() => {
     if (selectedGraphNodeId && !graph.nodes.some((node) => node.id === selectedGraphNodeId)) {
       setSelectedGraphNodeId(null);
@@ -4435,16 +4634,9 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
       <div>
         <p className="eyebrow">GRAPH VIEW</p>
         <h2>协议关系图谱</h2>
-        <p>Canvas 力导向视图：拖拽节点、滚轮缩放、拖动画布平移；单击定位左侧树图，双击打开对应 tab。</p>
+        <p>专注展示 Header、Struct、Enum 的包含与字段引用关系；数据链路传导请在“网络地图 / 数据流画布”中查看。</p>
       </div>
       <div className="graph-title-actions">
-        <div className="graph-mode-toggle" role="group" aria-label="图谱模式">
-          <button className={graphMode === "dependency" ? "active" : ""} onClick={() => setGraphMode("dependency")}>依赖</button>
-          <button className={graphMode === "data-flow" ? "active" : ""} onClick={() => setGraphMode("data-flow")}>数据流</button>
-        </div>
-        {graphMode === "data-flow" && <select aria-label="图谱数据流视图" value={selectedGraphFlowView.id} onChange={(event) => setSelectedGraphFlowViewId(event.target.value)}>
-          {graphFlowViews.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
-        </select>}
         <input
           aria-label="图谱搜索"
           value={graphSearchQuery}
@@ -4476,8 +4668,6 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
       <span><i className="file-dot" /> Header</span>
       <span><i className="struct-dot" /> Struct</span>
       <span><i className="enum-dot" /> Enum</span>
-      {graphMode === "data-flow" && <span><i className="producer-dot" /> 实体节点</span>}
-      {graphMode === "data-flow" && <span><i className="binding-dot" /> 协议载荷</span>}
       <span><i className="risk-dot warning" /> 布局/质量关注</span>
       <span><i className="risk-dot critical" /> 高风险</span>
       <span><i className="edge-dot outgoing" /> 选中节点向外引用/包含</span>

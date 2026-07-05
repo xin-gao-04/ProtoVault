@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from "electron";
 import { createHash } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import { promises as fs } from "node:fs";
@@ -241,6 +241,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: "#17191f",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -248,6 +249,7 @@ function createWindow(): void {
       nodeIntegration: false
     }
   });
+  window.setMenuBarVisibility(false);
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -257,6 +259,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   ipcMain.handle("service:health", createServiceHealth);
   ipcMain.handle("workspace:open-sample", (event) => scanAndRemember(sampleWorkspacePath(app.getAppPath()), event.sender));
   ipcMain.handle("workspace:open", async (event) => {
