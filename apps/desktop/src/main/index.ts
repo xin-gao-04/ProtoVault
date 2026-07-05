@@ -4,6 +4,7 @@ import { watch, type FSWatcher } from "node:fs";
 import { promises as fs } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createServiceHealth } from "../shared/service";
+import type { AssistantAskInput } from "../shared/assistant";
 import type {
   AddFieldInput,
   AddEnumValueInput,
@@ -44,6 +45,7 @@ import type {
   WorkspaceScanProgress,
   WorkspaceView
 } from "../shared/workspace";
+import { askLocalAssistant, getAssistantRuntimeStatus } from "./assistant";
 import {
   addEnumValue,
   addField,
@@ -321,6 +323,8 @@ app.whenReady().then(() => {
   ipcMain.handle("git:tags", (_event, workspaceRoot: string) => listGitTags(workspaceRoot));
   ipcMain.handle("git:create-baseline-tag", (_event, input: CreateBaselineTagInput) => createProtocolBaselineTag(input));
   ipcMain.handle("git:semantic-diff", (_event, input: GitSemanticDiffInput) => diffProtocolBaseline(input));
+  ipcMain.handle("assistant:status", () => getAssistantRuntimeStatus());
+  ipcMain.handle("assistant:ask", (_event, input: AssistantAskInput) => askLocalAssistant(input));
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

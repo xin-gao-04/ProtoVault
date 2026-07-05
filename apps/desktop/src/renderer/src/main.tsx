@@ -23,6 +23,12 @@ import type {
   WorkspaceTypeView,
   WorkspaceView
 } from "../../shared/workspace";
+import {
+  PROTOVAULT_ASSISTANT_MODULES,
+  type AssistantAskResponse,
+  type AssistantModuleId,
+  type AssistantRuntimeStatus
+} from "../../shared/assistant";
 import { APP_THEMES, graphThemeForAppTheme, type AppThemeId, type GraphThemePreset } from "./themes";
 import "./styles.css";
 
@@ -1754,7 +1760,7 @@ function App(): React.JSX.Element {
         <button className={centerViewMode === "workspace" ? "active" : ""} aria-label="协议工作区" title="协议工作区" onClick={() => setCenterViewMode("workspace")}>◇</button>
         <button className={centerViewMode === "graph" ? "active" : ""} aria-label="关系图谱" title="关系图谱" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("graph"); }}>⌬</button>
         <button className={centerViewMode === "network" ? "active" : ""} aria-label="网络地图" title="网络地图" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("network"); }}>⇄</button>
-        <button className={centerViewMode === "manual" ? "active" : ""} aria-label="使用手册" title="使用手册 / 设计思路" onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("manual"); }}>?</button>
+        <button className={centerViewMode === "manual" ? "active" : ""} aria-label="AI 使用助手" title="AI 使用助手 / 本地 Ollama" onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("manual"); }}>?</button>
         <button aria-label="问题面板">!</button>
       </aside>
       <aside className="navigator">
@@ -1925,7 +1931,7 @@ function App(): React.JSX.Element {
           onNotice={setUiNotice}
           onOpenProtocolType={(typeId) => void openProtocolTypeById(typeId)}
         />}
-        {centerViewMode === "manual" && <ManualView workspace={workspace} onBack={() => setCenterViewMode("workspace")} />}
+        {centerViewMode === "manual" && <AssistantView workspace={workspace} onBack={() => setCenterViewMode("workspace")} />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -4392,74 +4398,158 @@ function NetworkInspector({ workspace }: { workspace: WorkspaceView }): React.JS
   </div>;
 }
 
-function ManualView({ workspace, onBack }: { workspace: WorkspaceView | null; onBack: () => void }): React.JSX.Element {
-  return <section className="manual-view" aria-label="使用手册">
-    <div className="manual-hero">
+function workspaceSummaryForAssistant(workspace: WorkspaceView | null): string {
+  if (!workspace) return "尚未打开工作区。";
+  const structCount = workspace.types.filter((type) => type.kind === "struct").length;
+  const enumCount = workspace.types.filter((type) => type.kind === "enum").length;
+  const diagnostics = workspace.diagnostics.slice(0, 6).map((diagnostic) => `- ${diagnostic.severity}: ${diagnostic.message}`).join("\n");
+  const topBindings = workspace.network.bindings.slice(0, 6).map((binding) => `- ${binding.name}: ${binding.protocolName ?? binding.typeId} @ ${binding.frequencyHz}Hz`).join("\n");
+  return [
+    `工作区：${workspace.name}`,
+    `Header：${workspace.files.length}`,
+    `Struct：${structCount}`,
+    `Enum：${enumCount}`,
+    `网络节点：${workspace.network.nodes.length}`,
+    `通信链路：${workspace.network.links.length}`,
+    `协议绑定：${workspace.network.bindings.length}`,
+    diagnostics ? `诊断摘要：\n${diagnostics}` : "诊断摘要：无",
+    topBindings ? `协议绑定摘要：\n${topBindings}` : "协议绑定摘要：无"
+  ].join("\n");
+}
+
+function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null; onBack: () => void }): React.JSX.Element {
+  const [runtimeStatus, setRuntimeStatus] = React.useState<AssistantRuntimeStatus | null>(null);
+  const [selectedModuleId, setSelectedModuleId] = React.useState<AssistantModuleId>("overview");
+  const [question, setQuestion] = React.useState("如何完成一次协议字段修改并保存到 Header？");
+  const [answer, setAnswer] = React.useState<AssistantAskResponse | null>(null);
+  const [asking, setAsking] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    window.protoVault.assistantStatus()
+      .then((status) => { if (!cancelled) setRuntimeStatus(status); })
+      .catch((error) => {
+        if (!cancelled) setRuntimeStatus({
+          available: false,
+          endpoint: "http://127.0.0.1:11434",
+          models: [],
+          message: error instanceof Error ? error.message : String(error)
+        });
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function ask(): Promise<void> {
+    const nextQuestion = question.trim();
+    if (!nextQuestion) return;
+    setAsking(true);
+    try {
+      const response = await window.protoVault.askAssistant({
+        question: nextQuestion,
+        moduleId: selectedModuleId,
+        workspaceSummary: workspaceSummaryForAssistant(workspace)
+      });
+      setAnswer(response);
+      setRuntimeStatus((current) => current ? { ...current, selectedModel: response.model ?? current.selectedModel } : current);
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  const selectedModule = PROTOVAULT_ASSISTANT_MODULES.find((module) => module.id === selectedModuleId) ?? PROTOVAULT_ASSISTANT_MODULES[0];
+  return <section className="manual-view assistant-view" aria-label="AI 使用助手">
+    <div className="manual-hero assistant-hero">
       <div>
-        <p className="eyebrow">PROTO VAULT MANUAL</p>
-        <h2>使用手册与设计思路</h2>
-        <p>ProtoVault 的核心对象不是单个 Header，而是“协议类型 + 内存布局 + 网络事实 + 数据流视角”的工程资产。这里维护全局操作方法和建模约定，避免功能越做越散。</p>
+        <p className="eyebrow">PROTO VAULT LOCAL AI</p>
+        <h2>AI 使用助手</h2>
+        <p>这是替代静态帮助文档的本地问答模块。系统会按问题选择少量功能模块和当前工作区摘要注入 prompt，避免把整份手册塞给模型。</p>
       </div>
       <button className="inline-action" onClick={onBack}>返回工作台</button>
     </div>
 
-    <div className="manual-grid">
-      <article className="manual-card">
-        <h3>一条推荐工作流</h3>
-        <ol>
-          <li>打开工作区或示例项目，等待 Header 扫描完成。</li>
-          <li>在左侧协议树中定位 Header、Struct、Enum 和字段。</li>
-          <li>在中间表格直接编辑字段、枚举值、注释和初始化值。</li>
-          <li>用协议关系图谱检查类型引用关系，用网络地图维护节点、链路和协议绑定。</li>
-          <li>先在“数据流视角”定义观察范围，再进入“数据流画布”查看生产节点、链路载荷和消费节点。</li>
-          <li>通过 Lint、文档、Git 基线 Tag 和版本 Diff 检查协议演进风险。</li>
-        </ol>
-      </article>
+    <div className="assistant-layout">
+      <aside className="assistant-modules" aria-label="助手知识模块">
+        <div className="assistant-status">
+          <strong>{runtimeStatus?.available ? "Ollama 已连接" : "Ollama 未连接"}</strong>
+          <small>{runtimeStatus?.selectedModel ? `模型：${runtimeStatus.selectedModel}` : runtimeStatus?.message ?? "正在检测 127.0.0.1:11434"}</small>
+          <small>端点：{runtimeStatus?.endpoint ?? "http://127.0.0.1:11434"}</small>
+        </div>
+        {PROTOVAULT_ASSISTANT_MODULES.map((module) => <button
+          key={module.id}
+          className={module.id === selectedModuleId ? "active" : ""}
+          onClick={() => {
+            setSelectedModuleId(module.id);
+            setQuestion(module.summary);
+          }}
+        >
+          <span>{module.title}</span>
+          <small>{module.summary}</small>
+        </button>)}
+      </aside>
 
-      <article className="manual-card">
-        <h3>数据流建模原则</h3>
-        <p>节点和链路是事实层，协议绑定是传输事实，数据流视角是观察层。不要把业务流拆成一堆孤立小网络；应先维护实体节点和链路网络，再用视角筛选出目标跟踪、遥测、控制、回放等业务链路。</p>
-        <ul>
-          <li>“数据流视角”负责定义过滤条件和报告对象。</li>
-          <li>“数据流画布”负责展示方向、带宽、风险和协议载荷。</li>
-          <li>“协议关系图谱”只回答 Header / 类型之间的引用依赖。</li>
-        </ul>
-      </article>
+      <div className="assistant-chat">
+        <article className="manual-card assistant-card">
+          <h3>{selectedModule.title}</h3>
+          <p>{selectedModule.summary}</p>
+          <details>
+            <summary>查看该模块的 AI 知识片段</summary>
+            <pre>{selectedModule.content.trim()}</pre>
+          </details>
+        </article>
 
-      <article className="manual-card">
-        <h3>链路字段解释</h3>
-        <dl>
-          <dt>延迟预算</dt>
-          <dd>由用户或团队录入的设计上限，例如某条 DDS 链路希望 20 ms 内送达。当前不是实测值，主要用于设计审查和后续与运行期观测对比。</dd>
-          <dt>带宽上限</dt>
-          <dd>链路可接受的吞吐边界。画布会把估算带宽超过上限的链路标成高风险。</dd>
-          <dt>峰值系数</dt>
-          <dd>协议绑定的平均吞吐放大倍率，用于表达突发负载；1 表示不放大，2 表示按平均值两倍估算。</dd>
-        </dl>
-      </article>
+        <article className="manual-card assistant-card">
+          <h3>向 ProtoVault 助手提问</h3>
+          <label>
+            <span>问题</span>
+            <textarea
+              aria-label="向 ProtoVault 助手提问"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder="例如：如何添加字段并同步注释到 Header？"
+            />
+          </label>
+          <div className="assistant-actions">
+            <select aria-label="问答模块" value={selectedModuleId} onChange={(event) => setSelectedModuleId(event.target.value as AssistantModuleId)}>
+              {PROTOVAULT_ASSISTANT_MODULES.map((module) => <option key={module.id} value={module.id}>{module.title}</option>)}
+            </select>
+            <button className="inline-action" disabled={asking || !question.trim()} onClick={() => void ask()}>{asking ? "思考中…" : "提问"}</button>
+          </div>
+          <p className="assistant-hint">提示：如果 Ollama 未启动，助手会返回离线知识库摘要和启动指引；启动后会自动使用可用模型。</p>
+        </article>
 
-      <article className="manual-card">
-        <h3>全局操作习惯</h3>
-        <ul>
-          <li><kbd>Ctrl</kbd> + <kbd>S</kbd>：保存当前 tab 的源码、结构化编辑或注释改动。</li>
-          <li><kbd>F2</kbd>：编辑当前选中的 Header、类型、字段或枚举项。</li>
-          <li><kbd>Alt</kbd> + <kbd>←</kbd> / <kbd>Alt</kbd> + <kbd>→</kbd>：在上一步 / 下一步界面之间导航。</li>
-          <li>单击树节点进入预览 tab，双击才固定到正式 tab。</li>
-          <li>关闭带脏标记的 tab 时会提示，避免静默丢失修改。</li>
-        </ul>
-      </article>
+        {answer && <article className="manual-card assistant-answer" aria-label="AI 回答">
+          <h3>{answer.fallback ? "离线知识库回答" : "本地模型回答"}</h3>
+          <pre>{answer.answer}</pre>
+          <footer>
+            <span>模块：{answer.moduleIds.join(", ")}</span>
+            <span>Prompt：{answer.promptSize} 字符</span>
+            <span>{answer.elapsedMs} ms</span>
+            {answer.model && <span>模型：{answer.model}</span>}
+          </footer>
+        </article>}
 
-      <article className="manual-card">
-        <h3>当前工作区摘要</h3>
-        {workspace ? <dl>
-          <dt>工作区</dt><dd>{workspace.name}</dd>
-          <dt>Header</dt><dd>{workspace.files.length}</dd>
-          <dt>协议类型</dt><dd>{workspace.types.length}</dd>
-          <dt>网络节点</dt><dd>{workspace.network.nodes.length}</dd>
-          <dt>通信链路</dt><dd>{workspace.network.links.length}</dd>
-          <dt>协议绑定</dt><dd>{workspace.network.bindings.length}</dd>
-        </dl> : <p>尚未打开工作区。可以先从左下角加载示例项目或打开本地目录。</p>}
-      </article>
+        <div className="manual-grid assistant-quickref">
+          <article className="manual-card">
+            <h3>全局操作习惯</h3>
+            <ul>
+              <li><kbd>Ctrl</kbd> + <kbd>S</kbd>：保存当前 tab 的源码、结构化编辑或注释改动。</li>
+              <li><kbd>F2</kbd>：编辑当前选中的 Header、类型、字段或枚举项。</li>
+              <li><kbd>Alt</kbd> + <kbd>←</kbd> / <kbd>Alt</kbd> + <kbd>→</kbd>：在上一步 / 下一步界面之间导航。</li>
+            </ul>
+          </article>
+          <article className="manual-card">
+            <h3>链路字段速查</h3>
+            <dl>
+              <dt>延迟预算</dt><dd>用户录入的设计上限，不是当前实测值。</dd>
+              <dt>峰值系数</dt><dd>把平均吞吐放大为突发吞吐估计。</dd>
+            </dl>
+          </article>
+          <article className="manual-card">
+            <h3>当前工作区摘要</h3>
+            <pre>{workspaceSummaryForAssistant(workspace)}</pre>
+          </article>
+        </div>
+      </div>
     </div>
   </section>;
 }

@@ -2,6 +2,57 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-05 P15：本地 AI 使用助手
+
+### 目标
+
+把静态帮助文档升级为本地 AI 问答模块：整理当前界面操作细节和业务逻辑，形成 AI 可读知识库，并通过 Ollama 按问题注入相关模块，避免上下文爆炸。
+
+### 基线状态
+
+- 当前提交：`c393bcf feat: add git baseline version workflow`。
+- 本轮开始时仍存在未归属示例 Header 改动和一个 `.tmp` 文件，继续保留，不纳入提交范围。
+- Ollama 已安装但未运行；本轮启动本地服务后识别到模型 `qwen3-coder:30b`。
+
+### 行动
+
+- 新增 `doc/ProtoVaultAI功能知识库.md`。
+- 新增 shared 模块化知识库和模块选择函数。
+- 新增 Ollama status/ask 主进程服务。
+- 新增 `assistant:status`、`assistant:ask` IPC 和 preload API。
+- 原“使用手册”中心视图替换为“AI 使用助手”。
+- UI 支持模块选择、问题输入、回答展示、prompt 注入模块列表、模型/耗时/prompt 大小展示。
+- Ollama 不可用时返回离线知识库摘要和启动指引。
+
+### 验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm --filter @protovault/desktop build
+pnpm --filter @protovault/desktop test:e2e
+pnpm release:check
+```
+
+结果：
+
+- desktop typecheck：通过。
+- desktop：4 个测试文件、22 个测试通过。
+- desktop build：通过。
+- Electron E2E：1 个测试通过。
+- 完整 `pnpm release:check` 通过。
+- Ollama 本地生成验证通过：`qwen3-coder:30b` 返回 `OK`。
+
+### 下一轮
+
+建议进入 P15 Loop 2：
+
+1. 增加可更新知识库索引，避免 shared 常量和文档长期手工同步。
+2. 支持多轮问答历史，但仍按轮次压缩上下文。
+3. 允许用户把当前选中 Header/类型/网络视图作为额外上下文注入。
+
 ## 2026-07-05 P14 Loop 0-5：Git 基线与版本治理
 
 ### 目标

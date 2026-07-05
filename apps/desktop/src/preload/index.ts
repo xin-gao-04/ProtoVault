@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import type { AssistantAskInput, AssistantAskResponse, AssistantRuntimeStatus } from "../shared/assistant";
 import type {
   AddFieldInput,
   AddEnumValueInput,
@@ -95,6 +96,8 @@ export interface ProtoVaultDesktopApi {
   gitTags(workspaceRoot: string): Promise<GitTagInfo[]>;
   createBaselineTag(input: CreateBaselineTagInput): Promise<ProtocolBaselineSummary>;
   semanticDiff(input: GitSemanticDiffInput): Promise<SemanticDiffReport>;
+  assistantStatus(): Promise<AssistantRuntimeStatus>;
+  askAssistant(input: AssistantAskInput): Promise<AssistantAskResponse>;
 }
 
 contextBridge.exposeInMainWorld("protoVault", {
@@ -152,5 +155,7 @@ contextBridge.exposeInMainWorld("protoVault", {
   gitBranches: (workspaceRoot) => ipcRenderer.invoke("git:branches", workspaceRoot),
   gitTags: (workspaceRoot) => ipcRenderer.invoke("git:tags", workspaceRoot),
   createBaselineTag: (input) => ipcRenderer.invoke("git:create-baseline-tag", input),
-  semanticDiff: (input) => ipcRenderer.invoke("git:semantic-diff", input)
+  semanticDiff: (input) => ipcRenderer.invoke("git:semantic-diff", input),
+  assistantStatus: () => ipcRenderer.invoke("assistant:status"),
+  askAssistant: (input) => ipcRenderer.invoke("assistant:ask", input)
 } satisfies ProtoVaultDesktopApi);

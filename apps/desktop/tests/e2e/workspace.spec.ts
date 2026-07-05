@@ -138,10 +138,11 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("button", { name: "demo::common::Vec3", exact: true })).toBeVisible();
     await graph.getByRole("button", { name: "图谱节点 struct RadarTrack" }).dblclick();
     await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();
-    await page.getByRole("button", { name: "使用手册" }).click();
-    const manual = page.getByRole("region", { name: "使用手册" });
+    await page.getByRole("button", { name: "AI 使用助手" }).click();
+    const manual = page.getByRole("region", { name: "AI 使用助手" });
     await expect(manual).toContainText("延迟预算");
     await expect(manual).toContainText("Alt");
+    await expect(manual).toContainText("Ollama");
     await page.keyboard.press("Alt+ArrowLeft");
     await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "内存布局" })).toBeVisible();
