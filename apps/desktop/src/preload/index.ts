@@ -24,8 +24,14 @@ import type {
   GenerateNetworkReportInput,
   GeneratedDocumentReport,
   GitBranchInfo,
+  GitCheckoutBranchInput,
+  GitCommitInput,
+  GitCreateBranchInput,
+  GitOperationResult,
+  GitPathInput,
   GitSemanticDiffInput,
   GitTagInfo,
+  GitWorkspaceInput,
   GitWorkspaceStatus,
   RenameEnumInput,
   RenameHeaderInput,
@@ -94,6 +100,13 @@ export interface ProtoVaultDesktopApi {
   gitStatus(workspaceRoot: string): Promise<GitWorkspaceStatus>;
   gitBranches(workspaceRoot: string): Promise<GitBranchInfo[]>;
   gitTags(workspaceRoot: string): Promise<GitTagInfo[]>;
+  stageGitPath(input: GitPathInput): Promise<GitOperationResult>;
+  unstageGitPath(input: GitPathInput): Promise<GitOperationResult>;
+  stageGitWorkspace(input: GitWorkspaceInput): Promise<GitOperationResult>;
+  unstageGitWorkspace(input: GitWorkspaceInput): Promise<GitOperationResult>;
+  commitGit(input: GitCommitInput): Promise<GitOperationResult>;
+  checkoutGitBranch(input: GitCheckoutBranchInput): Promise<GitOperationResult>;
+  createGitBranch(input: GitCreateBranchInput): Promise<GitOperationResult>;
   createBaselineTag(input: CreateBaselineTagInput): Promise<ProtocolBaselineSummary>;
   semanticDiff(input: GitSemanticDiffInput): Promise<SemanticDiffReport>;
   assistantStatus(): Promise<AssistantRuntimeStatus>;
@@ -154,6 +167,13 @@ contextBridge.exposeInMainWorld("protoVault", {
   gitStatus: (workspaceRoot) => ipcRenderer.invoke("git:status", workspaceRoot),
   gitBranches: (workspaceRoot) => ipcRenderer.invoke("git:branches", workspaceRoot),
   gitTags: (workspaceRoot) => ipcRenderer.invoke("git:tags", workspaceRoot),
+  stageGitPath: (input) => ipcRenderer.invoke("git:stage-path", input),
+  unstageGitPath: (input) => ipcRenderer.invoke("git:unstage-path", input),
+  stageGitWorkspace: (input) => ipcRenderer.invoke("git:stage-workspace", input),
+  unstageGitWorkspace: (input) => ipcRenderer.invoke("git:unstage-workspace", input),
+  commitGit: (input) => ipcRenderer.invoke("git:commit", input),
+  checkoutGitBranch: (input) => ipcRenderer.invoke("git:checkout-branch", input),
+  createGitBranch: (input) => ipcRenderer.invoke("git:create-branch", input),
   createBaselineTag: (input) => ipcRenderer.invoke("git:create-baseline-tag", input),
   semanticDiff: (input) => ipcRenderer.invoke("git:semantic-diff", input),
   assistantStatus: () => ipcRenderer.invoke("assistant:status"),

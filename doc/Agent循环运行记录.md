@@ -2,6 +2,57 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-05 P16 Loop 1：Git Source Control 前端集成
+
+### 目标
+
+把 Git 从“协议基线 Tag / 版本 Diff 的支撑能力”升级为前端可操作的 Source Control 视图，模仿 VS Code Git 插件完成本地版本操作。
+
+### 基线状态
+
+- 当前提交：`b8995e3 fix: clarify git commit ui boundary`。
+- P14 已有 Git 状态、分支/Tag 查询、协议基线 Tag 和版本 Diff。
+- 前端尚无 stage / unstage / commit 操作面板。
+
+### 行动
+
+- 新增 shared Git 操作契约。
+- 主进程实现 stage/unstage/commit/checkout/create-branch。
+- preload 暴露 Git 操作 API。
+- 左侧 activity rail 新增“源代码管理 / Git”入口。
+- 中间区域新增 Git Source Control 视图，包含提交框、暂存/未暂存列表、文件级 stage/unstage、全部 stage/unstage、分支切换、新建分支、基线 Tag 和版本 Diff 快捷入口。
+- 右侧 Inspector 新增 Git 摘要。
+- 更新 AI 知识库、使用手册、开发计划和 E2E。
+
+### 验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm --filter @protovault/desktop build
+pnpm --filter @protovault/desktop test:e2e
+pnpm release:check
+```
+
+结果：
+
+- desktop typecheck：通过。
+- desktop unit：4 个测试文件、26 个测试通过。
+- desktop build：通过。
+- Electron E2E：1 个测试通过，覆盖左侧 `源代码管理` 入口和 Source Control 基础视图。
+- 完整 `pnpm release:check`：通过，包含 contracts、desktop、Electron E2E 和 C++ core 配置/构建/CTest。
+
+### 下一轮
+
+建议进入 P16 Loop 2：
+
+1. 文件 diff 预览，与 Header 源码视图联动。
+2. 放弃更改操作，但必须设计二次确认和路径安全边界。
+3. push / pull / fetch 远端同步，需处理凭据和失败恢复。
+4. 分支创建时支持从 Tag / commit 创建。
+
 ## 2026-07-05 P15 Loop 3：Ollama 生成超时修复
 
 ### 目标

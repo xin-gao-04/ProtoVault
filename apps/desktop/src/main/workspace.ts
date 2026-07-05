@@ -37,8 +37,14 @@ import type {
   GenerateNetworkReportInput,
   GeneratedDocumentReport,
   GitBranchInfo,
+  GitCheckoutBranchInput,
+  GitCommitInput,
+  GitCreateBranchInput,
+  GitOperationResult,
+  GitPathInput,
   GitSemanticDiffInput,
   GitTagInfo,
+  GitWorkspaceInput,
   GitWorkspaceStatus,
   RenameEnumInput,
   RenameHeaderInput,
@@ -1799,6 +1805,42 @@ async function gitWorkspacePathspec(root: string, repositoryRoot: string): Promi
   return relativePath && !relativePath.startsWith("..") ? relativePath : ".";
 }
 
+function validateGitRelativePath(path: string): string {
+  const normalized = normalizeGitPath(path.trim());
+  if (!normalized || normalized.startsWith("../") || normalized === ".." || isAbsolute(normalized)) {
+    throw new Error("Git 文件路径必须是当前仓库内的相对路径。");
+  }
+  return normalized;
+}
+
+function isStagedGitEntry(entry: GitWorkspaceStatus["entries"][number]): boolean {
+  return entry.indexStatus.trim() !== "" && entry.indexStatus !== "?";
+}
+
+function isGitPathInsidePathspec(path: string, pathspec: string): boolean {
+  if (pathspec === ".") return true;
+  const normalizedPath = normalizeGitPath(path);
+  const normalizedPathspec = normalizeGitPath(pathspec).replace(/\/+$/, "");
+  return normalizedPath === normalizedPathspec || normalizedPath.startsWith(`${normalizedPathspec}/`);
+}
+
+async function assertGitRepository(workspaceRoot: string): Promise<GitWorkspaceStatus> {
+  const status = await getGitStatus(workspaceRoot);
+  if (!status.isRepository || !status.repositoryRoot) {
+    throw new Error(status.message ?? "当前工作区不在 Git 仓库中。");
+  }
+  return status;
+}
+
+async function gitOperationResult(workspaceRoot: string, message: string, includeRefs = false): Promise<GitOperationResult> {
+  return {
+    status: await getGitStatus(workspaceRoot),
+    branches: includeRefs ? await listGitBranches(workspaceRoot) : undefined,
+    tags: includeRefs ? await listGitTags(workspaceRoot) : undefined,
+    message
+  };
+}
+
 export async function getGitStatus(workspaceRoot: string): Promise<GitWorkspaceStatus> {
   const root = resolve(workspaceRoot);
   const repositoryRoot = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true });
@@ -1852,6 +1894,68 @@ export async function listGitTags(workspaceRoot: string): Promise<GitTagInfo[]> 
     const [name, commit, subject, createdAt] = line.split("|");
     return { name, commit, subject, createdAt };
   });
+}
+
+export async function stageGitPath(input: GitPathInput): Promise<GitOperationResult> {
+  const status = await assertGitRepository(input.workspaceRoot);
+  const path = validateGitRelativePath(input.path);
+  await git(status.repositoryRoot!, ["add", "--", path]);
+  return gitOperationResult(input.workspaceRoot, `已暂存：${path}`);
+}
+
+export async function unstageGitPath(input: GitPathInput): Promise<GitOperationResult> {
+  const status = await assertGitRepository(input.workspaceRoot);
+  const path = validateGitRelativePath(input.path);
+  await git(status.repositoryRoot!, ["reset", "--", path]);
+  return gitOperationResult(input.workspaceRoot, `已取消暂存：${path}`);
+}
+
+export async function stageGitWorkspace(input: GitWorkspaceInput): Promise<GitOperationResult> {
+  const status = await assertGitRepository(input.workspaceRoot);
+  await git(status.repositoryRoot!, ["add", "--", status.workspaceRelativePath ?? "."]);
+  return gitOperationResult(input.workspaceRoot, "已暂存当前工作区所有改动");
+}
+
+export async function unstageGitWorkspace(input: GitWorkspaceInput): Promise<GitOperationResult> {
+  const status = await assertGitRepository(input.workspaceRoot);
+  await git(status.repositoryRoot!, ["reset", "--", status.workspaceRelativePath ?? "."]);
+  return gitOperationResult(input.workspaceRoot, "已取消当前工作区所有暂存");
+}
+
+export async function commitGitWorkspace(input: GitCommitInput): Promise<GitOperationResult> {
+  const message = input.message.trim();
+  if (!message) throw new Error("提交信息不能为空。");
+  const status = await assertGitRepository(input.workspaceRoot);
+  if (status.hasConflicts) throw new Error("当前工作区存在 Git 冲突，请先解决冲突再提交。");
+  const stagedEntries = status.entries.filter(isStagedGitEntry);
+  if (stagedEntries.length === 0) throw new Error("没有暂存的改动。请先暂存文件再提交。");
+
+  const fullStatusOutput = await git(status.repositoryRoot!, ["status", "--porcelain", "--untracked-files=all"], { allowFailure: true }) ?? "";
+  const fullEntries = fullStatusOutput.split(/\r?\n/).map(parseGitStatusLine).filter((entry): entry is GitWorkspaceStatus["entries"][number] => Boolean(entry));
+  const workspacePathspec = status.workspaceRelativePath ?? ".";
+  const stagedOutsideWorkspace = fullEntries.filter((entry) => isStagedGitEntry(entry) && !isGitPathInsidePathspec(entry.path, workspacePathspec));
+  if (stagedOutsideWorkspace.length > 0) {
+    throw new Error(`仓库中存在当前工作区之外的暂存改动：${stagedOutsideWorkspace.slice(0, 3).map((entry) => entry.path).join(", ")}。请先处理这些暂存项，避免误提交。`);
+  }
+
+  await git(status.repositoryRoot!, ["commit", "-m", message]);
+  return gitOperationResult(input.workspaceRoot, `已提交：${message}`, true);
+}
+
+export async function checkoutGitBranch(input: GitCheckoutBranchInput): Promise<GitOperationResult> {
+  const branchName = input.branchName.trim();
+  if (!branchName) throw new Error("分支名称不能为空。");
+  const status = await assertGitRepository(input.workspaceRoot);
+  await git(status.repositoryRoot!, ["switch", branchName]);
+  return gitOperationResult(input.workspaceRoot, `已切换分支：${branchName}`, true);
+}
+
+export async function createGitBranch(input: GitCreateBranchInput): Promise<GitOperationResult> {
+  const branchName = input.branchName.trim();
+  if (!branchName) throw new Error("分支名称不能为空。");
+  const status = await assertGitRepository(input.workspaceRoot);
+  await git(status.repositoryRoot!, input.checkout === false ? ["branch", branchName] : ["switch", "-c", branchName]);
+  return gitOperationResult(input.workspaceRoot, input.checkout === false ? `已创建分支：${branchName}` : `已创建并切换分支：${branchName}`, true);
 }
 
 export async function generateNetworkReport(input: GenerateNetworkReportInput): Promise<GeneratedDocumentReport> {

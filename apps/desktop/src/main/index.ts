@@ -27,7 +27,12 @@ import type {
   DeleteStructInput,
   GenerateDocumentInput,
   GenerateNetworkReportInput,
+  GitCheckoutBranchInput,
+  GitCommitInput,
+  GitCreateBranchInput,
+  GitPathInput,
   GitSemanticDiffInput,
+  GitWorkspaceInput,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
@@ -49,9 +54,12 @@ import { askLocalAssistant, getAssistantRuntimeStatus } from "./assistant";
 import {
   addEnumValue,
   addField,
+  checkoutGitBranch,
+  commitGitWorkspace,
   createNetworkLink,
   createNetworkFlowView,
   createNetworkNode,
+  createGitBranch,
   createProtocolBaselineTag,
   createProtocolBinding,
   createEnum,
@@ -87,7 +95,11 @@ import {
   updateNote,
   getGitStatus,
   listGitBranches,
-  listGitTags
+  listGitTags,
+  stageGitPath,
+  stageGitWorkspace,
+  unstageGitPath,
+  unstageGitWorkspace
 } from "./workspace";
 
 interface AppPreferences {
@@ -321,6 +333,13 @@ app.whenReady().then(() => {
   ipcMain.handle("git:status", (_event, workspaceRoot: string) => getGitStatus(workspaceRoot));
   ipcMain.handle("git:branches", (_event, workspaceRoot: string) => listGitBranches(workspaceRoot));
   ipcMain.handle("git:tags", (_event, workspaceRoot: string) => listGitTags(workspaceRoot));
+  ipcMain.handle("git:stage-path", (_event, input: GitPathInput) => stageGitPath(input));
+  ipcMain.handle("git:unstage-path", (_event, input: GitPathInput) => unstageGitPath(input));
+  ipcMain.handle("git:stage-workspace", (_event, input: GitWorkspaceInput) => stageGitWorkspace(input));
+  ipcMain.handle("git:unstage-workspace", (_event, input: GitWorkspaceInput) => unstageGitWorkspace(input));
+  ipcMain.handle("git:commit", (_event, input: GitCommitInput) => commitGitWorkspace(input));
+  ipcMain.handle("git:checkout-branch", (_event, input: GitCheckoutBranchInput) => checkoutGitBranch(input));
+  ipcMain.handle("git:create-branch", (_event, input: GitCreateBranchInput) => createGitBranch(input));
   ipcMain.handle("git:create-baseline-tag", (_event, input: CreateBaselineTagInput) => createProtocolBaselineTag(input));
   ipcMain.handle("git:semantic-diff", (_event, input: GitSemanticDiffInput) => diffProtocolBaseline(input));
   ipcMain.handle("assistant:status", () => getAssistantRuntimeStatus());

@@ -11,8 +11,11 @@ import {
   createNetworkLink,
   createNetworkFlowView,
   createNetworkNode,
+  checkoutGitBranch,
+  commitGitWorkspace,
   createProtocolBaselineTag,
   createProtocolBinding,
+  createGitBranch,
   createEnum,
   createHeader,
   createStruct,
@@ -39,6 +42,10 @@ import {
   updateNetworkNode,
   updateProtocolBinding,
   scanWorkspace,
+  stageGitPath,
+  stageGitWorkspace,
+  unstageGitPath,
+  unstageGitWorkspace,
   updateDataFlow,
   updateEnumValue,
   updateField,
@@ -1096,6 +1103,72 @@ enum class PacketKind {
         "field-type-changed",
         "protocol-binding-bandwidth-changed"
       ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("supports source-control style git stage, unstage, commit, and branch operations", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-git-ui-"));
+    try {
+      await runGit(root, ["init"]);
+      await runGit(root, ["config", "user.email", "protovault@example.test"]);
+      await runGit(root, ["config", "user.name", "ProtoVault Test"]);
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "protocol.hpp"), "#pragma once\nstruct Packet { int value; };\n", "utf8");
+
+      let status = await getGitStatus(root);
+      expect(status.entries.map((entry) => entry.path)).toContain("headers/protocol.hpp");
+      expect(status.entries[0]?.indexStatus).toBe("?");
+
+      let result = await stageGitPath({ workspaceRoot: root, path: "headers/protocol.hpp" });
+      status = result.status;
+      expect(status.entries.find((entry) => entry.path === "headers/protocol.hpp")?.indexStatus).toBe("A");
+
+      result = await unstageGitPath({ workspaceRoot: root, path: "headers/protocol.hpp" });
+      status = result.status;
+      expect(status.entries.find((entry) => entry.path === "headers/protocol.hpp")?.indexStatus).toBe("?");
+
+      result = await stageGitWorkspace({ workspaceRoot: root });
+      expect(result.status.entries.find((entry) => entry.path === "headers/protocol.hpp")?.indexStatus).toBe("A");
+
+      result = await unstageGitWorkspace({ workspaceRoot: root });
+      expect(result.status.entries.find((entry) => entry.path === "headers/protocol.hpp")?.indexStatus).toBe("?");
+
+      result = await stageGitWorkspace({ workspaceRoot: root });
+      await expect(commitGitWorkspace({ workspaceRoot: root, message: "" })).rejects.toThrow("提交信息不能为空");
+      result = await commitGitWorkspace({ workspaceRoot: root, message: "add protocol header" });
+      expect(result.status.isDirty).toBe(false);
+      const baseBranch = result.status.currentBranch ?? "master";
+
+      result = await createGitBranch({ workspaceRoot: root, branchName: "feature/git-panel", checkout: true });
+      expect(result.status.currentBranch).toBe("feature/git-panel");
+      result = await checkoutGitBranch({ workspaceRoot: root, branchName: baseBranch });
+      expect(result.status.currentBranch).toBe(baseBranch);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("blocks source-control commits when staged files exist outside the workspace scope", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-git-scope-"));
+    const workspaceRoot = resolve(root, "protocols");
+    try {
+      await runGit(root, ["init"]);
+      await runGit(root, ["config", "user.email", "protovault@example.test"]);
+      await runGit(root, ["config", "user.name", "ProtoVault Test"]);
+      await mkdir(resolve(workspaceRoot, "headers"), { recursive: true });
+      await writeFile(resolve(workspaceRoot, "headers", "protocol.hpp"), "#pragma once\nstruct ScopedPacket { int value; };\n", "utf8");
+      await writeFile(resolve(root, "outside.txt"), "outside workspace\n", "utf8");
+
+      await runGit(root, ["add", "--", "outside.txt"]);
+      await stageGitWorkspace({ workspaceRoot });
+
+      await expect(commitGitWorkspace({ workspaceRoot, message: "scoped commit" })).rejects.toThrow("当前工作区之外的暂存改动");
+
+      await runGit(root, ["reset", "--", "outside.txt"]);
+      const result = await commitGitWorkspace({ workspaceRoot, message: "scoped commit" });
+      expect(result.status.isDirty).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -149,7 +149,14 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(page.getByRole("heading", { name: "内存布局" })).toBeVisible();
     await page.keyboard.press("Alt+ArrowRight");
     await expect(manual).toBeVisible();
-    await manual.getByRole("button", { name: "返回工作台" }).click();
+    await page.getByRole("button", { name: "源代码管理" }).click();
+    const sourceControl = page.getByRole("region", { name: "源代码管理" });
+    await expect(sourceControl).toBeVisible();
+    await expect(sourceControl.getByLabel("Git 提交信息")).toBeVisible();
+    await expect(sourceControl.getByRole("button", { name: "提交暂存更改" })).toBeVisible();
+    await expect(sourceControl).toContainText("暂存的更改");
+    await expect(sourceControl).toContainText("更改");
+    await page.getByRole("button", { name: "协议工作区" }).click();
     await page.getByRole("button", { name: "关闭 RadarTrack" }).click();
     const treeBox = await page.locator(".tree").evaluate((element) => element.getBoundingClientRect());
     const dockBox = await page.locator(".workspace-dock").evaluate((element) => element.getBoundingClientRect());

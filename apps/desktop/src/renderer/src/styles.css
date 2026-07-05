@@ -393,6 +393,46 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .assistant-quickref { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 kbd { display: inline-grid; place-items: center; min-width: 22px; height: 21px; padding: 0 6px; border: 1px solid var(--background-modifier-border); border-bottom-width: 2px; border-radius: var(--radius-s); background: var(--background-primary); color: var(--text-normal); font: 11px var(--font-monospace); }
 
+.git-view { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 28px 34px; color: var(--text-normal); }
+.git-hero { display: flex; align-items: stretch; justify-content: space-between; gap: 18px; margin-bottom: 16px; padding: 18px 20px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: color-mix(in srgb, var(--background-secondary) 80%, transparent); box-shadow: 0 14px 34px rgba(0,0,0,.18); }
+.git-hero h2 { margin: 2px 0 7px; font: 500 34px Georgia, serif; }
+.git-hero p { margin: 0; color: var(--text-muted); line-height: 1.55; }
+.git-hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; min-width: 240px; }
+.git-grid { display: grid; grid-template-columns: minmax(260px, 360px) minmax(260px, 360px) minmax(420px, 1fr); gap: 14px; align-items: start; }
+.git-card { display: grid; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: color-mix(in srgb, var(--background-secondary) 82%, transparent); box-shadow: 0 12px 30px rgba(0,0,0,.16); }
+.git-card h3, .git-change-section h3 { margin: 0; color: var(--text-muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.git-status-line { display: flex; gap: 7px; flex-wrap: wrap; color: var(--text-faint); font-size: 11px; }
+.git-status-line span { padding: 4px 8px; border: 1px solid var(--background-modifier-border); border-radius: 999px; background: var(--background-primary); }
+.git-status-line b { color: var(--text-accent-hover); }
+.git-commit-card textarea { width: 100%; min-height: 96px; resize: vertical; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-modifier-form-field); color: var(--text-normal); padding: 10px 11px; outline: none; line-height: 1.5; }
+.git-commit-card textarea:focus, .git-select-label select:focus, .git-branch-create input:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 18%, transparent); }
+.primary-action { min-height: 36px; border: 0; border-radius: var(--radius-m); background: var(--interactive-accent); color: var(--text-on-accent, #fff); font-weight: 800; }
+.primary-action:hover:not(:disabled) { background: var(--interactive-accent-hover); }
+.primary-action:disabled { opacity: .45; cursor: not-allowed; }
+.git-warning { margin: 0; color: var(--color-red); font-size: 12px; }
+.git-hint { margin: 0; color: var(--text-faint); font-size: 12px; line-height: 1.55; }
+.git-select-label { display: grid; gap: 6px; color: var(--text-faint); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.git-select-label select, .git-branch-create input { width: 100%; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-modifier-form-field); color: var(--text-normal); padding: 8px 9px; outline: none; }
+.git-branch-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.git-baseline-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.git-changes-card { grid-column: span 1; gap: 16px; }
+.git-change-section { display: grid; gap: 8px; min-width: 0; }
+.git-change-section header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.git-change-section header span { display: grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--background-primary); color: var(--text-faint); font-size: 11px; }
+.git-empty { margin: 0; padding: 10px 12px; border: 1px dashed var(--background-modifier-border); border-radius: var(--radius-m); color: var(--text-faint); font-size: 12px; }
+.git-change-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.git-change-list li { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; gap: 6px; min-width: 0; }
+.git-file { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; min-height: 34px; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--text-normal); text-align: left; }
+.git-file:hover { background: var(--background-modifier-hover); }
+.git-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.git-badge { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: var(--background-primary); color: var(--text-muted); font-size: 10px; font-weight: 900; }
+.git-badge-M { color: var(--color-yellow); }
+.git-badge-A, .git-badge-U { color: var(--color-green); }
+.git-badge-D, .git-badge-conflict { color: var(--color-red); }
+.git-row-action { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--interactive-normal); color: var(--text-muted); }
+.git-row-action:hover:not(:disabled) { border-color: var(--interactive-accent); color: var(--text-accent-hover); background: var(--background-modifier-hover); }
+.git-row-action:disabled { opacity: .4; }
+
 .network-map-view { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 28px 34px; color: var(--text-normal); }
 .network-hero { display: flex; align-items: stretch; justify-content: space-between; gap: 18px; margin-bottom: 16px; padding: 18px 20px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-l); background: color-mix(in srgb, var(--background-secondary) 78%, transparent); }
 .network-hero h2 { margin: 3px 0 7px; font: 500 34px Georgia, serif; }

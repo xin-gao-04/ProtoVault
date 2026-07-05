@@ -201,6 +201,38 @@ export interface GitTagInfo {
   createdAt?: string;
 }
 
+export interface GitPathInput {
+  workspaceRoot: string;
+  path: string;
+}
+
+export interface GitWorkspaceInput {
+  workspaceRoot: string;
+}
+
+export interface GitCommitInput {
+  workspaceRoot: string;
+  message: string;
+}
+
+export interface GitCheckoutBranchInput {
+  workspaceRoot: string;
+  branchName: string;
+}
+
+export interface GitCreateBranchInput {
+  workspaceRoot: string;
+  branchName: string;
+  checkout?: boolean;
+}
+
+export interface GitOperationResult {
+  status: GitWorkspaceStatus;
+  branches?: GitBranchInfo[];
+  tags?: GitTagInfo[];
+  message: string;
+}
+
 export interface WorkspaceDiagnostic {
   severity: "error" | "warning";
   message: string;

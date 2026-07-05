@@ -15,15 +15,15 @@ describe("assistant knowledge routing", () => {
     expect(modules.map((module) => module.id)).toContain("overview");
   });
 
-  it("keeps git commit guidance aligned with the current UI boundary", () => {
+  it("routes git commit guidance to the source-control view", () => {
     const modules = selectAssistantModules("提交版本的位置在界面的哪里？", "git-baseline");
     const prompt = buildAssistantPrompt({
       question: "提交版本的位置在界面的哪里？",
       moduleId: "git-baseline"
     }, modules);
 
-    expect(prompt).toContain("不提供 Git commit");
-    expect(prompt).toContain("不要回答界面里有“Git commit”按钮");
+    expect(prompt).toContain("左侧工作栏 → 源代码管理");
+    expect(prompt).toContain("提交暂存更改");
   });
 
   it("keeps prompts bounded to selected modules", () => {

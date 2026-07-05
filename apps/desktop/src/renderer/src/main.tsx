@@ -2,6 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import type {
   GeneratedDocumentReport,
+  GitBranchInfo,
+  GitOperationResult,
   GitTagInfo,
   GitWorkspaceStatus,
   NetworkNodeKind,
@@ -46,7 +48,7 @@ type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; fieldInitializer: string; savedFieldName: string; savedFieldType: string; savedFieldInitializer: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
 type DirtyDataFlowEdit = { producers: string[]; consumers: string[] };
-type CenterViewMode = "workspace" | "graph" | "network" | "manual";
+type CenterViewMode = "workspace" | "graph" | "network" | "git" | "manual";
 type NetworkTabMode = "nodes" | "links" | "bindings" | "flows" | "flow-canvas";
 type NavigationSnapshot = {
   centerViewMode: CenterViewMode;
@@ -143,6 +145,7 @@ function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
   const [workspace, setWorkspace] = React.useState<WorkspaceView | null>(null);
   const [gitStatus, setGitStatus] = React.useState<GitWorkspaceStatus | null>(null);
+  const [gitBranches, setGitBranches] = React.useState<GitBranchInfo[]>([]);
   const [gitTags, setGitTags] = React.useState<GitTagInfo[]>([]);
   const [selectedTypeId, setSelectedTypeId] = React.useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null);
@@ -375,17 +378,20 @@ function App(): React.JSX.Element {
   React.useEffect(() => {
     if (!workspace) {
       setGitStatus(null);
+      setGitBranches([]);
       setGitTags([]);
       return;
     }
     let cancelled = false;
     Promise.all([
       window.protoVault.gitStatus(workspace.rootPath),
+      window.protoVault.gitBranches(workspace.rootPath),
       window.protoVault.gitTags(workspace.rootPath)
     ])
-      .then(([status, tags]) => {
+      .then(([status, branches, tags]) => {
         if (cancelled) return;
         setGitStatus(status);
+        setGitBranches(branches);
         setGitTags(tags);
       })
       .catch(() => {
@@ -396,6 +402,7 @@ function App(): React.JSX.Element {
           hasConflicts: false,
           entries: []
         });
+        setGitBranches([]);
         setGitTags([]);
       });
     return () => { cancelled = true; };
@@ -531,6 +538,33 @@ function App(): React.JSX.Element {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function refreshGitState(): Promise<void> {
+    if (!workspace) return;
+    const [status, branches, tags] = await Promise.all([
+      window.protoVault.gitStatus(workspace.rootPath),
+      window.protoVault.gitBranches(workspace.rootPath),
+      window.protoVault.gitTags(workspace.rootPath)
+    ]);
+    setGitStatus(status);
+    setGitBranches(branches);
+    setGitTags(tags);
+  }
+
+  function applyGitOperationResult(result: GitOperationResult): void {
+    setGitStatus(result.status);
+    if (result.branches) setGitBranches(result.branches);
+    if (result.tags) setGitTags(result.tags);
+    setUiNotice(result.message);
+  }
+
+  async function runGitAction(action: () => Promise<GitOperationResult | void>): Promise<boolean> {
+    return runWorkspaceAction(async () => {
+      const result = await action();
+      if (result) applyGitOperationResult(result);
+      else await refreshGitState();
+    });
   }
 
   function openStructuredAction(action: WorkspaceAction): void {
@@ -1649,6 +1683,16 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function openGitEntryLocation(status: GitWorkspaceStatus | null, entry: GitWorkspaceStatus["entries"][number]): Promise<void> {
+    if (!workspace || !status?.repositoryRoot) return;
+    try {
+      await window.protoVault.openFileLocation({ workspaceRoot: workspace.rootPath, filePath: `${status.repositoryRoot}\\${entry.path}` });
+      setUiNotice(`已打开文件位置：${entry.path}`);
+    } catch (error) {
+      setUiNotice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   function discardDirtyForTab(tabId: string): void {
     if (!workspace) return;
     if (tabId.startsWith("file:")) {
@@ -1760,6 +1804,7 @@ function App(): React.JSX.Element {
         <button className={centerViewMode === "workspace" ? "active" : ""} aria-label="协议工作区" title="协议工作区" onClick={() => setCenterViewMode("workspace")}>◇</button>
         <button className={centerViewMode === "graph" ? "active" : ""} aria-label="关系图谱" title="关系图谱" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("graph"); }}>⌬</button>
         <button className={centerViewMode === "network" ? "active" : ""} aria-label="网络地图" title="网络地图" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("network"); }}>⇄</button>
+        <button className={centerViewMode === "git" ? "active" : ""} aria-label="源代码管理" title="源代码管理 / Git" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("git"); }}>⑂</button>
         <button className={centerViewMode === "manual" ? "active" : ""} aria-label="AI 使用助手" title="AI 使用助手 / 本地 Ollama" onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("manual"); }}>?</button>
         <button aria-label="问题面板">!</button>
       </aside>
@@ -1931,6 +1976,24 @@ function App(): React.JSX.Element {
           onNotice={setUiNotice}
           onOpenProtocolType={(typeId) => void openProtocolTypeById(typeId)}
         />}
+        {workspace && centerViewMode === "git" && <GitSourceControlView
+          workspace={workspace}
+          status={gitStatus}
+          branches={gitBranches}
+          tags={gitTags}
+          loading={loading}
+          onRefresh={() => void runGitAction(() => refreshGitState())}
+          onStagePath={(path) => void runGitAction(() => window.protoVault.stageGitPath({ workspaceRoot: workspace.rootPath, path }))}
+          onUnstagePath={(path) => void runGitAction(() => window.protoVault.unstageGitPath({ workspaceRoot: workspace.rootPath, path }))}
+          onStageAll={() => void runGitAction(() => window.protoVault.stageGitWorkspace({ workspaceRoot: workspace.rootPath }))}
+          onUnstageAll={() => void runGitAction(() => window.protoVault.unstageGitWorkspace({ workspaceRoot: workspace.rootPath }))}
+          onCommit={(message) => void runGitAction(() => window.protoVault.commitGit({ workspaceRoot: workspace.rootPath, message }))}
+          onCheckoutBranch={(branchName) => void runGitAction(() => window.protoVault.checkoutGitBranch({ workspaceRoot: workspace.rootPath, branchName }))}
+          onCreateBranch={(branchName) => void runGitAction(() => window.protoVault.createGitBranch({ workspaceRoot: workspace.rootPath, branchName, checkout: true }))}
+          onOpenFileLocation={(entry) => void openGitEntryLocation(gitStatus, entry)}
+          onCreateBaseline={() => void createBaselineReport()}
+          onRunDiff={() => void runSemanticDiffReport()}
+        />}
         {centerViewMode === "manual" && <AssistantView workspace={workspace} onBack={() => setCenterViewMode("workspace")} />}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
@@ -2062,9 +2125,10 @@ function App(): React.JSX.Element {
       />
       <aside className="inspector">
         <div className="inspector-header">
-          <h2>{centerViewMode === "graph" ? "图谱上下文" : centerViewMode === "network" ? "网络摘要" : "属性"}</h2>
+          <h2>{centerViewMode === "graph" ? "图谱上下文" : centerViewMode === "network" ? "网络摘要" : centerViewMode === "git" ? "Git 摘要" : "属性"}</h2>
         </div>
         {centerViewMode === "network" && workspace ? <NetworkInspector workspace={workspace} />
+          : centerViewMode === "git" && workspace ? <GitInspector status={gitStatus} branches={gitBranches} tags={gitTags} />
           : centerViewMode === "graph" && workspace && graphContext ? <GraphInspector
           workspace={workspace}
           graph={graphContext}
@@ -4372,6 +4436,28 @@ function NetworkTable({ title, emptyText, children }: { title: string; emptyText
   </div>;
 }
 
+function GitInspector({ status, branches, tags }: { status: GitWorkspaceStatus | null; branches: GitBranchInfo[]; tags: GitTagInfo[] }): React.JSX.Element {
+  if (!status) return <p className="empty">正在读取 Git 状态…</p>;
+  if (!status.isRepository) return <p className="empty">{status.message ?? "当前工作区不是 Git 仓库。"}</p>;
+  const stagedCount = status.entries.filter(isGitEntryStaged).length;
+  const unstagedCount = status.entries.filter(isGitEntryUnstaged).length;
+  return <div>
+    <dl>
+      <dt>分支</dt><dd>{status.currentBranch ?? "detached"}</dd>
+      <dt>HEAD</dt><dd>{status.headShortCommit ?? "—"}</dd>
+      <dt>最近 Tag</dt><dd>{status.latestTag ?? tags[0]?.name ?? "—"}</dd>
+      <dt>暂存</dt><dd>{stagedCount}</dd>
+      <dt>未暂存</dt><dd>{unstagedCount}</dd>
+      <dt>本地分支</dt><dd>{branches.length}</dd>
+      <dt>状态</dt><dd>{status.hasConflicts ? "存在冲突" : status.isDirty ? "有改动" : "clean"}</dd>
+    </dl>
+    <div className="inspector-card">
+      <h3>操作习惯</h3>
+      <p>在左侧 Git 工作栏中暂存文件、填写提交信息并提交；协议基线 Tag 建议在提交后创建。</p>
+    </div>
+  </div>;
+}
+
 function NetworkInspector({ workspace }: { workspace: WorkspaceView }): React.JSX.Element {
   const totalBandwidth = workspace.network.links.reduce((sum, link) => sum + link.estimatedBandwidthBps, 0);
   const busiestLink = [...workspace.network.links].sort((a, b) => b.estimatedBandwidthBps - a.estimatedBandwidthBps)[0];
@@ -4415,6 +4501,202 @@ function workspaceSummaryForAssistant(workspace: WorkspaceView | null): string {
     diagnostics ? `诊断摘要：\n${diagnostics}` : "诊断摘要：无",
     topBindings ? `协议绑定摘要：\n${topBindings}` : "协议绑定摘要：无"
   ].join("\n");
+}
+
+function isGitEntryStaged(entry: GitWorkspaceStatus["entries"][number]): boolean {
+  return entry.indexStatus.trim() !== "" && entry.indexStatus !== "?";
+}
+
+function isGitEntryUnstaged(entry: GitWorkspaceStatus["entries"][number]): boolean {
+  return entry.indexStatus === "?" || entry.workingTreeStatus.trim() !== "";
+}
+
+function gitStatusBadge(entry: GitWorkspaceStatus["entries"][number], area: "staged" | "unstaged"): string {
+  const value = area === "staged" ? entry.indexStatus : entry.workingTreeStatus;
+  if (entry.indexStatus === "?" && entry.workingTreeStatus === "?") return "U";
+  if (value === "M") return "M";
+  if (value === "A") return "A";
+  if (value === "D") return "D";
+  if (value === "R") return "R";
+  if (value === "C") return "C";
+  if (value === "U") return "conflict";
+  return value.trim() || "•";
+}
+
+function gitStatusBadgeLabel(badge: string): string {
+  return badge === "conflict" ? "!" : badge;
+}
+
+function GitChangeList({
+  title,
+  entries,
+  area,
+  loading,
+  onStagePath,
+  onUnstagePath,
+  onOpenFileLocation
+}: {
+  title: string;
+  entries: GitWorkspaceStatus["entries"];
+  area: "staged" | "unstaged";
+  loading: boolean;
+  onStagePath(path: string): void;
+  onUnstagePath(path: string): void;
+  onOpenFileLocation(entry: GitWorkspaceStatus["entries"][number]): void;
+}): React.JSX.Element {
+  return <section className="git-change-section">
+    <header>
+      <h3>{title}</h3>
+      <span>{entries.length}</span>
+    </header>
+    {entries.length === 0
+      ? <p className="git-empty">没有文件</p>
+      : <ul className="git-change-list">
+        {entries.map((entry) => <li key={`${area}:${entry.path}`}>
+          {(() => {
+            const badge = gitStatusBadge(entry, area);
+            return <>
+          <button className="git-file" onClick={() => onOpenFileLocation(entry)} title={entry.path}>
+            <b className={`git-badge git-badge-${badge}`}>{gitStatusBadgeLabel(badge)}</b>
+            <span>{entry.path}</span>
+          </button>
+          {area === "unstaged"
+            ? <button className="git-row-action" disabled={loading} aria-label={`暂存 ${entry.path}`} title="暂存" onClick={() => onStagePath(entry.path)}>＋</button>
+            : <button className="git-row-action" disabled={loading} aria-label={`取消暂存 ${entry.path}`} title="取消暂存" onClick={() => onUnstagePath(entry.path)}>−</button>}
+          </>;
+          })()}
+        </li>)}
+      </ul>}
+  </section>;
+}
+
+function GitSourceControlView({
+  workspace,
+  status,
+  branches,
+  tags,
+  loading,
+  onRefresh,
+  onStagePath,
+  onUnstagePath,
+  onStageAll,
+  onUnstageAll,
+  onCommit,
+  onCheckoutBranch,
+  onCreateBranch,
+  onOpenFileLocation,
+  onCreateBaseline,
+  onRunDiff
+}: {
+  workspace: WorkspaceView;
+  status: GitWorkspaceStatus | null;
+  branches: GitBranchInfo[];
+  tags: GitTagInfo[];
+  loading: boolean;
+  onRefresh(): void;
+  onStagePath(path: string): void;
+  onUnstagePath(path: string): void;
+  onStageAll(): void;
+  onUnstageAll(): void;
+  onCommit(message: string): void;
+  onCheckoutBranch(branchName: string): void;
+  onCreateBranch(branchName: string): void;
+  onOpenFileLocation(entry: GitWorkspaceStatus["entries"][number]): void;
+  onCreateBaseline(): void;
+  onRunDiff(): void;
+}): React.JSX.Element {
+  const [commitMessage, setCommitMessage] = React.useState("");
+  const [newBranchName, setNewBranchName] = React.useState("");
+  const stagedEntries = React.useMemo(() => status?.entries.filter(isGitEntryStaged) ?? [], [status]);
+  const unstagedEntries = React.useMemo(() => status?.entries.filter(isGitEntryUnstaged) ?? [], [status]);
+  const currentBranch = status?.currentBranch ?? branches.find((branch) => branch.current)?.name ?? "detached";
+  const canCommit = Boolean(status?.isRepository) && stagedEntries.length > 0 && commitMessage.trim().length > 0 && !loading;
+
+  if (!status) {
+    return <section className="git-view" aria-label="源代码管理">
+      <div className="git-hero"><p className="eyebrow">SOURCE CONTROL</p><h2>Git 状态读取中…</h2></div>
+    </section>;
+  }
+
+  if (!status.isRepository) {
+    return <section className="git-view" aria-label="源代码管理">
+      <div className="git-hero">
+        <p className="eyebrow">SOURCE CONTROL</p>
+        <h2>当前工作区不是 Git 仓库</h2>
+        <p>{status.message ?? "请先在外部执行 git init，或打开已有 Git 仓库目录。"}</p>
+      </div>
+    </section>;
+  }
+
+  return <section className="git-view" aria-label="源代码管理">
+    <div className="git-hero">
+      <div>
+        <p className="eyebrow">SOURCE CONTROL</p>
+        <h2>源代码管理</h2>
+        <p>{workspace.name} · {status.repositoryRoot}</p>
+      </div>
+      <div className="git-hero-actions">
+        <button className="inline-action" disabled={loading} onClick={onRefresh}>刷新</button>
+        <button className="inline-action" disabled={loading || unstagedEntries.length === 0} onClick={onStageAll}>全部暂存</button>
+        <button className="inline-action" disabled={loading || stagedEntries.length === 0} onClick={onUnstageAll}>全部取消暂存</button>
+      </div>
+    </div>
+
+    <div className="git-grid">
+      <article className="git-card git-commit-card">
+        <h3>提交</h3>
+        <div className="git-status-line">
+          <span>分支 <b>{currentBranch}</b></span>
+          <span>{status.headShortCommit ?? "no HEAD"}</span>
+          <span>{status.isDirty ? `${status.entries.length} 个改动` : "clean"}</span>
+        </div>
+        <textarea
+          aria-label="Git 提交信息"
+          value={commitMessage}
+          placeholder="提交信息，类似 VS Code Source Control"
+          onChange={(event) => setCommitMessage(event.target.value)}
+        />
+        <button
+          className="primary-action"
+          disabled={!canCommit}
+          onClick={() => {
+            const message = commitMessage.trim();
+            onCommit(message);
+            setCommitMessage("");
+          }}
+        >提交暂存更改</button>
+        {status.hasConflicts && <p className="git-warning">检测到冲突，请先解决冲突再提交。</p>}
+        <p className="git-hint">提交只允许当前工作区范围内的暂存内容；如果仓库其他目录存在暂存项，会阻止提交，避免误提交。</p>
+      </article>
+
+      <article className="git-card">
+        <h3>分支与基线</h3>
+        <label className="git-select-label">
+          <span>当前分支</span>
+          <select aria-label="Git 分支" value={currentBranch} disabled={loading} onChange={(event) => onCheckoutBranch(event.target.value)}>
+            {branches.length > 0 ? branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.current ? "● " : ""}{branch.name}</option>) : <option value={currentBranch}>{currentBranch}</option>}
+          </select>
+        </label>
+        <div className="git-branch-create">
+          <input aria-label="新建 Git 分支名称" value={newBranchName} placeholder="feature/protocol-edit" onChange={(event) => setNewBranchName(event.target.value)} />
+          <button className="inline-action" disabled={loading || !newBranchName.trim()} onClick={() => {
+            onCreateBranch(newBranchName.trim());
+            setNewBranchName("");
+          }}>新建并切换</button>
+        </div>
+        <div className="git-baseline-actions">
+          <button className="inline-action" disabled={loading} onClick={onCreateBaseline}>创建协议基线 Tag</button>
+          <button className="inline-action" disabled={loading} onClick={onRunDiff}>查看版本 Diff</button>
+        </div>
+        <p className="git-hint">最近 Tag：{status.latestTag ?? tags[0]?.name ?? "暂无"}</p>
+      </article>
+
+      <article className="git-card git-changes-card">
+        <GitChangeList title="暂存的更改" entries={stagedEntries} area="staged" loading={loading} onStagePath={onStagePath} onUnstagePath={onUnstagePath} onOpenFileLocation={onOpenFileLocation} />
+        <GitChangeList title="更改" entries={unstagedEntries} area="unstaged" loading={loading} onStagePath={onStagePath} onUnstagePath={onUnstagePath} onOpenFileLocation={onOpenFileLocation} />
+      </article>
+    </div>
+  </section>;
 }
 
 function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null; onBack: () => void }): React.JSX.Element {
