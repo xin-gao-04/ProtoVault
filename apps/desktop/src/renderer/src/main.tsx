@@ -3,6 +3,9 @@ import ReactDOM from "react-dom/client";
 import type {
   GeneratedDocumentReport,
   GitBranchInfo,
+  GitCommitGraphEntry,
+  GitDiffSide,
+  GitFileDiff,
   GitOperationResult,
   GitTagInfo,
   GitWorkspaceStatus,
@@ -41,7 +44,10 @@ type ProtocolTreeNode =
   | { id: string; kind: "field"; name: string; parent: WorkspaceTypeView; field?: WorkspaceFieldView; enumValue?: WorkspaceEnumValueView };
 
 type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit-header" | "edit-struct" | "edit-enum" | "add-field" | "edit-field" | "add-enum-value" | "edit-enum-value";
-type WorkspaceTab = { id: string; kind: "file"; title: string; filePath: string } | { id: string; kind: "type"; title: string; typeId: string };
+type WorkspaceTab =
+  | { id: string; kind: "file"; title: string; filePath: string }
+  | { id: string; kind: "type"; title: string; typeId: string }
+  | { id: string; kind: "git-diff"; title: string; path: string; side: GitDiffSide };
 type TabContextMenuState = { x: number; y: number; tab: WorkspaceTab; orderedTabs: WorkspaceTab[] };
 type FieldTypeOption = { group: "composite" | "base"; value: string; label: string; detail?: string };
 type DirtyStructuralEdit =
@@ -147,6 +153,8 @@ function App(): React.JSX.Element {
   const [gitStatus, setGitStatus] = React.useState<GitWorkspaceStatus | null>(null);
   const [gitBranches, setGitBranches] = React.useState<GitBranchInfo[]>([]);
   const [gitTags, setGitTags] = React.useState<GitTagInfo[]>([]);
+  const [gitCommitGraph, setGitCommitGraph] = React.useState<GitCommitGraphEntry[]>([]);
+  const [gitDiffs, setGitDiffs] = React.useState<Record<string, GitFileDiff>>({});
   const [selectedTypeId, setSelectedTypeId] = React.useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = React.useState<string | null>(null);
@@ -206,6 +214,8 @@ function App(): React.JSX.Element {
   const [graphInspectorState, setGraphInspectorState] = React.useState<{ graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] }; selectedNodeId: string | null } | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
+  const activeWorkspaceTab = tabs.find((tab) => tab.id === activeTabId) ?? (previewTab?.id === activeTabId ? previewTab : null);
+  const activeGitDiff = activeWorkspaceTab?.kind === "git-diff" ? gitDiffs[activeWorkspaceTab.id] ?? null : null;
   const selectedField = selectedType?.fields.find((field) => field.id === selectedMemberId);
   const selectedEnumValue = selectedType?.values.find((value) => value.id === selectedMemberId);
   const selectedNoteTarget = selectedField
@@ -380,19 +390,23 @@ function App(): React.JSX.Element {
       setGitStatus(null);
       setGitBranches([]);
       setGitTags([]);
+      setGitCommitGraph([]);
+      setGitDiffs({});
       return;
     }
     let cancelled = false;
     Promise.all([
       window.protoVault.gitStatus(workspace.rootPath),
       window.protoVault.gitBranches(workspace.rootPath),
-      window.protoVault.gitTags(workspace.rootPath)
+      window.protoVault.gitTags(workspace.rootPath),
+      window.protoVault.gitCommitGraph(workspace.rootPath)
     ])
-      .then(([status, branches, tags]) => {
+      .then(([status, branches, tags, graph]) => {
         if (cancelled) return;
         setGitStatus(status);
         setGitBranches(branches);
         setGitTags(tags);
+        setGitCommitGraph(graph);
       })
       .catch(() => {
         if (cancelled) return;
@@ -404,6 +418,7 @@ function App(): React.JSX.Element {
         });
         setGitBranches([]);
         setGitTags([]);
+        setGitCommitGraph([]);
       });
     return () => { cancelled = true; };
   }, [workspace?.rootPath, workspace?.files.length, workspace?.types.length, workspace?.network.updatedAt]);
@@ -542,20 +557,23 @@ function App(): React.JSX.Element {
 
   async function refreshGitState(): Promise<void> {
     if (!workspace) return;
-    const [status, branches, tags] = await Promise.all([
+    const [status, branches, tags, graph] = await Promise.all([
       window.protoVault.gitStatus(workspace.rootPath),
       window.protoVault.gitBranches(workspace.rootPath),
-      window.protoVault.gitTags(workspace.rootPath)
+      window.protoVault.gitTags(workspace.rootPath),
+      window.protoVault.gitCommitGraph(workspace.rootPath)
     ]);
     setGitStatus(status);
     setGitBranches(branches);
     setGitTags(tags);
+    setGitCommitGraph(graph);
   }
 
   function applyGitOperationResult(result: GitOperationResult): void {
     setGitStatus(result.status);
     if (result.branches) setGitBranches(result.branches);
     if (result.tags) setGitTags(result.tags);
+    void refreshGitState();
     setUiNotice(result.message);
   }
 
@@ -1530,11 +1548,18 @@ function App(): React.JSX.Element {
     setActiveTabId(tab.id);
     setActiveAction(null);
     if (tab.kind === "file") {
+      setCenterViewMode("workspace");
       setSelectedFilePath(tab.filePath);
       setSelectedTypeId(null);
       setSelectedMemberId(null);
-    } else {
+    } else if (tab.kind === "type") {
+      setCenterViewMode("workspace");
       setSelectedTypeId(tab.typeId);
+      setSelectedFilePath(null);
+      setSelectedMemberId(null);
+    } else {
+      setCenterViewMode("git");
+      setSelectedTypeId(null);
       setSelectedFilePath(null);
       setSelectedMemberId(null);
     }
@@ -1614,6 +1639,32 @@ function App(): React.JSX.Element {
     setExpandedNodeIds((current) => new Set(current).add(`type:${type.id}`));
     syncActionForTypeSelection(type, memberId);
     return true;
+  }
+
+  async function openGitDiffTab(path: string, side: GitDiffSide): Promise<boolean> {
+    if (!workspace) return false;
+    const tab = tabForGitDiff(path, side);
+    if (!(await ensureCanNavigateToTab(tab.id))) return false;
+    setLoading(true);
+    try {
+      const diff = await window.protoVault.gitFileDiff({ workspaceRoot: workspace.rootPath, path, side });
+      setGitDiffs((current) => ({ ...current, [tab.id]: diff }));
+      setTabs((current) => upsertTab(current, tab));
+      setPreviewTab((current) => current?.id === tab.id ? null : current);
+      setActiveTabId(tab.id);
+      setSelectedFilePath(null);
+      setSelectedTypeId(null);
+      setSelectedMemberId(null);
+      setActiveAction(null);
+      setCenterViewMode("git");
+      setUiNotice(`已打开 Git 对比：${path}`);
+      return true;
+    } catch (error) {
+      setUiNotice(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }
 
   function activeTabHasDirtyChanges(nextTabId?: string): boolean {
@@ -1808,59 +1859,80 @@ function App(): React.JSX.Element {
         <button className={centerViewMode === "manual" ? "active" : ""} aria-label="AI 使用助手" title="AI 使用助手 / 本地 Ollama" onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("manual"); }}>?</button>
         <button aria-label="问题面板">!</button>
       </aside>
-      <aside className="navigator">
-        <div className="navigator-title">
-          <div>
-            <h1>ProtoVault</h1>
-            <p className="eyebrow">协议资产库</p>
+      <aside className={centerViewMode === "git" ? "navigator source-control-sidebar" : "navigator"}>
+        {centerViewMode === "git" && workspace ? <GitSourceControlNavigator
+          workspace={workspace}
+          status={gitStatus}
+          branches={gitBranches}
+          tags={gitTags}
+          graph={gitCommitGraph}
+          loading={loading}
+          onRefresh={() => void runGitAction(() => refreshGitState())}
+          onStagePath={(path) => void runGitAction(() => window.protoVault.stageGitPath({ workspaceRoot: workspace.rootPath, path }))}
+          onUnstagePath={(path) => void runGitAction(() => window.protoVault.unstageGitPath({ workspaceRoot: workspace.rootPath, path }))}
+          onStageAll={() => void runGitAction(() => window.protoVault.stageGitWorkspace({ workspaceRoot: workspace.rootPath }))}
+          onUnstageAll={() => void runGitAction(() => window.protoVault.unstageGitWorkspace({ workspaceRoot: workspace.rootPath }))}
+          onCommit={(message) => void runGitAction(() => window.protoVault.commitGit({ workspaceRoot: workspace.rootPath, message }))}
+          onCheckoutBranch={(branchName) => void runGitAction(() => window.protoVault.checkoutGitBranch({ workspaceRoot: workspace.rootPath, branchName }))}
+          onCreateBranch={(branchName) => void runGitAction(() => window.protoVault.createGitBranch({ workspaceRoot: workspace.rootPath, branchName, checkout: true }))}
+          onOpenDiff={(entry, side) => void openGitDiffTab(entry.path, side)}
+          onOpenFileLocation={(entry) => void openGitEntryLocation(gitStatus, entry)}
+          onCreateBaseline={() => void createBaselineReport()}
+          onRunDiff={() => void runSemanticDiffReport()}
+        /> : <>
+          <div className="navigator-title">
+            <div>
+              <h1>ProtoVault</h1>
+              <p className="eyebrow">协议资产库</p>
+            </div>
           </div>
-        </div>
-        <div className="tree-actions" aria-label="协议树操作">
-          <button aria-label="新增数据结构" title="新增数据结构" disabled={!workspace || loading} onClick={() => openStructuredAction("create-struct")}>✎</button>
-          <button aria-label="新增枚举" title="新增枚举" disabled={!workspace || loading} onClick={() => openStructuredAction("create-enum")}>E＋</button>
-          <button aria-label="新建 Header 文件" title="新建 Header 文件" disabled={!workspace || loading} onClick={() => openStructuredAction("create-header")}>▣＋</button>
-          <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => openStructuredAction("add-field")}>＋f</button>
-          <button aria-label="添加枚举项" title="添加枚举项" disabled={selectedType?.kind !== "enum" || loading} onClick={() => openStructuredAction("add-enum-value")}>＋#</button>
-          <button aria-label="排序协议树" title="排序协议树" disabled={!workspace} onClick={() => setUiNotice("协议树已按目录、Header、类型排序")}>↥</button>
-          <button aria-label="搜索协议树" title="搜索协议树" disabled={!workspace} aria-pressed={treeSearchOpen} onClick={() => setTreeSearchOpen((open) => !open)}>⌕</button>
-          <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}>⌃⌄</button>
-        </div>
-        {workspace && treeSearchOpen && <div className="tree-search" role="search">
-          <input
-            aria-label="协议树搜索"
-            autoFocus
-            value={treeSearchQuery}
-            placeholder="搜索 Header / Struct / Field / Enum…"
-            onChange={(event) => setTreeSearchQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                setTreeSearchQuery("");
-                setTreeSearchOpen(false);
-              }
-            }}
-          />
-          <span>{treeSearchQuery.trim() ? `${treeSearchResult.matchCount} 项` : "过滤树图"}</span>
-          {treeSearchQuery && <button aria-label="清空搜索" onClick={() => setTreeSearchQuery("")}>×</button>}
-        </div>}
-        {workspace
-          ? <nav className="tree" aria-label="协议资产树" onContextMenu={(event) => openContextMenu(event, { kind: "workspace" })}>
-              {tree.length > 0 ? <TreeNodes
-                nodes={tree}
-                selectedFilePath={selectedFilePath}
-                selectedTypeId={selectedTypeId}
-                selectedMemberId={selectedMemberId}
-                expandedNodeIds={effectiveExpandedNodeIds}
-                onToggleNode={toggleNode}
-                onSelectFile={(file) => previewFileTab(file)}
-                onPinFile={(file) => openFileTab(file)}
-                onSelectType={(type) => previewTypeTab(type)}
-                onPinType={(type) => openTypeTab(type)}
-                onSelectMember={(parent, memberId) => previewTypeTab(parent, memberId)}
-                onPinMember={(parent, memberId) => openTypeTab(parent, memberId)}
-                onOpenContextMenu={openContextMenu}
-              /> : <p className="tree-no-results">没有匹配的协议节点</p>}
-            </nav>
-          : <div className="tree-empty"><p>打开工作区后，这里会显示 Header、协议类型与字段。</p></div>}
+          <div className="tree-actions" aria-label="协议树操作">
+            <button aria-label="新增数据结构" title="新增数据结构" disabled={!workspace || loading} onClick={() => openStructuredAction("create-struct")}>✎</button>
+            <button aria-label="新增枚举" title="新增枚举" disabled={!workspace || loading} onClick={() => openStructuredAction("create-enum")}>E＋</button>
+            <button aria-label="新建 Header 文件" title="新建 Header 文件" disabled={!workspace || loading} onClick={() => openStructuredAction("create-header")}>▣＋</button>
+            <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => openStructuredAction("add-field")}>＋f</button>
+            <button aria-label="添加枚举项" title="添加枚举项" disabled={selectedType?.kind !== "enum" || loading} onClick={() => openStructuredAction("add-enum-value")}>＋#</button>
+            <button aria-label="排序协议树" title="排序协议树" disabled={!workspace} onClick={() => setUiNotice("协议树已按目录、Header、类型排序")}>↥</button>
+            <button aria-label="搜索协议树" title="搜索协议树" disabled={!workspace} aria-pressed={treeSearchOpen} onClick={() => setTreeSearchOpen((open) => !open)}>⌕</button>
+            <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}>⌃⌄</button>
+          </div>
+          {workspace && treeSearchOpen && <div className="tree-search" role="search">
+            <input
+              aria-label="协议树搜索"
+              autoFocus
+              value={treeSearchQuery}
+              placeholder="搜索 Header / Struct / Field / Enum…"
+              onChange={(event) => setTreeSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setTreeSearchQuery("");
+                  setTreeSearchOpen(false);
+                }
+              }}
+            />
+            <span>{treeSearchQuery.trim() ? `${treeSearchResult.matchCount} 项` : "过滤树图"}</span>
+            {treeSearchQuery && <button aria-label="清空搜索" onClick={() => setTreeSearchQuery("")}>×</button>}
+          </div>}
+          {workspace
+            ? <nav className="tree" aria-label="协议资产树" onContextMenu={(event) => openContextMenu(event, { kind: "workspace" })}>
+                {tree.length > 0 ? <TreeNodes
+                  nodes={tree}
+                  selectedFilePath={selectedFilePath}
+                  selectedTypeId={selectedTypeId}
+                  selectedMemberId={selectedMemberId}
+                  expandedNodeIds={effectiveExpandedNodeIds}
+                  onToggleNode={toggleNode}
+                  onSelectFile={(file) => previewFileTab(file)}
+                  onPinFile={(file) => openFileTab(file)}
+                  onSelectType={(type) => previewTypeTab(type)}
+                  onPinType={(type) => openTypeTab(type)}
+                  onSelectMember={(parent, memberId) => previewTypeTab(parent, memberId)}
+                  onPinMember={(parent, memberId) => openTypeTab(parent, memberId)}
+                  onOpenContextMenu={openContextMenu}
+                /> : <p className="tree-no-results">没有匹配的协议节点</p>}
+              </nav>
+            : <div className="tree-empty"><p>打开工作区后，这里会显示 Header、协议类型与字段。</p></div>}
+        </>}
         <div className="workspace-dock" aria-label="工作区管理">
           <div className="workspace-dock-summary">
             <span>{workspace?.name ?? "未打开工作区"}</span>
@@ -1908,7 +1980,7 @@ function App(): React.JSX.Element {
         >⌄</button>}
         {!toolbarCollapsed && <header className="workspace-toolbar">
           <div className="workspace-context">
-            <span>{selectedFile?.relativePath ?? selectedType?.qualifiedName ?? "欢迎"}</span>
+            <span>{activeWorkspaceTab?.kind === "git-diff" ? activeWorkspaceTab.title : selectedFile?.relativePath ?? selectedType?.qualifiedName ?? "欢迎"}</span>
             <small>{workspace ? `${workspace.name} · ${workspace.files.length} Headers · ${workspace.types.length} Types` : "尚未打开协议工作区"}</small>
           </div>
           <div className="toolbar-actions">
@@ -1976,23 +2048,10 @@ function App(): React.JSX.Element {
           onNotice={setUiNotice}
           onOpenProtocolType={(typeId) => void openProtocolTypeById(typeId)}
         />}
-        {workspace && centerViewMode === "git" && <GitSourceControlView
-          workspace={workspace}
-          status={gitStatus}
-          branches={gitBranches}
-          tags={gitTags}
+        {workspace && centerViewMode === "git" && <GitDiffWorkspace
+          tab={activeWorkspaceTab?.kind === "git-diff" ? activeWorkspaceTab : null}
+          diff={activeGitDiff}
           loading={loading}
-          onRefresh={() => void runGitAction(() => refreshGitState())}
-          onStagePath={(path) => void runGitAction(() => window.protoVault.stageGitPath({ workspaceRoot: workspace.rootPath, path }))}
-          onUnstagePath={(path) => void runGitAction(() => window.protoVault.unstageGitPath({ workspaceRoot: workspace.rootPath, path }))}
-          onStageAll={() => void runGitAction(() => window.protoVault.stageGitWorkspace({ workspaceRoot: workspace.rootPath }))}
-          onUnstageAll={() => void runGitAction(() => window.protoVault.unstageGitWorkspace({ workspaceRoot: workspace.rootPath }))}
-          onCommit={(message) => void runGitAction(() => window.protoVault.commitGit({ workspaceRoot: workspace.rootPath, message }))}
-          onCheckoutBranch={(branchName) => void runGitAction(() => window.protoVault.checkoutGitBranch({ workspaceRoot: workspace.rootPath, branchName }))}
-          onCreateBranch={(branchName) => void runGitAction(() => window.protoVault.createGitBranch({ workspaceRoot: workspace.rootPath, branchName, checkout: true }))}
-          onOpenFileLocation={(entry) => void openGitEntryLocation(gitStatus, entry)}
-          onCreateBaseline={() => void createBaselineReport()}
-          onRunDiff={() => void runSemanticDiffReport()}
         />}
         {centerViewMode === "manual" && <AssistantView workspace={workspace} onBack={() => setCenterViewMode("workspace")} />}
         {workspace && activeAction && <StructuredActionPanel
@@ -2408,6 +2467,15 @@ function tabForType(type: WorkspaceTypeView): WorkspaceTab {
   return { id: `type:${type.id}`, kind: "type", title: type.name, typeId: type.id };
 }
 
+function gitDiffTabId(path: string, side: GitDiffSide): string {
+  return `git-diff:${side}:${path}`;
+}
+
+function tabForGitDiff(path: string, side: GitDiffSide): WorkspaceTab {
+  const suffix = side === "index" ? "Index" : "Working Tree";
+  return { id: gitDiffTabId(path, side), kind: "git-diff", title: `${path.split("/").at(-1) ?? path} (${suffix})`, path, side };
+}
+
 function buildDirtyTabIds(
   workspace: WorkspaceView,
   dirtyNotes: Record<string, string>,
@@ -2453,6 +2521,7 @@ function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView): Workspac
       const file = files.get(tab.filePath);
       return file ? [tabForFile(file)] : [];
     }
+    if (tab.kind === "git-diff") return [tab];
     const type = types.get(tab.typeId);
     return type ? [tabForType(type)] : [];
   });
@@ -2514,9 +2583,10 @@ function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, contextMenu, onA
   return <nav className="tab-strip" aria-label="工作区标签页">
     {tabs.map((tab) => {
       const dirty = dirtyTabIds.has(tab.id);
+      const tabKindLabel = tab.kind === "file" ? "H" : tab.kind === "type" ? "S" : "G";
       return <div className={`${tab.id === activeTabId ? "workspace-tab active" : "workspace-tab"}${dirty ? " dirty" : ""}`} key={tab.id} onContextMenu={(event) => openTabMenu(event, tab)}>
       <button className="workspace-tab-main" aria-label={`切换到 ${tab.title}${dirty ? " 未保存" : ""}`} onClick={() => { void onActivate(tab); }}>
-        <span className={tab.kind === "file" ? "tab-kind file" : "tab-kind type"}>{tab.kind === "file" ? "H" : "S"}</span>
+        <span className={tab.kind === "file" ? "tab-kind file" : tab.kind === "type" ? "tab-kind type" : "tab-kind git"}>{tabKindLabel}</span>
         <span>{tab.title}</span>
         {dirty && <small>●</small>}
       </button>
@@ -2525,9 +2595,10 @@ function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, contextMenu, onA
     })}
     {visiblePreview && (() => {
       const dirty = dirtyTabIds.has(visiblePreview.id);
+      const tabKindLabel = visiblePreview.kind === "file" ? "H" : visiblePreview.kind === "type" ? "S" : "G";
       return <div className={`${visiblePreview.id === activeTabId ? "workspace-tab preview active" : "workspace-tab preview"}${dirty ? " dirty" : ""}`} key={`preview:${visiblePreview.id}`} onContextMenu={(event) => openTabMenu(event, visiblePreview)}>
       <button className="workspace-tab-main" aria-label={`预览 ${visiblePreview.title}${dirty ? " 未保存" : ""}`} onClick={() => { void onActivate(visiblePreview); }}>
-        <span className={visiblePreview.kind === "file" ? "tab-kind file" : "tab-kind type"}>{visiblePreview.kind === "file" ? "H" : "S"}</span>
+        <span className={visiblePreview.kind === "file" ? "tab-kind file" : visiblePreview.kind === "type" ? "tab-kind type" : "tab-kind git"}>{tabKindLabel}</span>
         <span>{visiblePreview.title}</span>
         <small>{dirty ? "●" : "Preview"}</small>
       </button>
@@ -4534,6 +4605,7 @@ function GitChangeList({
   loading,
   onStagePath,
   onUnstagePath,
+  onOpenDiff,
   onOpenFileLocation
 }: {
   title: string;
@@ -4542,11 +4614,13 @@ function GitChangeList({
   loading: boolean;
   onStagePath(path: string): void;
   onUnstagePath(path: string): void;
+  onOpenDiff(entry: GitWorkspaceStatus["entries"][number], side: GitDiffSide): void;
   onOpenFileLocation(entry: GitWorkspaceStatus["entries"][number]): void;
 }): React.JSX.Element {
+  const side: GitDiffSide = area === "staged" ? "index" : "working-tree";
   return <section className="git-change-section">
     <header>
-      <h3>{title}</h3>
+      <h3>▾ {title}</h3>
       <span>{entries.length}</span>
     </header>
     {entries.length === 0
@@ -4556,25 +4630,48 @@ function GitChangeList({
           {(() => {
             const badge = gitStatusBadge(entry, area);
             return <>
-          <button className="git-file" onClick={() => onOpenFileLocation(entry)} title={entry.path}>
-            <b className={`git-badge git-badge-${badge}`}>{gitStatusBadgeLabel(badge)}</b>
-            <span>{entry.path}</span>
-          </button>
-          {area === "unstaged"
-            ? <button className="git-row-action" disabled={loading} aria-label={`暂存 ${entry.path}`} title="暂存" onClick={() => onStagePath(entry.path)}>＋</button>
-            : <button className="git-row-action" disabled={loading} aria-label={`取消暂存 ${entry.path}`} title="取消暂存" onClick={() => onUnstagePath(entry.path)}>−</button>}
-          </>;
+              <button className="git-file" onClick={() => onOpenDiff(entry, side)} title={`${entry.path} · 打开对比`}>
+                <b className={`git-badge git-badge-${badge}`}>{gitStatusBadgeLabel(badge)}</b>
+                <span>{entry.path.split("/").at(-1) ?? entry.path}</span>
+                <small>{entry.path}</small>
+              </button>
+              <button className="git-row-action" disabled={loading} aria-label={`打开文件位置 ${entry.path}`} title="打开文件位置" onClick={() => onOpenFileLocation(entry)}>⌕</button>
+              {area === "unstaged"
+                ? <button className="git-row-action" disabled={loading} aria-label={`暂存 ${entry.path}`} title="暂存" onClick={() => onStagePath(entry.path)}>＋</button>
+                : <button className="git-row-action" disabled={loading} aria-label={`取消暂存 ${entry.path}`} title="取消暂存" onClick={() => onUnstagePath(entry.path)}>−</button>}
+            </>;
           })()}
         </li>)}
       </ul>}
   </section>;
 }
 
-function GitSourceControlView({
+function GitCommitGraphPanel({ graph, currentBranch }: { graph: GitCommitGraphEntry[]; currentBranch: string }): React.JSX.Element {
+  return <section className="git-graph-panel" aria-label="Git 版本流程图">
+    <header>
+      <h3>▾ GRAPH</h3>
+      <span>{currentBranch}</span>
+    </header>
+    {graph.length === 0 ? <p className="git-empty">暂无提交历史</p> : <ol>
+      {graph.map((commit) => <li className={commit.current ? "current" : ""} key={commit.hash}>
+        <span className="git-graph-line" aria-hidden="true" />
+        <span className="git-graph-dot" aria-hidden="true" />
+        <div>
+          <strong>{commit.subject}</strong>
+          <small>{commit.shortHash} · {commit.relativeDate ?? "—"}</small>
+          {commit.refs.length > 0 && <span className="git-ref-row">{commit.refs.slice(0, 3).map((ref) => <b key={ref}>{ref.replace(/^HEAD -> /, "")}</b>)}</span>}
+        </div>
+      </li>)}
+    </ol>}
+  </section>;
+}
+
+function GitSourceControlNavigator({
   workspace,
   status,
   branches,
   tags,
+  graph,
   loading,
   onRefresh,
   onStagePath,
@@ -4584,6 +4681,7 @@ function GitSourceControlView({
   onCommit,
   onCheckoutBranch,
   onCreateBranch,
+  onOpenDiff,
   onOpenFileLocation,
   onCreateBaseline,
   onRunDiff
@@ -4592,6 +4690,7 @@ function GitSourceControlView({
   status: GitWorkspaceStatus | null;
   branches: GitBranchInfo[];
   tags: GitTagInfo[];
+  graph: GitCommitGraphEntry[];
   loading: boolean;
   onRefresh(): void;
   onStagePath(path: string): void;
@@ -4601,6 +4700,7 @@ function GitSourceControlView({
   onCommit(message: string): void;
   onCheckoutBranch(branchName: string): void;
   onCreateBranch(branchName: string): void;
+  onOpenDiff(entry: GitWorkspaceStatus["entries"][number], side: GitDiffSide): void;
   onOpenFileLocation(entry: GitWorkspaceStatus["entries"][number]): void;
   onCreateBaseline(): void;
   onRunDiff(): void;
@@ -4613,48 +4713,52 @@ function GitSourceControlView({
   const canCommit = Boolean(status?.isRepository) && stagedEntries.length > 0 && commitMessage.trim().length > 0 && !loading;
 
   if (!status) {
-    return <section className="git-view" aria-label="源代码管理">
-      <div className="git-hero"><p className="eyebrow">SOURCE CONTROL</p><h2>Git 状态读取中…</h2></div>
+    return <section className="source-control-panel" aria-label="源代码管理">
+      <div className="source-control-title"><p className="eyebrow">SOURCE CONTROL</p><h2>源代码管理</h2></div>
+      <p className="git-empty">Git 状态读取中…</p>
     </section>;
   }
 
   if (!status.isRepository) {
-    return <section className="git-view" aria-label="源代码管理">
-      <div className="git-hero">
-        <p className="eyebrow">SOURCE CONTROL</p>
-        <h2>当前工作区不是 Git 仓库</h2>
-        <p>{status.message ?? "请先在外部执行 git init，或打开已有 Git 仓库目录。"}</p>
-      </div>
+    return <section className="source-control-panel" aria-label="源代码管理">
+      <div className="source-control-title"><p className="eyebrow">SOURCE CONTROL</p><h2>源代码管理</h2></div>
+      <p className="git-empty">{status.message ?? "请先在外部执行 git init，或打开已有 Git 仓库目录。"}</p>
     </section>;
   }
 
-  return <section className="git-view" aria-label="源代码管理">
-    <div className="git-hero">
+  return <section className="source-control-panel" aria-label="源代码管理">
+    <div className="source-control-title">
       <div>
         <p className="eyebrow">SOURCE CONTROL</p>
         <h2>源代码管理</h2>
-        <p>{workspace.name} · {status.repositoryRoot}</p>
       </div>
-      <div className="git-hero-actions">
-        <button className="inline-action" disabled={loading} onClick={onRefresh}>刷新</button>
-        <button className="inline-action" disabled={loading || unstagedEntries.length === 0} onClick={onStageAll}>全部暂存</button>
-        <button className="inline-action" disabled={loading || stagedEntries.length === 0} onClick={onUnstageAll}>全部取消暂存</button>
-      </div>
+      <button aria-label="刷新 Git 状态" title="刷新" disabled={loading} onClick={onRefresh}>↻</button>
+    </div>
+    <div className="source-control-summary">
+      <span>{workspace.name}</span>
+      <small>{currentBranch} · {status.headShortCommit ?? "no HEAD"} · {status.isDirty ? `${status.entries.length} changes` : "clean"}</small>
     </div>
 
-    <div className="git-grid">
-      <article className="git-card git-commit-card">
-        <h3>提交</h3>
-        <div className="git-status-line">
-          <span>分支 <b>{currentBranch}</b></span>
-          <span>{status.headShortCommit ?? "no HEAD"}</span>
-          <span>{status.isDirty ? `${status.entries.length} 个改动` : "clean"}</span>
-        </div>
+    <section className="source-control-actions" aria-label="Git 操作">
+      <div className="source-control-toolbar">
+        <button disabled={loading || unstagedEntries.length === 0} onClick={onStageAll} title="全部暂存">＋</button>
+        <button disabled={loading || stagedEntries.length === 0} onClick={onUnstageAll} title="全部取消暂存">−</button>
+        <button disabled={loading} onClick={onCreateBaseline} title="创建协议基线 Tag">🏷</button>
+        <button disabled={loading} onClick={onRunDiff} title="查看版本 Diff">△</button>
+      </div>
+      <div className="source-control-commit">
         <textarea
           aria-label="Git 提交信息"
           value={commitMessage}
-          placeholder="提交信息，类似 VS Code Source Control"
+          placeholder="Message (Ctrl+Enter to commit)"
           onChange={(event) => setCommitMessage(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.ctrlKey && event.key === "Enter" && canCommit) {
+              const message = commitMessage.trim();
+              onCommit(message);
+              setCommitMessage("");
+            }
+          }}
         />
         <button
           className="primary-action"
@@ -4666,11 +4770,9 @@ function GitSourceControlView({
           }}
         >提交暂存更改</button>
         {status.hasConflicts && <p className="git-warning">检测到冲突，请先解决冲突再提交。</p>}
-        <p className="git-hint">提交只允许当前工作区范围内的暂存内容；如果仓库其他目录存在暂存项，会阻止提交，避免误提交。</p>
-      </article>
-
-      <article className="git-card">
-        <h3>分支与基线</h3>
+      </div>
+      <details className="source-control-branches">
+        <summary>分支与基线</summary>
         <label className="git-select-label">
           <span>当前分支</span>
           <select aria-label="Git 分支" value={currentBranch} disabled={loading} onChange={(event) => onCheckoutBranch(event.target.value)}>
@@ -4684,17 +4786,100 @@ function GitSourceControlView({
             setNewBranchName("");
           }}>新建并切换</button>
         </div>
-        <div className="git-baseline-actions">
-          <button className="inline-action" disabled={loading} onClick={onCreateBaseline}>创建协议基线 Tag</button>
-          <button className="inline-action" disabled={loading} onClick={onRunDiff}>查看版本 Diff</button>
-        </div>
         <p className="git-hint">最近 Tag：{status.latestTag ?? tags[0]?.name ?? "暂无"}</p>
-      </article>
+      </details>
+    </section>
 
-      <article className="git-card git-changes-card">
-        <GitChangeList title="暂存的更改" entries={stagedEntries} area="staged" loading={loading} onStagePath={onStagePath} onUnstagePath={onUnstagePath} onOpenFileLocation={onOpenFileLocation} />
-        <GitChangeList title="更改" entries={unstagedEntries} area="unstaged" loading={loading} onStagePath={onStagePath} onUnstagePath={onUnstagePath} onOpenFileLocation={onOpenFileLocation} />
-      </article>
+    <nav className="source-control-changes" aria-label="Git 文件变化">
+      <GitChangeList title="Staged Changes" entries={stagedEntries} area="staged" loading={loading} onStagePath={onStagePath} onUnstagePath={onUnstagePath} onOpenDiff={onOpenDiff} onOpenFileLocation={onOpenFileLocation} />
+      <GitChangeList title="Changes" entries={unstagedEntries} area="unstaged" loading={loading} onStagePath={onStagePath} onUnstagePath={onUnstagePath} onOpenDiff={onOpenDiff} onOpenFileLocation={onOpenFileLocation} />
+    </nav>
+
+    <GitCommitGraphPanel graph={graph} currentBranch={currentBranch} />
+  </section>;
+}
+
+type DiffLine =
+  | { kind: "same"; oldLine: number; newLine: number; oldText: string; newText: string }
+  | { kind: "remove"; oldLine: number; newLine: null; oldText: string; newText: "" }
+  | { kind: "add"; oldLine: null; newLine: number; oldText: ""; newText: string };
+
+function splitDiffLines(content: string): string[] {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  if (lines.length > 1 && lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+function buildLineDiff(oldContent: string, newContent: string): DiffLine[] {
+  const oldLines = splitDiffLines(oldContent);
+  const newLines = splitDiffLines(newContent);
+  const dp: number[][] = Array.from({ length: oldLines.length + 1 }, () => Array<number>(newLines.length + 1).fill(0));
+  for (let i = oldLines.length - 1; i >= 0; i -= 1) {
+    for (let j = newLines.length - 1; j >= 0; j -= 1) {
+      dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const rows: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      rows.push({ kind: "same", oldLine: i + 1, newLine: j + 1, oldText: oldLines[i], newText: newLines[j] });
+      i += 1;
+      j += 1;
+    } else if (j < newLines.length && (i >= oldLines.length || dp[i][j + 1] >= dp[i + 1][j])) {
+      rows.push({ kind: "add", oldLine: null, newLine: j + 1, oldText: "", newText: newLines[j] });
+      j += 1;
+    } else if (i < oldLines.length) {
+      rows.push({ kind: "remove", oldLine: i + 1, newLine: null, oldText: oldLines[i], newText: "" });
+      i += 1;
+    }
+  }
+  return rows;
+}
+
+function GitDiffWorkspace({ tab, diff, loading }: { tab: Extract<WorkspaceTab, { kind: "git-diff" }> | null; diff: GitFileDiff | null; loading: boolean }): React.JSX.Element {
+  if (!tab) {
+    return <section className="git-diff-empty" aria-label="Git 对比">
+      <p className="eyebrow">DIFF EDITOR</p>
+      <h2>从左侧 Changes 中选择一个文件</h2>
+      <p>单击变更文件会在这里打开 Working Tree 或 Index 对比；暂存、提交和版本图都在左侧 Source Control 中完成。</p>
+    </section>;
+  }
+  if (!diff) {
+    return <section className="git-diff-empty" aria-label="Git 对比">
+      <p className="eyebrow">DIFF EDITOR</p>
+      <h2>{loading ? "正在加载对比…" : "尚未加载对比"}</h2>
+      <p>{tab.path}</p>
+    </section>;
+  }
+  return <GitDiffViewer diff={diff} />;
+}
+
+function GitDiffViewer({ diff }: { diff: GitFileDiff }): React.JSX.Element {
+  const rows = React.useMemo(() => buildLineDiff(diff.oldContent, diff.newContent), [diff.oldContent, diff.newContent]);
+  return <section className="git-diff-view" aria-label="Git 文件对比">
+    <header>
+      <div>
+        <p className="eyebrow">{diff.side === "index" ? "INDEX DIFF" : "WORKING TREE DIFF"}</p>
+        <h2>{diff.path}</h2>
+      </div>
+      <span className="git-diff-status">{gitStatusBadgeLabel(gitStatusBadge(diff.status, diff.side === "index" ? "staged" : "unstaged"))}</span>
+    </header>
+    <div className="git-diff-columns" role="table" aria-label={`对比 ${diff.path}`}>
+      <div className="git-diff-column-title">{diff.oldLabel}</div>
+      <div className="git-diff-column-title">{diff.newLabel}</div>
+      {rows.map((row, index) => <React.Fragment key={`${row.kind}:${index}:${row.oldLine ?? ""}:${row.newLine ?? ""}`}>
+        <div className={`git-diff-line old ${row.kind}`}>
+          <span className="line-number">{row.oldLine ?? ""}</span>
+          <code>{row.oldText || " "}</code>
+        </div>
+        <div className={`git-diff-line new ${row.kind}`}>
+          <span className="line-number">{row.newLine ?? ""}</span>
+          <code>{row.newText || " "}</code>
+        </div>
+      </React.Fragment>)}
     </div>
   </section>;
 }

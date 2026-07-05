@@ -23,6 +23,7 @@ describe("assistant knowledge routing", () => {
     }, modules);
 
     expect(prompt).toContain("左侧工作栏 → 源代码管理");
+    expect(prompt).toContain("左侧 Source Control");
     expect(prompt).toContain("提交暂存更改");
   });
 

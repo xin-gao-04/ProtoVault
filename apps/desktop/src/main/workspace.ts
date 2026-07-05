@@ -40,6 +40,9 @@ import type {
   GitCheckoutBranchInput,
   GitCommitInput,
   GitCreateBranchInput,
+  GitCommitGraphEntry,
+  GitDiffInput,
+  GitFileDiff,
   GitOperationResult,
   GitPathInput,
   GitSemanticDiffInput,
@@ -1773,12 +1776,12 @@ function safeReportId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "network-flow";
 }
 
-async function git(root: string, args: string[], options?: { allowFailure?: false }): Promise<string>;
-async function git(root: string, args: string[], options: { allowFailure: true }): Promise<string | null>;
-async function git(root: string, args: string[], options?: { allowFailure?: boolean }): Promise<string | null> {
+async function git(root: string, args: string[], options?: { allowFailure?: false; trim?: boolean }): Promise<string>;
+async function git(root: string, args: string[], options: { allowFailure: true; trim?: boolean }): Promise<string | null>;
+async function git(root: string, args: string[], options?: { allowFailure?: boolean; trim?: boolean }): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true });
-    return stdout.trim();
+    return options?.trim === false ? stdout.replace(/\r?\n$/, "") : stdout.trim();
   } catch (error) {
     if (options?.allowFailure) return null;
     const stderr = typeof (error as { stderr?: unknown }).stderr === "string" ? (error as { stderr: string }).stderr.trim() : "";
@@ -1791,11 +1794,21 @@ function normalizeGitPath(value: string): string {
   return value.replaceAll("\\", "/");
 }
 
+function assertGitPathInsideRepository(repositoryRoot: string, path: string): string {
+  const normalized = validateGitRelativePath(path);
+  const target = resolve(repositoryRoot, normalized);
+  const relativePath = relative(repositoryRoot, target);
+  if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error("Git 文件路径必须位于当前仓库内。");
+  }
+  return target;
+}
+
 function parseGitStatusLine(line: string): { indexStatus: string; workingTreeStatus: string; path: string } | null {
   if (!line.trim()) return null;
   const indexStatus = line[0] ?? " ";
   const workingTreeStatus = line[1] ?? " ";
-  const rawPath = line.slice(3).trim();
+  const rawPath = line.slice(2).trim();
   const renamed = rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) ?? rawPath : rawPath;
   return { indexStatus, workingTreeStatus, path: normalizeGitPath(renamed.replace(/^"|"$/g, "")) };
 }
@@ -1807,7 +1820,7 @@ async function gitWorkspacePathspec(root: string, repositoryRoot: string): Promi
 
 function validateGitRelativePath(path: string): string {
   const normalized = normalizeGitPath(path.trim());
-  if (!normalized || normalized.startsWith("../") || normalized === ".." || isAbsolute(normalized)) {
+  if (!normalized || normalized.startsWith("../") || normalized.includes("/../") || normalized === ".." || isAbsolute(normalized)) {
     throw new Error("Git 文件路径必须是当前仓库内的相对路径。");
   }
   return normalized;
@@ -1858,7 +1871,7 @@ export async function getGitStatus(workspaceRoot: string): Promise<GitWorkspaceS
   const currentBranch = await git(repoRoot, ["branch", "--show-current"], { allowFailure: true }) || undefined;
   const headCommit = await git(repoRoot, ["rev-parse", "HEAD"], { allowFailure: true }) || undefined;
   const latestTag = await git(repoRoot, ["describe", "--tags", "--abbrev=0"], { allowFailure: true }) || undefined;
-  const statusOutput = await git(repoRoot, ["status", "--porcelain", "--untracked-files=all", "--", pathspec], { allowFailure: true }) ?? "";
+  const statusOutput = await git(repoRoot, ["status", "--porcelain", "--untracked-files=all", "--", pathspec], { allowFailure: true, trim: false }) ?? "";
   const entries = statusOutput.split(/\r?\n/).map(parseGitStatusLine).filter((entry): entry is GitWorkspaceStatus["entries"][number] => Boolean(entry));
   const hasConflicts = entries.some((entry) => entry.indexStatus === "U" || entry.workingTreeStatus === "U" || ["AA", "DD"].includes(`${entry.indexStatus}${entry.workingTreeStatus}`));
   return {
@@ -1896,6 +1909,77 @@ export async function listGitTags(workspaceRoot: string): Promise<GitTagInfo[]> 
   });
 }
 
+async function readGitRevisionFile(repositoryRoot: string, revision: "HEAD" | ":", path: string): Promise<string> {
+  const normalized = validateGitRelativePath(path);
+  const spec = revision === ":" ? `:${normalized}` : `${revision}:${normalized}`;
+  return await git(repositoryRoot, ["show", spec], { allowFailure: true, trim: false }) ?? "";
+}
+
+async function readGitWorkingTreeFile(repositoryRoot: string, path: string): Promise<string> {
+  const target = assertGitPathInsideRepository(repositoryRoot, path);
+  return await fs.readFile(target, "utf8").catch(() => "");
+}
+
+async function getGitStatusEntryForPath(workspaceRoot: string, path: string): Promise<GitWorkspaceStatus["entries"][number]> {
+  const status = await assertGitRepository(workspaceRoot);
+  const normalized = validateGitRelativePath(path);
+  const entry = status.entries.find((item) => item.path === normalized);
+  if (entry) return entry;
+  const fullStatusOutput = await git(status.repositoryRoot!, ["status", "--porcelain", "--untracked-files=all", "--", normalized], { allowFailure: true, trim: false }) ?? "";
+  const parsed = fullStatusOutput.split(/\r?\n/).map(parseGitStatusLine).find((item): item is GitWorkspaceStatus["entries"][number] => Boolean(item));
+  return parsed ?? { path: normalized, indexStatus: " ", workingTreeStatus: " " };
+}
+
+export async function getGitFileDiff(input: GitDiffInput): Promise<GitFileDiff> {
+  const status = await assertGitRepository(input.workspaceRoot);
+  const path = validateGitRelativePath(input.path);
+  const entry = await getGitStatusEntryForPath(input.workspaceRoot, path);
+  const isIndexSide = input.side === "index";
+  const baseContent = isIndexSide
+    ? await readGitRevisionFile(status.repositoryRoot!, "HEAD", path)
+    : isStagedGitEntry(entry)
+      ? await readGitRevisionFile(status.repositoryRoot!, ":", path)
+      : await readGitRevisionFile(status.repositoryRoot!, "HEAD", path);
+  const nextContent = isIndexSide
+    ? entry.indexStatus === "D" ? "" : await readGitRevisionFile(status.repositoryRoot!, ":", path)
+    : entry.workingTreeStatus === "D" ? "" : await readGitWorkingTreeFile(status.repositoryRoot!, path);
+  return {
+    path,
+    side: input.side,
+    status: entry,
+    oldLabel: isIndexSide ? "HEAD" : isStagedGitEntry(entry) ? "Index" : "HEAD",
+    newLabel: isIndexSide ? "Index" : "Working Tree",
+    oldContent: baseContent,
+    newContent: nextContent,
+    binary: false
+  };
+}
+
+export async function listGitCommitGraph(workspaceRoot: string, limit = 40): Promise<GitCommitGraphEntry[]> {
+  const status = await getGitStatus(workspaceRoot);
+  if (!status.isRepository || !status.repositoryRoot) return [];
+  const safeLimit = String(Math.max(1, Math.min(100, Math.floor(limit))));
+  const output = await git(status.repositoryRoot, [
+    "log",
+    `-${safeLimit}`,
+    "--date=relative",
+    "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%cr%x1f%D"
+  ], { allowFailure: true }) ?? "";
+  return output.split(/\r?\n/).filter(Boolean).map((line): GitCommitGraphEntry => {
+    const [hash = "", shortHash = "", subject = "", author = "", relativeDate = "", refsRaw = ""] = line.split("\x1f");
+    const refs = refsRaw.split(",").map((ref) => ref.trim()).filter(Boolean);
+    return {
+      hash,
+      shortHash,
+      subject,
+      author,
+      relativeDate,
+      refs,
+      current: status.headCommit === hash
+    };
+  });
+}
+
 export async function stageGitPath(input: GitPathInput): Promise<GitOperationResult> {
   const status = await assertGitRepository(input.workspaceRoot);
   const path = validateGitRelativePath(input.path);
@@ -1930,7 +2014,7 @@ export async function commitGitWorkspace(input: GitCommitInput): Promise<GitOper
   const stagedEntries = status.entries.filter(isStagedGitEntry);
   if (stagedEntries.length === 0) throw new Error("没有暂存的改动。请先暂存文件再提交。");
 
-  const fullStatusOutput = await git(status.repositoryRoot!, ["status", "--porcelain", "--untracked-files=all"], { allowFailure: true }) ?? "";
+  const fullStatusOutput = await git(status.repositoryRoot!, ["status", "--porcelain", "--untracked-files=all"], { allowFailure: true, trim: false }) ?? "";
   const fullEntries = fullStatusOutput.split(/\r?\n/).map(parseGitStatusLine).filter((entry): entry is GitWorkspaceStatus["entries"][number] => Boolean(entry));
   const workspacePathspec = status.workspaceRelativePath ?? ".";
   const stagedOutsideWorkspace = fullEntries.filter((entry) => isStagedGitEntry(entry) && !isGitPathInsidePathspec(entry.path, workspacePathspec));

@@ -2,6 +2,57 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-05 P16 Loop 2：VS Code 式 Source Control 重构
+
+### 目标
+
+把上一轮“中间 Git 页面”调整为更接近 VS Code 的 SCM 体验：左侧 Source Control 管变更和操作，左侧下方展示版本流程图，中间 tab 打开当前文件 diff。
+
+### 基线状态
+
+- 当前提交：`c7d11eb feat: add git source control view`。
+- P16 Loop 1 已有 stage / unstage / commit / branch 的主流程。
+- 用户反馈布局心智不对：Source Control 不应该是普通中心页，而应该是左侧工作栏内容；文件对比应在中间 tab。
+
+### 行动
+
+- 将 `源代码管理 / Git` 改为左侧 Navigator 模式。
+- 将 commit、stage、unstage、branch、baseline、diff 快捷操作集中到左侧 Source Control。
+- 将 Staged Changes / Changes 做成左侧文件树；点击文件打开中间 diff tab。
+- 新增 Git Diff tab，支持 Working Tree / Index 两类对比。
+- 新增 Git commit graph 读取和左侧 Graph 展示。
+- 修复 Git porcelain status 输出被 `.trim()` 吃掉行首空格的问题，避免 staged / unstaged 误判。
+- 更新 E2E，覆盖左侧 Source Control、Graph 和中间 Git 文件对比。
+
+### 验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm --filter @protovault/desktop build
+pnpm --filter @protovault/desktop test:e2e
+pnpm release:check
+```
+
+结果：
+
+- desktop typecheck：通过。
+- desktop unit：4 个测试文件、26 个测试通过。
+- desktop build：通过。
+- Electron E2E：1 个测试通过，覆盖 Source Control 左栏、Graph 区域和中间 Git 文件对比。
+- 完整 `pnpm release:check`：通过，包含 contracts、desktop、Electron E2E 和 C++ core 配置/构建/CTest。
+
+### 下一轮
+
+建议进入 P16 Loop 3：
+
+1. hunk/line 级 diff 与暂存。
+2. discard change 的安全确认和恢复机制。
+3. fetch/pull/push 与远端认证。
+4. commit graph 多分支 lane 和点击 commit 查看变更列表。
+
 ## 2026-07-05 P16 Loop 1：Git Source Control 前端集成
 
 ### 目标

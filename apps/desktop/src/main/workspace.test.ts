@@ -31,7 +31,9 @@ import {
   diffProtocolBaseline,
   generateNetworkReport,
   generateProtocolDocument,
+  getGitFileDiff,
   getGitStatus,
+  listGitCommitGraph,
   listGitTags,
   lintWorkspace,
   renameEnum,
@@ -1124,10 +1126,16 @@ enum class PacketKind {
       let result = await stageGitPath({ workspaceRoot: root, path: "headers/protocol.hpp" });
       status = result.status;
       expect(status.entries.find((entry) => entry.path === "headers/protocol.hpp")?.indexStatus).toBe("A");
+      let fileDiff = await getGitFileDiff({ workspaceRoot: root, path: "headers/protocol.hpp", side: "index" });
+      expect(fileDiff.oldContent).toBe("");
+      expect(fileDiff.newContent).toContain("struct Packet");
 
       result = await unstageGitPath({ workspaceRoot: root, path: "headers/protocol.hpp" });
       status = result.status;
       expect(status.entries.find((entry) => entry.path === "headers/protocol.hpp")?.indexStatus).toBe("?");
+      fileDiff = await getGitFileDiff({ workspaceRoot: root, path: "headers/protocol.hpp", side: "working-tree" });
+      expect(fileDiff.oldContent).toBe("");
+      expect(fileDiff.newContent).toContain("struct Packet");
 
       result = await stageGitWorkspace({ workspaceRoot: root });
       expect(result.status.entries.find((entry) => entry.path === "headers/protocol.hpp")?.indexStatus).toBe("A");
@@ -1139,7 +1147,19 @@ enum class PacketKind {
       await expect(commitGitWorkspace({ workspaceRoot: root, message: "" })).rejects.toThrow("提交信息不能为空");
       result = await commitGitWorkspace({ workspaceRoot: root, message: "add protocol header" });
       expect(result.status.isDirty).toBe(false);
+      const graph = await listGitCommitGraph(root);
+      expect(graph[0]?.subject).toBe("add protocol header");
+      expect(graph[0]?.current).toBe(true);
       const baseBranch = result.status.currentBranch ?? "master";
+
+      await writeFile(resolve(root, "headers", "protocol.hpp"), "#pragma once\nstruct Packet { int changed; };\n", "utf8");
+      status = await getGitStatus(root);
+      const modifiedEntry = status.entries.find((entry) => entry.path === "headers/protocol.hpp");
+      expect(`${modifiedEntry?.indexStatus ?? ""}${modifiedEntry?.workingTreeStatus ?? ""}`).toContain("M");
+      fileDiff = await getGitFileDiff({ workspaceRoot: root, path: "headers/protocol.hpp", side: "working-tree" });
+      expect(fileDiff.oldContent).toContain("int value");
+      expect(fileDiff.newContent).toContain("int changed");
+      await writeFile(resolve(root, "headers", "protocol.hpp"), "#pragma once\nstruct Packet { int value; };\n", "utf8");
 
       result = await createGitBranch({ workspaceRoot: root, branchName: "feature/git-panel", checkout: true });
       expect(result.status.currentBranch).toBe("feature/git-panel");

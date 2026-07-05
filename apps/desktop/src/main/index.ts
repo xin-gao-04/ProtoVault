@@ -30,6 +30,7 @@ import type {
   GitCheckoutBranchInput,
   GitCommitInput,
   GitCreateBranchInput,
+  GitDiffInput,
   GitPathInput,
   GitSemanticDiffInput,
   GitWorkspaceInput,
@@ -94,7 +95,9 @@ import {
   updateHeaderIncludes,
   updateNote,
   getGitStatus,
+  getGitFileDiff,
   listGitBranches,
+  listGitCommitGraph,
   listGitTags,
   stageGitPath,
   stageGitWorkspace,
@@ -333,6 +336,8 @@ app.whenReady().then(() => {
   ipcMain.handle("git:status", (_event, workspaceRoot: string) => getGitStatus(workspaceRoot));
   ipcMain.handle("git:branches", (_event, workspaceRoot: string) => listGitBranches(workspaceRoot));
   ipcMain.handle("git:tags", (_event, workspaceRoot: string) => listGitTags(workspaceRoot));
+  ipcMain.handle("git:commit-graph", (_event, workspaceRoot: string) => listGitCommitGraph(workspaceRoot));
+  ipcMain.handle("git:diff-file", (_event, input: GitDiffInput) => getGitFileDiff(input));
   ipcMain.handle("git:stage-path", (_event, input: GitPathInput) => stageGitPath(input));
   ipcMain.handle("git:unstage-path", (_event, input: GitPathInput) => unstageGitPath(input));
   ipcMain.handle("git:stage-workspace", (_event, input: GitWorkspaceInput) => stageGitWorkspace(input));

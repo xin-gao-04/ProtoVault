@@ -201,9 +201,15 @@ export interface GitTagInfo {
   createdAt?: string;
 }
 
+export type GitDiffSide = "working-tree" | "index";
+
 export interface GitPathInput {
   workspaceRoot: string;
   path: string;
+}
+
+export interface GitDiffInput extends GitPathInput {
+  side: GitDiffSide;
 }
 
 export interface GitWorkspaceInput {
@@ -224,6 +230,27 @@ export interface GitCreateBranchInput {
   workspaceRoot: string;
   branchName: string;
   checkout?: boolean;
+}
+
+export interface GitFileDiff {
+  path: string;
+  side: GitDiffSide;
+  status: GitStatusEntry;
+  oldLabel: string;
+  newLabel: string;
+  oldContent: string;
+  newContent: string;
+  binary: boolean;
+}
+
+export interface GitCommitGraphEntry {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author?: string;
+  relativeDate?: string;
+  refs: string[];
+  current: boolean;
 }
 
 export interface GitOperationResult {

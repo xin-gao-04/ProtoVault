@@ -26,7 +26,10 @@ import type {
   GitBranchInfo,
   GitCheckoutBranchInput,
   GitCommitInput,
+  GitCommitGraphEntry,
   GitCreateBranchInput,
+  GitDiffInput,
+  GitFileDiff,
   GitOperationResult,
   GitPathInput,
   GitSemanticDiffInput,
@@ -100,6 +103,8 @@ export interface ProtoVaultDesktopApi {
   gitStatus(workspaceRoot: string): Promise<GitWorkspaceStatus>;
   gitBranches(workspaceRoot: string): Promise<GitBranchInfo[]>;
   gitTags(workspaceRoot: string): Promise<GitTagInfo[]>;
+  gitCommitGraph(workspaceRoot: string): Promise<GitCommitGraphEntry[]>;
+  gitFileDiff(input: GitDiffInput): Promise<GitFileDiff>;
   stageGitPath(input: GitPathInput): Promise<GitOperationResult>;
   unstageGitPath(input: GitPathInput): Promise<GitOperationResult>;
   stageGitWorkspace(input: GitWorkspaceInput): Promise<GitOperationResult>;
@@ -167,6 +172,8 @@ contextBridge.exposeInMainWorld("protoVault", {
   gitStatus: (workspaceRoot) => ipcRenderer.invoke("git:status", workspaceRoot),
   gitBranches: (workspaceRoot) => ipcRenderer.invoke("git:branches", workspaceRoot),
   gitTags: (workspaceRoot) => ipcRenderer.invoke("git:tags", workspaceRoot),
+  gitCommitGraph: (workspaceRoot) => ipcRenderer.invoke("git:commit-graph", workspaceRoot),
+  gitFileDiff: (input) => ipcRenderer.invoke("git:diff-file", input),
   stageGitPath: (input) => ipcRenderer.invoke("git:stage-path", input),
   unstageGitPath: (input) => ipcRenderer.invoke("git:unstage-path", input),
   stageGitWorkspace: (input) => ipcRenderer.invoke("git:stage-workspace", input),
