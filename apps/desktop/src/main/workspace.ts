@@ -37,6 +37,7 @@ import type {
   GenerateNetworkReportInput,
   GeneratedDocumentReport,
   GitBranchInfo,
+  GitCommitFileChange,
   GitCheckoutBranchInput,
   GitCommitInput,
   GitCreateBranchInput,
@@ -89,13 +90,18 @@ import type {
 const execFileAsync = promisify(execFile);
 const HEADER_EXTENSIONS = new Set([".h", ".hh", ".hpp", ".hxx"]);
 const IGNORED_DIRECTORY_NAMES = new Set([
+  ".cache",
   ".git",
   ".protocol",
+  ".vs",
   "coverage",
+  "debug",
   "dist",
+  "obj",
   "node_modules",
   "out",
   "playwright-report",
+  "release",
   "test-results"
 ]);
 
@@ -183,7 +189,23 @@ interface WorkspaceDiscovery {
 }
 
 function shouldSkipDirectory(name: string): boolean {
-  return IGNORED_DIRECTORY_NAMES.has(name) || name.startsWith("build");
+  const normalized = name.toLowerCase();
+  return IGNORED_DIRECTORY_NAMES.has(normalized) || normalized.startsWith("build") || normalized.startsWith("cmake-build");
+}
+
+function includeRootsForHeaders(root: string, headers: string[]): string[] {
+  const uniqueRoots = new Set<string>([root]);
+  for (const header of headers) {
+    let current = dirname(header);
+    while (isInsideWorkspace(current, root)) {
+      uniqueRoots.add(current);
+      if (current === root) break;
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  return [...uniqueRoots].sort((a, b) => a.localeCompare(b));
 }
 
 async function discoverWorkspace(root: string): Promise<WorkspaceDiscovery> {
@@ -1317,7 +1339,7 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
   } else {
     try {
       const clang = await findClang();
-      const includeRoots = [root, ...discovery.directories];
+      const includeRoots = includeRootsForHeaders(root, headers);
       scanner = `Clang AST · ${clang}`;
       emitProgress(options, { phase: "parse", message: "正在启动 Clang AST 扫描…", current: 0, total: headers.length });
       let parsedHeaders = 0;
@@ -1826,6 +1848,14 @@ function validateGitRelativePath(path: string): string {
   return normalized;
 }
 
+function validateGitCommitHash(value: string): string {
+  const hash = value.trim();
+  if (!/^[0-9a-fA-F]{7,40}$/.test(hash)) {
+    throw new Error("Git 提交版本必须是有效的 commit hash。");
+  }
+  return hash;
+}
+
 function isStagedGitEntry(entry: GitWorkspaceStatus["entries"][number]): boolean {
   return entry.indexStatus.trim() !== "" && entry.indexStatus !== "?";
 }
@@ -1909,7 +1939,7 @@ export async function listGitTags(workspaceRoot: string): Promise<GitTagInfo[]> 
   });
 }
 
-async function readGitRevisionFile(repositoryRoot: string, revision: "HEAD" | ":", path: string): Promise<string> {
+async function readGitRevisionFile(repositoryRoot: string, revision: string | ":", path: string): Promise<string> {
   const normalized = validateGitRelativePath(path);
   const spec = revision === ":" ? `:${normalized}` : `${revision}:${normalized}`;
   return await git(repositoryRoot, ["show", spec], { allowFailure: true, trim: false }) ?? "";
@@ -1930,7 +1960,75 @@ async function getGitStatusEntryForPath(workspaceRoot: string, path: string): Pr
   return parsed ?? { path: normalized, indexStatus: " ", workingTreeStatus: " " };
 }
 
+function parseGitCommitFileChange(line: string): GitCommitFileChange | null {
+  if (!line.trim()) return null;
+  const parts = line.split("\t");
+  const rawStatus = parts[0] ?? "";
+  const status = rawStatus[0] ?? "M";
+  if ((status === "R" || status === "C") && parts.length >= 3) {
+    return {
+      status,
+      oldPath: normalizeGitPath((parts[1] ?? "").replace(/^"|"$/g, "")),
+      path: normalizeGitPath((parts[2] ?? "").replace(/^"|"$/g, ""))
+    };
+  }
+  const path = normalizeGitPath((parts[1] ?? "").replace(/^"|"$/g, ""));
+  return path ? { status, path } : null;
+}
+
+async function listGitCommitFileChanges(repositoryRoot: string, commit: string, pathspec: string): Promise<GitCommitFileChange[]> {
+  const hash = validateGitCommitHash(commit);
+  const output = await git(repositoryRoot, [
+    "diff-tree",
+    "--no-commit-id",
+    "--name-status",
+    "-r",
+    "-M",
+    "--root",
+    hash,
+    "--",
+    pathspec
+  ], { allowFailure: true, trim: false }) ?? "";
+  return output.split(/\r?\n/).map(parseGitCommitFileChange).filter((change): change is GitCommitFileChange => Boolean(change));
+}
+
+async function getGitCommitFileDiff(workspaceRoot: string, path: string, commit: string): Promise<GitFileDiff> {
+  const status = await assertGitRepository(workspaceRoot);
+  const repositoryRoot = status.repositoryRoot!;
+  const hash = validateGitCommitHash(commit);
+  const normalizedPath = validateGitRelativePath(path);
+  const pathspec = status.workspaceRelativePath ?? ".";
+  const changes = await listGitCommitFileChanges(repositoryRoot, hash, pathspec);
+  const change = changes.find((item) => item.path === normalizedPath || item.oldPath === normalizedPath);
+  const changeStatus = change?.status ?? "M";
+  const currentPath = change?.path ?? normalizedPath;
+  const oldPath = change?.oldPath ?? currentPath;
+  const parentsLine = await git(repositoryRoot, ["rev-list", "--parents", "-n", "1", hash], { allowFailure: true }) ?? hash;
+  const parent = parentsLine.split(/\s+/)[1];
+  const oldContent = !parent || changeStatus === "A"
+    ? ""
+    : await readGitRevisionFile(repositoryRoot, parent, oldPath);
+  const newContent = changeStatus === "D"
+    ? ""
+    : await readGitRevisionFile(repositoryRoot, hash, currentPath);
+  return {
+    path: currentPath,
+    side: "commit",
+    commit: hash,
+    status: { path: currentPath, indexStatus: changeStatus, workingTreeStatus: " " },
+    oldLabel: parent ? `${parent.slice(0, 7)}:${oldPath}` : "empty",
+    newLabel: `${hash.slice(0, 7)}:${currentPath}`,
+    oldContent,
+    newContent,
+    binary: false
+  };
+}
+
 export async function getGitFileDiff(input: GitDiffInput): Promise<GitFileDiff> {
+  if (input.side === "commit") {
+    if (!input.commit) throw new Error("打开历史提交 Diff 需要 commit hash。");
+    return getGitCommitFileDiff(input.workspaceRoot, input.path, input.commit);
+  }
   const status = await assertGitRepository(input.workspaceRoot);
   const path = validateGitRelativePath(input.path);
   const entry = await getGitStatusEntryForPath(input.workspaceRoot, path);
@@ -1946,6 +2044,7 @@ export async function getGitFileDiff(input: GitDiffInput): Promise<GitFileDiff> 
   return {
     path,
     side: input.side,
+    commit: undefined,
     status: entry,
     oldLabel: isIndexSide ? "HEAD" : isStagedGitEntry(entry) ? "Index" : "HEAD",
     newLabel: isIndexSide ? "Index" : "Working Tree",
@@ -1959,15 +2058,19 @@ export async function listGitCommitGraph(workspaceRoot: string, limit = 40): Pro
   const status = await getGitStatus(workspaceRoot);
   if (!status.isRepository || !status.repositoryRoot) return [];
   const safeLimit = String(Math.max(1, Math.min(100, Math.floor(limit))));
+  const pathspec = status.workspaceRelativePath ?? ".";
   const output = await git(status.repositoryRoot, [
     "log",
     `-${safeLimit}`,
     "--date=relative",
-    "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%cr%x1f%D"
+    "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%cr%x1f%D",
+    "--",
+    pathspec
   ], { allowFailure: true }) ?? "";
-  return output.split(/\r?\n/).filter(Boolean).map((line): GitCommitGraphEntry => {
+  const commits = await Promise.all(output.split(/\r?\n/).filter(Boolean).map(async (line): Promise<GitCommitGraphEntry> => {
     const [hash = "", shortHash = "", subject = "", author = "", relativeDate = "", refsRaw = ""] = line.split("\x1f");
     const refs = refsRaw.split(",").map((ref) => ref.trim()).filter(Boolean);
+    const changes = await listGitCommitFileChanges(status.repositoryRoot!, hash, pathspec);
     return {
       hash,
       shortHash,
@@ -1975,9 +2078,12 @@ export async function listGitCommitGraph(workspaceRoot: string, limit = 40): Pro
       author,
       relativeDate,
       refs,
-      current: status.headCommit === hash
+      current: status.headCommit === hash,
+      changeCount: changes.length,
+      changes
     };
-  });
+  }));
+  return commits;
 }
 
 export async function stageGitPath(input: GitPathInput): Promise<GitOperationResult> {

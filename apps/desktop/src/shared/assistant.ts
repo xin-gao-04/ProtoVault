@@ -198,6 +198,8 @@ ProtoVault 使用 Git 分支和 Tag 表达协议演进，不再使用孤立的 .
 分支表示实验线、任务线或发布维护线；Tag 表示一次可追溯的协议基线。
 左侧工作栏提供“源代码管理 / Git”入口，形式模仿 VS Code Source Control：点击后左侧 Navigator 显示提交框、Staged Changes、Changes、操作按钮和底部 Graph。
 点击 Changes 中的文件会在中间以 Diff tab 打开 Working Tree 或 Index 对比。
+底部 Graph 只展示当前工作区相关提交；提交节点可展开，子节点是该提交修改过的文件，点击文件会在中间打开 Commit Diff。
+Graph 顶部支持搜索提交、hash、作者、ref 和文件路径；点击提交节点会在右侧 Git 摘要中显示选中提交详情，右侧文件列表也可以打开 Commit Diff。
 Git 状态摘要仍显示在左侧底部工作区栏；协议治理入口仍在顶部工作栏的“基线 Tag”和“版本 Diff”按钮。
 提交版本的界面路径：左侧工作栏 → 源代码管理 → 在左侧 Source Control 暂存文件或全部暂存 → 填写 Git 提交信息 → 点击“提交暂存更改”。
 创建基线 Tag 前必须满足：当前路径属于 Git 仓库、无冲突、当前工作区无未提交改动、Tag 名称不存在。

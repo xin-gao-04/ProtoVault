@@ -10,6 +10,8 @@
     "test:e2e": "pnpm --filter @protovault/desktop build && pnpm --filter @protovault/desktop test:e2e",
     "typecheck": "pnpm -r typecheck",
     "release:check": "pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e && pnpm core:configure && pnpm core:build && pnpm core:test",
+    "release:installer": "pnpm --filter @protovault/desktop dist",
+    "release:windows": "pnpm --filter @protovault/desktop dist",
     "core:configure": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 configure",
     "core:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 build",
     "core:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 test",

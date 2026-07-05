@@ -47,7 +47,7 @@ type WorkspaceAction = "create-header" | "create-struct" | "create-enum" | "edit
 type WorkspaceTab =
   | { id: string; kind: "file"; title: string; filePath: string }
   | { id: string; kind: "type"; title: string; typeId: string }
-  | { id: string; kind: "git-diff"; title: string; path: string; side: GitDiffSide };
+  | { id: string; kind: "git-diff"; title: string; path: string; side: GitDiffSide; commit?: string };
 type TabContextMenuState = { x: number; y: number; tab: WorkspaceTab; orderedTabs: WorkspaceTab[] };
 type FieldTypeOption = { group: "composite" | "base"; value: string; label: string; detail?: string };
 type DirtyStructuralEdit =
@@ -71,6 +71,18 @@ type WorkspaceReportState =
   | { kind: "document"; report: GeneratedDocumentReport }
   | { kind: "baseline"; report: ProtocolBaselineSummary }
   | { kind: "diff"; report: SemanticDiffReport };
+type ConfirmDialogState = {
+  title: string;
+  message: string;
+  detail?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+};
+type PromptDialogState = ConfirmDialogState & {
+  initialValue: string;
+  placeholder?: string;
+};
 type ContextMenuState = {
   x: number;
   y: number;
@@ -155,6 +167,7 @@ function App(): React.JSX.Element {
   const [gitTags, setGitTags] = React.useState<GitTagInfo[]>([]);
   const [gitCommitGraph, setGitCommitGraph] = React.useState<GitCommitGraphEntry[]>([]);
   const [gitDiffs, setGitDiffs] = React.useState<Record<string, GitFileDiff>>({});
+  const [selectedGitCommitHash, setSelectedGitCommitHash] = React.useState<string | null>(null);
   const [selectedTypeId, setSelectedTypeId] = React.useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = React.useState<string | null>(null);
@@ -169,6 +182,8 @@ function App(): React.JSX.Element {
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [confirmDialog, setConfirmDialog] = React.useState<ConfirmDialogState | null>(null);
+  const [promptDialog, setPromptDialog] = React.useState<PromptDialogState | null>(null);
   const [appThemeId, setAppThemeId] = React.useState<AppThemeId>(() => {
     const stored = window.localStorage.getItem("protovault:app-theme");
     return APP_THEMES.some((theme) => theme.id === stored) ? stored as AppThemeId : "tokyo";
@@ -211,11 +226,17 @@ function App(): React.JSX.Element {
   const lastNavigationSnapshotRef = React.useRef<NavigationSnapshot | null>(null);
   const currentNavigationSnapshotRef = React.useRef<NavigationSnapshot | null>(null);
   const restoringNavigationRef = React.useRef(false);
+  const confirmResolverRef = React.useRef<((value: boolean) => void) | null>(null);
+  const promptResolverRef = React.useRef<((value: string | null) => void) | null>(null);
   const [graphInspectorState, setGraphInspectorState] = React.useState<{ graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] }; selectedNodeId: string | null } | null>(null);
   const selectedType = workspace?.types.find((type) => type.id === selectedTypeId);
   const selectedFile = workspace?.files.find((file) => file.path === selectedFilePath);
   const activeWorkspaceTab = tabs.find((tab) => tab.id === activeTabId) ?? (previewTab?.id === activeTabId ? previewTab : null);
   const activeGitDiff = activeWorkspaceTab?.kind === "git-diff" ? gitDiffs[activeWorkspaceTab.id] ?? null : null;
+  const selectedGitCommit = React.useMemo(() => {
+    if (!gitCommitGraph.length) return null;
+    return gitCommitGraph.find((commit) => commit.hash === selectedGitCommitHash) ?? gitCommitGraph[0] ?? null;
+  }, [gitCommitGraph, selectedGitCommitHash]);
   const selectedField = selectedType?.fields.find((field) => field.id === selectedMemberId);
   const selectedEnumValue = selectedType?.values.find((value) => value.id === selectedMemberId);
   const selectedNoteTarget = selectedField
@@ -392,6 +413,7 @@ function App(): React.JSX.Element {
       setGitTags([]);
       setGitCommitGraph([]);
       setGitDiffs({});
+      setSelectedGitCommitHash(null);
       return;
     }
     let cancelled = false;
@@ -407,6 +429,7 @@ function App(): React.JSX.Element {
         setGitBranches(branches);
         setGitTags(tags);
         setGitCommitGraph(graph);
+        setSelectedGitCommitHash((current) => graph.some((commit) => commit.hash === current) ? current : graph[0]?.hash ?? null);
       })
       .catch(() => {
         if (cancelled) return;
@@ -419,6 +442,7 @@ function App(): React.JSX.Element {
         setGitBranches([]);
         setGitTags([]);
         setGitCommitGraph([]);
+        setSelectedGitCommitHash(null);
       });
     return () => { cancelled = true; };
   }, [workspace?.rootPath, workspace?.files.length, workspace?.types.length, workspace?.network.updatedAt]);
@@ -555,6 +579,34 @@ function App(): React.JSX.Element {
     }
   }
 
+  function requestConfirm(dialog: ConfirmDialogState): Promise<boolean> {
+    return new Promise((resolve) => {
+      confirmResolverRef.current?.(false);
+      confirmResolverRef.current = resolve;
+      setConfirmDialog(dialog);
+    });
+  }
+
+  function resolveConfirmDialog(value: boolean): void {
+    confirmResolverRef.current?.(value);
+    confirmResolverRef.current = null;
+    setConfirmDialog(null);
+  }
+
+  function requestPrompt(dialog: PromptDialogState): Promise<string | null> {
+    return new Promise((resolve) => {
+      promptResolverRef.current?.(null);
+      promptResolverRef.current = resolve;
+      setPromptDialog(dialog);
+    });
+  }
+
+  function resolvePromptDialog(value: string | null): void {
+    promptResolverRef.current?.(value);
+    promptResolverRef.current = null;
+    setPromptDialog(null);
+  }
+
   async function refreshGitState(): Promise<void> {
     if (!workspace) return;
     const [status, branches, tags, graph] = await Promise.all([
@@ -567,6 +619,7 @@ function App(): React.JSX.Element {
     setGitBranches(branches);
     setGitTags(tags);
     setGitCommitGraph(graph);
+    setSelectedGitCommitHash((current) => graph.some((commit) => commit.hash === current) ? current : graph[0]?.hash ?? null);
   }
 
   function applyGitOperationResult(result: GitOperationResult): void {
@@ -740,12 +793,24 @@ function App(): React.JSX.Element {
   }
 
   async function deleteFieldWithConfirm(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
-    if (!window.confirm(`确认删除字段？\n${type.name}.${field.name}`)) return;
+    if (!await requestConfirm({
+      title: "删除字段",
+      message: `确认删除字段 ${type.name}.${field.name}？`,
+      detail: "删除会直接改写 Header，保存前会执行受控写入和重新扫描。",
+      confirmLabel: "删除字段",
+      danger: true
+    })) return;
     await deleteFieldInline(type, field);
   }
 
   async function deleteEnumValueWithConfirm(type: WorkspaceTypeView, value: WorkspaceEnumValueView): Promise<void> {
-    if (!window.confirm(`确认删除枚举项？\n${type.name}.${value.name}`)) return;
+    if (!await requestConfirm({
+      title: "删除枚举项",
+      message: `确认删除枚举项 ${type.name}.${value.name}？`,
+      detail: "删除后会重新扫描 Header 并刷新枚举表。",
+      confirmLabel: "删除枚举项",
+      danger: true
+    })) return;
     await deleteEnumValueInline(type, value);
   }
 
@@ -911,7 +976,13 @@ function App(): React.JSX.Element {
 
   async function deleteHeaderFromForm(): Promise<void> {
     if (!workspace || !selectedFile) return;
-    if (!window.confirm(`确认删除 Header？\n${selectedFile.relativePath}`)) return;
+    if (!await requestConfirm({
+      title: "删除 Header",
+      message: `确认删除 ${selectedFile.relativePath}？`,
+      detail: "该操作会删除源文件。建议先确认 Git Source Control 中没有误选文件。",
+      confirmLabel: "删除 Header",
+      danger: true
+    })) return;
     await runWorkspaceAction(async () => {
       const result = await window.protoVault.deleteHeader({ workspaceRoot: workspace.rootPath, headerPath: selectedFile.path });
       applyWorkspaceResult(result);
@@ -1010,7 +1081,13 @@ function App(): React.JSX.Element {
         return;
       }
       const suggested = defaultBaselineTagName();
-      const tagName = window.prompt("创建协议基线 Git Tag", suggested)?.trim();
+      const tagName = (await requestPrompt({
+        title: "创建协议基线 Git Tag",
+        message: "为当前干净工作区创建一个可追溯协议基线。",
+        detail: "建议使用 protovault/baseline/... 命名，后续版本 Diff 会默认使用最近基线。",
+        initialValue: suggested,
+        placeholder: "protovault/baseline/..."
+      }))?.trim();
       if (!tagName) return;
       const report = await window.protoVault.createBaselineTag({
         workspaceRoot: workspace.rootPath,
@@ -1058,7 +1135,13 @@ function App(): React.JSX.Element {
 
   async function deleteStructFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "struct") return;
-    if (!window.confirm(`确认删除 struct？\n${selectedType.qualifiedName}`)) return;
+    if (!await requestConfirm({
+      title: "删除 Struct",
+      message: `确认删除 ${selectedType.qualifiedName}？`,
+      detail: "删除结构体可能影响引用它的字段和协议绑定，请先查看关系图谱和 Git Diff。",
+      confirmLabel: "删除 Struct",
+      danger: true
+    })) return;
     await runWorkspaceAction(async () => {
       const result = await window.protoVault.deleteStruct({ workspaceRoot: workspace.rootPath, typeId: selectedType.id });
       applyWorkspaceResult(result);
@@ -1084,7 +1167,13 @@ function App(): React.JSX.Element {
 
   async function deleteEnumFromForm(): Promise<void> {
     if (!workspace || selectedType?.kind !== "enum") return;
-    if (!window.confirm(`确认删除 enum？\n${selectedType.qualifiedName}`)) return;
+    if (!await requestConfirm({
+      title: "删除 Enum",
+      message: `确认删除 ${selectedType.qualifiedName}？`,
+      detail: "删除枚举可能影响引用它的字段，请先查看关系图谱和 Git Diff。",
+      confirmLabel: "删除 Enum",
+      danger: true
+    })) return;
     await runWorkspaceAction(async () => {
       const result = await window.protoVault.deleteEnum({ workspaceRoot: workspace.rootPath, typeId: selectedType.id });
       applyWorkspaceResult(result);
@@ -1096,7 +1185,13 @@ function App(): React.JSX.Element {
   async function deleteTypeWithConfirm(type: WorkspaceTypeView): Promise<void> {
     if (!workspace) return;
     const label = type.kind === "struct" ? "struct" : "enum";
-    if (!window.confirm(`确认删除 ${label}？\n${type.qualifiedName}`)) return;
+    if (!await requestConfirm({
+      title: `删除 ${label}`,
+      message: `确认删除 ${type.qualifiedName}？`,
+      detail: "删除会改写 Header；如果该类型被其他结构引用，后续扫描会产生诊断。",
+      confirmLabel: `删除 ${label}`,
+      danger: true
+    })) return;
     await runWorkspaceAction(async () => {
       const result = type.kind === "struct"
         ? await window.protoVault.deleteStruct({ workspaceRoot: workspace.rootPath, typeId: type.id })
@@ -1567,7 +1662,13 @@ function App(): React.JSX.Element {
 
   async function ensureCanNavigateToTab(nextTabId: string): Promise<boolean> {
     if (!activeTabHasDirtyChanges(nextTabId)) return true;
-    const shouldSave = window.confirm("当前标签页存在未保存改动。\n确定：保存并切换\n取消：留在当前标签页");
+    const shouldSave = await requestConfirm({
+      title: "保存当前标签页？",
+      message: "当前标签页存在未保存改动。",
+      detail: "确认后会先保存当前改动再切换；取消会留在当前标签页。",
+      confirmLabel: "保存并切换",
+      cancelLabel: "留在当前"
+    });
     if (!shouldSave) return false;
     return saveActiveChanges();
   }
@@ -1641,13 +1742,13 @@ function App(): React.JSX.Element {
     return true;
   }
 
-  async function openGitDiffTab(path: string, side: GitDiffSide): Promise<boolean> {
+  async function openGitDiffTab(path: string, side: GitDiffSide, commit?: string): Promise<boolean> {
     if (!workspace) return false;
-    const tab = tabForGitDiff(path, side);
+    const tab = tabForGitDiff(path, side, commit);
     if (!(await ensureCanNavigateToTab(tab.id))) return false;
     setLoading(true);
     try {
-      const diff = await window.protoVault.gitFileDiff({ workspaceRoot: workspace.rootPath, path, side });
+      const diff = await window.protoVault.gitFileDiff({ workspaceRoot: workspace.rootPath, path, side, commit });
       setGitDiffs((current) => ({ ...current, [tab.id]: diff }));
       setTabs((current) => upsertTab(current, tab));
       setPreviewTab((current) => current?.id === tab.id ? null : current);
@@ -1657,7 +1758,7 @@ function App(): React.JSX.Element {
       setSelectedMemberId(null);
       setActiveAction(null);
       setCenterViewMode("git");
-      setUiNotice(`已打开 Git 对比：${path}`);
+      setUiNotice(side === "commit" && commit ? `已打开历史提交对比：${commit.slice(0, 7)} · ${path}` : `已打开 Git 对比：${path}`);
       return true;
     } catch (error) {
       setUiNotice(error instanceof Error ? error.message : String(error));
@@ -1698,12 +1799,19 @@ function App(): React.JSX.Element {
     return left ?? right ?? null;
   }
 
-  function closeTabs(tabIds: string[]): void {
+  async function closeTabs(tabIds: string[]): Promise<void> {
     const uniqueIds = [...new Set(tabIds)];
     if (uniqueIds.length === 0) return;
     const closingIds = new Set(uniqueIds);
     const dirtyCount = uniqueIds.filter((id) => dirtyTabIds.has(id)).length;
-    if (dirtyCount > 0 && !window.confirm(`${dirtyCount} 个标签页存在未保存改动，关闭会丢弃这些改动。确认关闭？`)) return;
+    if (dirtyCount > 0 && !await requestConfirm({
+      title: "关闭未保存标签页？",
+      message: `${dirtyCount} 个标签页存在未保存改动。`,
+      detail: "关闭会丢弃这些标签页的草稿；如果需要写回源文件，请先 Ctrl+S 保存。",
+      confirmLabel: "丢弃并关闭",
+      cancelLabel: "取消",
+      danger: true
+    })) return;
     uniqueIds.forEach(discardDirtyForTab);
 
     const orderedBefore = visibleDocumentTabs();
@@ -1721,7 +1829,7 @@ function App(): React.JSX.Element {
   }
 
   function closeTab(tabId: string): void {
-    closeTabs([tabId]);
+    void closeTabs([tabId]);
   }
 
   async function openFileLocationForTab(tab: WorkspaceTab): Promise<void> {
@@ -1876,6 +1984,9 @@ function App(): React.JSX.Element {
           onCheckoutBranch={(branchName) => void runGitAction(() => window.protoVault.checkoutGitBranch({ workspaceRoot: workspace.rootPath, branchName }))}
           onCreateBranch={(branchName) => void runGitAction(() => window.protoVault.createGitBranch({ workspaceRoot: workspace.rootPath, branchName, checkout: true }))}
           onOpenDiff={(entry, side) => void openGitDiffTab(entry.path, side)}
+          onOpenCommitDiff={(path, commit) => void openGitDiffTab(path, "commit", commit)}
+          selectedCommitHash={selectedGitCommit?.hash ?? null}
+          onSelectCommit={setSelectedGitCommitHash}
           onOpenFileLocation={(entry) => void openGitEntryLocation(gitStatus, entry)}
           onCreateBaseline={() => void createBaselineReport()}
           onRunDiff={() => void runSemanticDiffReport()}
@@ -2047,6 +2158,7 @@ function App(): React.JSX.Element {
           onGenerateFlowReport={(flowViewId) => void generateNetworkReport(flowViewId)}
           onNotice={setUiNotice}
           onOpenProtocolType={(typeId) => void openProtocolTypeById(typeId)}
+          onRequestConfirm={requestConfirm}
         />}
         {workspace && centerViewMode === "git" && <GitDiffWorkspace
           tab={activeWorkspaceTab?.kind === "git-diff" ? activeWorkspaceTab : null}
@@ -2126,6 +2238,7 @@ function App(): React.JSX.Element {
           onLocateMemberInTree={locateMemberInTree}
           onNoteChange={updateNoteDraft}
           onOpenContextMenu={openContextMenu}
+          onRequestConfirm={requestConfirm}
         />}
         {workspace && centerViewMode === "workspace" && selectedFile && <SourceViewer
           file={selectedFile}
@@ -2187,7 +2300,13 @@ function App(): React.JSX.Element {
           <h2>{centerViewMode === "graph" ? "图谱上下文" : centerViewMode === "network" ? "网络摘要" : centerViewMode === "git" ? "Git 摘要" : "属性"}</h2>
         </div>
         {centerViewMode === "network" && workspace ? <NetworkInspector workspace={workspace} />
-          : centerViewMode === "git" && workspace ? <GitInspector status={gitStatus} branches={gitBranches} tags={gitTags} />
+          : centerViewMode === "git" && workspace ? <GitInspector
+          status={gitStatus}
+          branches={gitBranches}
+          tags={gitTags}
+          selectedCommit={selectedGitCommit}
+          onOpenCommitDiff={(path, commit) => void openGitDiffTab(path, "commit", commit)}
+        />
           : centerViewMode === "graph" && workspace && graphContext ? <GraphInspector
           workspace={workspace}
           graph={graphContext}
@@ -2211,6 +2330,16 @@ function App(): React.JSX.Element {
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
         {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
       </aside>
+      {confirmDialog && <ConfirmDialog
+        dialog={confirmDialog}
+        onCancel={() => resolveConfirmDialog(false)}
+        onConfirm={() => resolveConfirmDialog(true)}
+      />}
+      {promptDialog && <PromptDialog
+        dialog={promptDialog}
+        onCancel={() => resolvePromptDialog(null)}
+        onConfirm={(value) => resolvePromptDialog(value)}
+      />}
     </main>
   );
 }
@@ -2467,13 +2596,13 @@ function tabForType(type: WorkspaceTypeView): WorkspaceTab {
   return { id: `type:${type.id}`, kind: "type", title: type.name, typeId: type.id };
 }
 
-function gitDiffTabId(path: string, side: GitDiffSide): string {
-  return `git-diff:${side}:${path}`;
+function gitDiffTabId(path: string, side: GitDiffSide, commit?: string): string {
+  return `git-diff:${side}:${commit ?? "current"}:${path}`;
 }
 
-function tabForGitDiff(path: string, side: GitDiffSide): WorkspaceTab {
-  const suffix = side === "index" ? "Index" : "Working Tree";
-  return { id: gitDiffTabId(path, side), kind: "git-diff", title: `${path.split("/").at(-1) ?? path} (${suffix})`, path, side };
+function tabForGitDiff(path: string, side: GitDiffSide, commit?: string): WorkspaceTab {
+  const suffix = side === "index" ? "Index" : side === "commit" ? `Commit ${commit?.slice(0, 7) ?? ""}` : "Working Tree";
+  return { id: gitDiffTabId(path, side, commit), kind: "git-diff", title: `${path.split("/").at(-1) ?? path} (${suffix})`, path, side, commit };
 }
 
 function buildDirtyTabIds(
@@ -2529,13 +2658,15 @@ function reconcileTabs(tabs: WorkspaceTab[], workspace: WorkspaceView): Workspac
 
 function ScanProgressBar({ progress, active }: { progress: WorkspaceScanProgress; active: boolean }): React.JSX.Element {
   const percent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+  const boundedPercent = Math.min(percent, 100);
   return <div className={active ? "scan-progress active" : "scan-progress"} role="status" aria-label="扫描进度">
     <div className="scan-progress-copy">
       <span>{progress.message}</span>
-      <small>{progress.phase === "done" ? "完成" : `${Math.min(percent, 100)}%`}</small>
+      <small>{progress.phase === "done" ? "完成" : `${boundedPercent}% · ${progress.current}/${progress.total}`}</small>
     </div>
+    {progress.file && <small className="scan-progress-file">{progress.file}</small>}
     <div className="scan-progress-track" aria-hidden="true">
-      <div style={{ width: `${Math.min(percent, 100)}%` }} />
+      <div style={{ width: `${boundedPercent}%` }} />
     </div>
   </div>;
 }
@@ -2557,6 +2688,60 @@ function ExternalChangePanel({ change, onRescan, onDiff, onDismiss }: {
       <button className="inline-action ghost" onClick={onDismiss}>暂不处理</button>
     </div>
   </section>;
+}
+
+function ConfirmDialog({ dialog, onCancel, onConfirm }: {
+  dialog: ConfirmDialogState;
+  onCancel(): void;
+  onConfirm(): void;
+}): React.JSX.Element {
+  return <div className="app-modal-backdrop" role="presentation" onMouseDown={(event) => {
+    if (event.target === event.currentTarget) onCancel();
+  }}>
+    <section className={dialog.danger ? "app-modal danger" : "app-modal"} role="dialog" aria-modal="true" aria-label={dialog.title} onMouseDown={(event) => event.stopPropagation()}>
+      <div className="app-modal-icon" aria-hidden="true">{dialog.danger ? "!" : "✓"}</div>
+      <div className="app-modal-body">
+        <p className="eyebrow">ProtoVault</p>
+        <h2>{dialog.title}</h2>
+        <p>{dialog.message}</p>
+        {dialog.detail && <small>{dialog.detail}</small>}
+      </div>
+      <div className="app-modal-actions">
+        <button className="inline-action ghost" onClick={onCancel}>{dialog.cancelLabel ?? "取消"}</button>
+        <button className={dialog.danger ? "inline-action danger" : "inline-action primary"} autoFocus onClick={onConfirm}>{dialog.confirmLabel ?? "确认"}</button>
+      </div>
+    </section>
+  </div>;
+}
+
+function PromptDialog({ dialog, onCancel, onConfirm }: {
+  dialog: PromptDialogState;
+  onCancel(): void;
+  onConfirm(value: string): void;
+}): React.JSX.Element {
+  const [value, setValue] = React.useState(dialog.initialValue);
+  React.useEffect(() => setValue(dialog.initialValue), [dialog.initialValue]);
+  return <div className="app-modal-backdrop" role="presentation" onMouseDown={(event) => {
+    if (event.target === event.currentTarget) onCancel();
+  }}>
+    <section className="app-modal prompt" role="dialog" aria-modal="true" aria-label={dialog.title} onMouseDown={(event) => event.stopPropagation()}>
+      <div className="app-modal-icon" aria-hidden="true">#</div>
+      <form className="app-modal-body" onSubmit={(event) => {
+        event.preventDefault();
+        onConfirm(value);
+      }}>
+        <p className="eyebrow">ProtoVault</p>
+        <h2>{dialog.title}</h2>
+        <p>{dialog.message}</p>
+        {dialog.detail && <small>{dialog.detail}</small>}
+        <input autoFocus value={value} placeholder={dialog.placeholder} onChange={(event) => setValue(event.target.value)} />
+        <div className="app-modal-actions">
+          <button type="button" className="inline-action ghost" onClick={onCancel}>{dialog.cancelLabel ?? "取消"}</button>
+          <button className="inline-action primary" disabled={!value.trim()}>{dialog.confirmLabel ?? "确认"}</button>
+        </div>
+      </form>
+    </section>
+  </div>;
 }
 
 function TabStrip({ tabs, previewTab, activeTabId, dirtyTabIds, contextMenu, onActivate, onClose, onCloseMany, onOpenContextMenu, onOpenFileLocation }: {
@@ -3151,7 +3336,8 @@ function ProtocolEditor({
   onSelectMember,
   onLocateMemberInTree,
   onNoteChange,
-  onOpenContextMenu
+  onOpenContextMenu,
+  onRequestConfirm
 }: {
   type: WorkspaceTypeView;
   workspaceTypes: WorkspaceTypeView[];
@@ -3171,6 +3357,7 @@ function ProtocolEditor({
   onLocateMemberInTree(type: WorkspaceTypeView, memberId: string): void;
   onNoteChange(targetId: string, value: string, savedValue: string): void;
   onOpenContextMenu(event: React.MouseEvent, target: ContextMenuState["target"]): void;
+  onRequestConfirm(dialog: ConfirmDialogState): Promise<boolean>;
 }): React.JSX.Element {
   const [addingField, setAddingField] = React.useState(false);
   const [editingFieldId, setEditingFieldId] = React.useState<string | null>(null);
@@ -3317,7 +3504,13 @@ function ProtocolEditor({
     if (!editingId) return;
     const dirty = dirtyStructuralEdits[editingId] !== undefined;
     if (dirty) {
-      const shouldSave = window.confirm("当前行存在未保存的结构化更改，是否立即保存？");
+      const shouldSave = await onRequestConfirm({
+        title: "保存当前行？",
+        message: "当前行存在未保存的结构化更改。",
+        detail: "确认后会保存字段或枚举项修改；取消会继续保留编辑状态。",
+        confirmLabel: "保存当前行",
+        cancelLabel: "继续编辑"
+      });
       if (!shouldSave) return;
       const ok = await onSaveStructuralEdit(editingId);
       if (!ok) return;
@@ -3625,7 +3818,7 @@ function networkFlowViewOptions(workspace: WorkspaceView): WorkspaceFlowView[] {
   ];
 }
 
-function NetworkMapView({ workspace, loading, mode, selectedFlowViewId, onModeChange, onSelectedFlowViewChange, onWorkspaceChange, onGenerateFlowReport, onNotice, onOpenProtocolType }: {
+function NetworkMapView({ workspace, loading, mode, selectedFlowViewId, onModeChange, onSelectedFlowViewChange, onWorkspaceChange, onGenerateFlowReport, onNotice, onOpenProtocolType, onRequestConfirm }: {
   workspace: WorkspaceView;
   loading: boolean;
   mode: NetworkTabMode;
@@ -3636,6 +3829,7 @@ function NetworkMapView({ workspace, loading, mode, selectedFlowViewId, onModeCh
   onGenerateFlowReport: (flowViewId: string) => void;
   onNotice: (message: string) => void;
   onOpenProtocolType: (typeId: string) => void;
+  onRequestConfirm(dialog: ConfirmDialogState): Promise<boolean>;
 }): React.JSX.Element {
   const [pending, setPending] = React.useState(false);
   const [editingNodeId, setEditingNodeId] = React.useState<string | null>(null);
@@ -3849,23 +4043,47 @@ function NetworkMapView({ workspace, loading, mode, selectedFlowViewId, onModeCh
   }
 
   async function deleteNode(node: WorkspaceNetworkNodeView): Promise<void> {
-    if (!window.confirm(`确认删除网络节点？\n${node.name}\n关联链路和协议绑定也会被删除。`)) return;
+    if (!await onRequestConfirm({
+      title: "删除网络节点",
+      message: `确认删除网络节点 ${node.name}？`,
+      detail: "关联链路和协议绑定也会被删除。建议先确认数据流画布和报告影响。",
+      confirmLabel: "删除节点",
+      danger: true
+    })) return;
     await run(() => window.protoVault.deleteNetworkNode({ workspaceRoot: workspace.rootPath, nodeId: node.id }), `已删除网络节点：${node.name}`);
   }
 
   async function deleteLink(link: WorkspaceNetworkLinkView): Promise<void> {
-    if (!window.confirm(`确认删除通信链路？\n${link.name}\n链路上的协议绑定也会被删除。`)) return;
+    if (!await onRequestConfirm({
+      title: "删除通信链路",
+      message: `确认删除通信链路 ${link.name}？`,
+      detail: "链路上的协议绑定也会被删除，相关 FlowView 可能不再匹配。",
+      confirmLabel: "删除链路",
+      danger: true
+    })) return;
     await run(() => window.protoVault.deleteNetworkLink({ workspaceRoot: workspace.rootPath, linkId: link.id }), `已删除通信链路：${link.name}`);
   }
 
   async function deleteBinding(binding: WorkspaceProtocolBindingView): Promise<void> {
-    if (!window.confirm(`确认删除协议绑定？\n${binding.name}`)) return;
+    if (!await onRequestConfirm({
+      title: "删除协议绑定",
+      message: `确认删除协议绑定 ${binding.name}？`,
+      detail: "删除后链路吞吐估算和数据流视角会立即更新。",
+      confirmLabel: "删除绑定",
+      danger: true
+    })) return;
     await run(() => window.protoVault.deleteProtocolBinding({ workspaceRoot: workspace.rootPath, bindingId: binding.id }), `已删除协议绑定：${binding.name}`);
   }
 
   async function deleteFlowView(view: WorkspaceFlowView): Promise<void> {
     if (!workspace.network.views.some((item) => item.id === view.id)) return;
-    if (!window.confirm(`确认删除数据流视图？\n${view.name}`)) return;
+    if (!await onRequestConfirm({
+      title: "删除数据流视图",
+      message: `确认删除数据流视图 ${view.name}？`,
+      detail: "这只会删除观察视角，不会删除节点、链路或协议绑定事实。",
+      confirmLabel: "删除视图",
+      danger: true
+    })) return;
     await run(() => window.protoVault.deleteNetworkFlowView({ workspaceRoot: workspace.rootPath, viewId: view.id }), `已删除数据流视图：${view.name}`);
     onSelectedFlowViewChange("derived:all");
     resetFlowViewForm();
@@ -4507,7 +4725,13 @@ function NetworkTable({ title, emptyText, children }: { title: string; emptyText
   </div>;
 }
 
-function GitInspector({ status, branches, tags }: { status: GitWorkspaceStatus | null; branches: GitBranchInfo[]; tags: GitTagInfo[] }): React.JSX.Element {
+function GitInspector({ status, branches, tags, selectedCommit, onOpenCommitDiff }: {
+  status: GitWorkspaceStatus | null;
+  branches: GitBranchInfo[];
+  tags: GitTagInfo[];
+  selectedCommit: GitCommitGraphEntry | null;
+  onOpenCommitDiff(path: string, commit: string): void;
+}): React.JSX.Element {
   if (!status) return <p className="empty">正在读取 Git 状态…</p>;
   if (!status.isRepository) return <p className="empty">{status.message ?? "当前工作区不是 Git 仓库。"}</p>;
   const stagedCount = status.entries.filter(isGitEntryStaged).length;
@@ -4525,6 +4749,28 @@ function GitInspector({ status, branches, tags }: { status: GitWorkspaceStatus |
     <div className="inspector-card">
       <h3>操作习惯</h3>
       <p>在左侧 Git 工作栏中暂存文件、填写提交信息并提交；协议基线 Tag 建议在提交后创建。</p>
+    </div>
+    <div className="inspector-card git-inspector-commit">
+      <h3>选中提交</h3>
+      {selectedCommit ? <>
+        <p><strong>{selectedCommit.subject}</strong></p>
+        <dl>
+          <dt>Commit</dt><dd>{selectedCommit.shortHash}</dd>
+          <dt>作者</dt><dd>{selectedCommit.author ?? "—"}</dd>
+          <dt>时间</dt><dd>{selectedCommit.relativeDate ?? "—"}</dd>
+          <dt>文件</dt><dd>{selectedCommit.changeCount}</dd>
+        </dl>
+        {selectedCommit.refs.length > 0 && <div className="git-ref-row">{selectedCommit.refs.slice(0, 5).map((ref) => <b key={ref}>{ref.replace(/^HEAD -> /, "")}</b>)}</div>}
+        <ul className="git-inspector-files" aria-label="选中提交文件">
+          {selectedCommit.changes.slice(0, 12).map((change) => <li key={`${selectedCommit.hash}:${change.oldPath ?? ""}:${change.path}`}>
+            <button onClick={() => onOpenCommitDiff(change.path, selectedCommit.hash)} title={`${selectedCommit.shortHash} · ${change.path}`}>
+              <b className={`git-badge git-badge-${change.status}`}>{gitCommitChangeStatusLabel(change.status)}</b>
+              <span>{change.path.split("/").at(-1) ?? change.path}</span>
+            </button>
+          </li>)}
+        </ul>
+        {selectedCommit.changes.length > 12 && <p className="git-hint">还有 {selectedCommit.changes.length - 12} 个文件，可在左侧 Graph 展开查看。</p>}
+      </> : <p className="empty">在左侧 Graph 选择一个提交查看历史文件。</p>}
     </div>
   </div>;
 }
@@ -4646,22 +4892,106 @@ function GitChangeList({
   </section>;
 }
 
-function GitCommitGraphPanel({ graph, currentBranch }: { graph: GitCommitGraphEntry[]; currentBranch: string }): React.JSX.Element {
+function gitCommitChangeStatusLabel(status: string): string {
+  if (status === "A") return "A";
+  if (status === "D") return "D";
+  if (status === "R") return "R";
+  if (status === "C") return "C";
+  if (status === "M") return "M";
+  return status || "•";
+}
+
+function GitCommitGraphPanel({ graph, currentBranch, selectedCommitHash, onSelectCommit, onOpenCommitDiff }: {
+  graph: GitCommitGraphEntry[];
+  currentBranch: string;
+  selectedCommitHash: string | null;
+  onSelectCommit(hash: string): void;
+  onOpenCommitDiff(path: string, commit: string): void;
+}): React.JSX.Element {
+  const [expandedCommits, setExpandedCommits] = React.useState<Set<string>>(() => new Set(graph[0]?.hash ? [graph[0].hash] : []));
+  const [query, setQuery] = React.useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredGraph = React.useMemo(() => {
+    if (!normalizedQuery) return graph;
+    return graph.filter((commit) => [
+      commit.hash,
+      commit.shortHash,
+      commit.subject,
+      commit.author ?? "",
+      commit.relativeDate ?? "",
+      ...commit.refs,
+      ...commit.changes.flatMap((change) => [change.path, change.oldPath ?? "", change.status])
+    ].some((value) => value.toLowerCase().includes(normalizedQuery)));
+  }, [graph, normalizedQuery]);
+
+  React.useEffect(() => {
+    setExpandedCommits((current) => {
+      const knownHashes = new Set(graph.map((commit) => commit.hash));
+      const next = new Set([...current].filter((hash) => knownHashes.has(hash)));
+      if (next.size === 0 && graph[0]?.hash) next.add(graph[0].hash);
+      return next;
+    });
+  }, [graph]);
+
+  React.useEffect(() => {
+    if (!normalizedQuery) return;
+    setExpandedCommits((current) => {
+      const next = new Set(current);
+      filteredGraph.forEach((commit) => next.add(commit.hash));
+      return next;
+    });
+  }, [filteredGraph, normalizedQuery]);
+
+  function toggleCommit(hash: string): void {
+    setExpandedCommits((current) => {
+      const next = new Set(current);
+      if (next.has(hash)) next.delete(hash);
+      else next.add(hash);
+      return next;
+    });
+  }
+
   return <section className="git-graph-panel" aria-label="Git 版本流程图">
     <header>
-      <h3>▾ GRAPH</h3>
-      <span>{currentBranch}</span>
+      <div>
+        <h3>▾ GRAPH</h3>
+        <span>{currentBranch} · {filteredGraph.length}/{graph.length}</span>
+      </div>
+      <div className="git-graph-tools">
+        <input aria-label="搜索 Git 历史" value={query} placeholder="搜索历史 / 文件…" onChange={(event) => setQuery(event.target.value)} />
+        <button aria-label="展开全部 Git 提交" title="展开全部" onClick={() => setExpandedCommits(new Set(filteredGraph.map((commit) => commit.hash)))}>＋</button>
+        <button aria-label="收起全部 Git 提交" title="收起全部" onClick={() => setExpandedCommits(new Set())}>−</button>
+      </div>
     </header>
-    {graph.length === 0 ? <p className="git-empty">暂无提交历史</p> : <ol>
-      {graph.map((commit) => <li className={commit.current ? "current" : ""} key={commit.hash}>
+    {graph.length === 0 ? <p className="git-empty">暂无提交历史</p> : filteredGraph.length === 0 ? <p className="git-empty">没有匹配的历史提交</p> : <ol>
+      {filteredGraph.map((commit) => {
+        const expanded = expandedCommits.has(commit.hash);
+        const selected = selectedCommitHash === commit.hash;
+        return <li className={`${commit.current ? "current" : ""}${selected ? " selected" : ""}`} key={commit.hash}>
         <span className="git-graph-line" aria-hidden="true" />
         <span className="git-graph-dot" aria-hidden="true" />
-        <div>
-          <strong>{commit.subject}</strong>
-          <small>{commit.shortHash} · {commit.relativeDate ?? "—"}</small>
+        <div className="git-graph-entry">
+          <button className="git-graph-commit" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}提交 ${commit.shortHash} ${commit.subject}`} onClick={() => {
+            onSelectCommit(commit.hash);
+            toggleCommit(commit.hash);
+          }}>
+            <span className="git-graph-caret">{expanded ? "▾" : "▸"}</span>
+            <span className="git-graph-message">{commit.subject}</span>
+            <small>{commit.shortHash} · {commit.relativeDate ?? "—"} · {commit.changeCount} files</small>
+          </button>
           {commit.refs.length > 0 && <span className="git-ref-row">{commit.refs.slice(0, 3).map((ref) => <b key={ref}>{ref.replace(/^HEAD -> /, "")}</b>)}</span>}
+          {expanded && <ul className="git-graph-changes" aria-label={`${commit.shortHash} 文件修改记录`}>
+            {commit.changes.length === 0 ? <li className="git-graph-empty-file">当前工作区范围内无文件变化</li> : commit.changes.map((change) => <li key={`${commit.hash}:${change.oldPath ?? ""}:${change.path}`}>
+              <button className="git-graph-file" aria-label={`打开历史对比 ${change.path} ${commit.shortHash}`} title={`${commit.shortHash} · ${change.oldPath ? `${change.oldPath} → ` : ""}${change.path}`} onClick={() => onOpenCommitDiff(change.path, commit.hash)}>
+                <b className={`git-badge git-badge-${change.status}`}>{gitCommitChangeStatusLabel(change.status)}</b>
+                <span>{change.path.split("/").at(-1) ?? change.path}</span>
+                <small>{change.oldPath ? `${change.oldPath} → ${change.path}` : change.path}</small>
+              </button>
+            </li>)}
+          </ul>}
         </div>
-      </li>)}
+      </li>;
+      })}
     </ol>}
   </section>;
 }
@@ -4682,6 +5012,9 @@ function GitSourceControlNavigator({
   onCheckoutBranch,
   onCreateBranch,
   onOpenDiff,
+  onOpenCommitDiff,
+  selectedCommitHash,
+  onSelectCommit,
   onOpenFileLocation,
   onCreateBaseline,
   onRunDiff
@@ -4701,6 +5034,9 @@ function GitSourceControlNavigator({
   onCheckoutBranch(branchName: string): void;
   onCreateBranch(branchName: string): void;
   onOpenDiff(entry: GitWorkspaceStatus["entries"][number], side: GitDiffSide): void;
+  onOpenCommitDiff(path: string, commit: string): void;
+  selectedCommitHash: string | null;
+  onSelectCommit(hash: string): void;
   onOpenFileLocation(entry: GitWorkspaceStatus["entries"][number]): void;
   onCreateBaseline(): void;
   onRunDiff(): void;
@@ -4795,7 +5131,7 @@ function GitSourceControlNavigator({
       <GitChangeList title="Changes" entries={unstagedEntries} area="unstaged" loading={loading} onStagePath={onStagePath} onUnstagePath={onUnstagePath} onOpenDiff={onOpenDiff} onOpenFileLocation={onOpenFileLocation} />
     </nav>
 
-    <GitCommitGraphPanel graph={graph} currentBranch={currentBranch} />
+    <GitCommitGraphPanel graph={graph} currentBranch={currentBranch} selectedCommitHash={selectedCommitHash} onSelectCommit={onSelectCommit} onOpenCommitDiff={onOpenCommitDiff} />
   </section>;
 }
 
@@ -4844,7 +5180,7 @@ function GitDiffWorkspace({ tab, diff, loading }: { tab: Extract<WorkspaceTab, {
     return <section className="git-diff-empty" aria-label="Git 对比">
       <p className="eyebrow">DIFF EDITOR</p>
       <h2>从左侧 Changes 中选择一个文件</h2>
-      <p>单击变更文件会在这里打开 Working Tree 或 Index 对比；暂存、提交和版本图都在左侧 Source Control 中完成。</p>
+      <p>单击变更文件会打开 Working Tree / Index 对比；展开 GRAPH 的提交节点后，点击文件子节点会打开历史 Commit 对比。</p>
     </section>;
   }
   if (!diff) {
@@ -4859,13 +5195,14 @@ function GitDiffWorkspace({ tab, diff, loading }: { tab: Extract<WorkspaceTab, {
 
 function GitDiffViewer({ diff }: { diff: GitFileDiff }): React.JSX.Element {
   const rows = React.useMemo(() => buildLineDiff(diff.oldContent, diff.newContent), [diff.oldContent, diff.newContent]);
+  const diffLabel = diff.side === "index" ? "INDEX DIFF" : diff.side === "commit" ? "COMMIT DIFF" : "WORKING TREE DIFF";
   return <section className="git-diff-view" aria-label="Git 文件对比">
     <header>
       <div>
-        <p className="eyebrow">{diff.side === "index" ? "INDEX DIFF" : "WORKING TREE DIFF"}</p>
+        <p className="eyebrow">{diffLabel}</p>
         <h2>{diff.path}</h2>
       </div>
-      <span className="git-diff-status">{gitStatusBadgeLabel(gitStatusBadge(diff.status, diff.side === "index" ? "staged" : "unstaged"))}</span>
+      <span className="git-diff-status">{gitStatusBadgeLabel(gitStatusBadge(diff.status, diff.side === "working-tree" ? "unstaged" : "staged"))}</span>
     </header>
     <div className="git-diff-columns" role="table" aria-label={`对比 ${diff.path}`}>
       <div className="git-diff-column-title">{diff.oldLabel}</div>

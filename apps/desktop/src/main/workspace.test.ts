@@ -269,6 +269,85 @@ describe("scanWorkspace", () => {
     expect(events.at(-1)).toBe("done:1/1");
   }, 30_000);
 
+  it("recognizes common C++ header variants and skips generated dependency folders", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-header-variants-"));
+    try {
+      await mkdir(resolve(root, "headers", "core"), { recursive: true });
+      await mkdir(resolve(root, "headers", "common"), { recursive: true });
+      await mkdir(resolve(root, "headers", "messages"), { recursive: true });
+      await mkdir(resolve(root, "node_modules", "noise"), { recursive: true });
+      await writeFile(resolve(root, "node_modules", "noise", "ignored.hpp"), "struct ShouldNotAppear { int bad; };\n", "utf8");
+      await writeFile(resolve(root, "headers", "core", "types.h"), `#pragma once
+#include <cstdint>
+namespace proto {
+enum class Mode : std::uint8_t { Off = 0, On = 1 };
+struct Vec2 { float x; float y; };
+typedef std::uint16_t LegacyCount;
+using Count = std::uint32_t;
+}
+`, "utf8");
+      await writeFile(resolve(root, "headers", "common", "packet.hh"), `#pragma once
+#include "core/types.h"
+namespace proto::common {
+#pragma pack(push, 1)
+struct PackedPacket {
+  std::uint8_t tag;
+  std::uint32_t value;
+};
+#pragma pack(pop)
+}
+`, "utf8");
+      await writeFile(resolve(root, "headers", "messages", "frame.hpp"), `#pragma once
+#include "common/packet.hh"
+namespace proto::messages {
+struct Frame {
+  proto::Mode mode;
+  proto::common::PackedPacket packet;
+  proto::Vec2 points[2];
+  proto::Count count;
+};
+}
+`, "utf8");
+      await writeFile(resolve(root, "headers", "status.hxx"), `#pragma once
+namespace proto {
+struct Status {
+  bool ok;
+  char code;
+};
+}
+`, "utf8");
+
+      const progressFiles: string[] = [];
+      const workspace = await scanWorkspace(root, {
+        onProgress: (progress) => {
+          if (progress.phase === "parse" && progress.file) progressFiles.push(progress.file);
+        }
+      });
+      const byName = new Map(workspace.types.map((type) => [type.qualifiedName, type]));
+
+      expect(workspace.files.map((file) => file.relativePath).sort()).toEqual([
+        "headers/common/packet.hh",
+        "headers/core/types.h",
+        "headers/messages/frame.hpp",
+        "headers/status.hxx"
+      ]);
+      expect(byName.has("ShouldNotAppear")).toBe(false);
+      expect(byName.get("proto::Mode")?.underlyingType).toContain("uint8_t");
+      expect(byName.get("proto::common::PackedPacket")?.pack).toBe(1);
+      expect(byName.get("proto::messages::Frame")?.fields.map((field) => [field.name, field.type])).toEqual([
+        ["mode", "proto::Mode"],
+        ["packet", "proto::common::PackedPacket"],
+        ["points", "proto::Vec2[2]"],
+        ["count", "proto::Count"]
+      ]);
+      expect(byName.get("proto::Status")?.fields.map((field) => [field.name, field.type])).toEqual([["ok", "bool"], ["code", "char"]]);
+      expect(progressFiles.length).toBe(4);
+      expect(workspace.diagnostics.map((diagnostic) => diagnostic.message).join("\n")).not.toContain("ignored.hpp");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("matches compiler sizeof/offsetof for supported layout fixtures", async () => {
     const workspace = await scanWorkspace(fixtureWorkspace);
     const probe = await runLayoutProbe();
@@ -1150,6 +1229,12 @@ enum class PacketKind {
       const graph = await listGitCommitGraph(root);
       expect(graph[0]?.subject).toBe("add protocol header");
       expect(graph[0]?.current).toBe(true);
+      expect(graph[0]?.changeCount).toBeGreaterThan(0);
+      expect(graph[0]?.changes[0]).toMatchObject({ path: "headers/protocol.hpp", status: "A" });
+      fileDiff = await getGitFileDiff({ workspaceRoot: root, path: "headers/protocol.hpp", side: "commit", commit: graph[0]!.hash });
+      expect(fileDiff.oldContent).toBe("");
+      expect(fileDiff.newContent).toContain("struct Packet");
+      expect(fileDiff.newLabel).toContain(graph[0]!.shortHash);
       const baseBranch = result.status.currentBranch ?? "master";
 
       await writeFile(resolve(root, "headers", "protocol.hpp"), "#pragma once\nstruct Packet { int changed; };\n", "utf8");

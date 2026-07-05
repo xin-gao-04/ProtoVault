@@ -529,8 +529,10 @@ ProtoVault 使用 Git 分支和 Tag 管理协议演进。
 
 - 左侧工作栏提供“源代码管理 / Git”入口，交互模仿 VS Code Source Control。
 - 点击“源代码管理”后，左侧 Navigator 切换为 Source Control：包含提交信息框、“提交暂存更改”按钮、刷新、全部暂存、全部取消暂存、Staged Changes、Changes、分支切换、新建并切换分支。
-- Source Control 下方显示 Graph 区域，用于查看最近提交、当前分支和 ref 标记。
+- Source Control 下方显示 Graph 区域，用于查看当前工作区相关的最近提交、当前分支和 ref 标记；提交节点可展开，下面会列出该提交修改过的文件子节点。
 - 点击 Changes 或 Staged Changes 中的文件，会在中间 tab 打开 Working Tree 或 Index 文件对比。
+- 点击 Graph 中历史提交下的文件子节点，会在中间 tab 打开 Commit Diff，用于查看该历史提交中此文件的修改。
+- Graph 顶部有历史搜索框，可搜索提交信息、hash、作者、ref 和文件路径；点击提交节点会在右侧 Git 摘要中显示选中提交详情，右侧文件列表也可打开 Commit Diff。
 - 左侧底部工作区栏继续展示 Git 状态，例如当前分支、最近 Tag、dirty 改动数量。
 - 顶部工作栏继续提供“基线 Tag”和“版本 Diff”两个协议版本治理按钮；Git 视图中也提供创建协议基线 Tag 和查看版本 Diff 的快捷入口。
 - 当前版本暂不提供 push、pull、远端认证和放弃更改操作。

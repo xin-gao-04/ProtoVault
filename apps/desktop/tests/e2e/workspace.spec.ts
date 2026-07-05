@@ -99,11 +99,10 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(flowCanvas).toContainText("demo::radar::RadarTrack");
     await network.getByRole("button", { name: "协议绑定" }).click();
     const bindingRow = network.getByRole("row", { name: /E2E RadarTrack@20Hz/ });
-    page.once("dialog", async (dialog) => {
-      expect(dialog.message()).toContain("确认删除协议绑定");
-      await dialog.accept();
-    });
     await bindingRow.getByRole("button", { name: "删除" }).click();
+    let modal = page.getByRole("dialog", { name: "删除协议绑定" });
+    await expect(modal).toContainText("确认删除协议绑定");
+    await modal.getByRole("button", { name: "删除绑定" }).click();
     await expect(page.getByText("已删除协议绑定：E2E RadarTrack@20Hz")).toBeVisible();
     await network.getByRole("button", { name: "协议绑定" }).click();
     await network.getByLabel("名称").fill("E2E RadarTrack@15Hz");
@@ -157,7 +156,14 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(sourceControl.getByLabel("Git 提交信息")).toBeVisible();
     await expect(sourceControl.getByRole("button", { name: "提交暂存更改" })).toBeVisible();
     await expect(sourceControl.getByRole("navigation", { name: "Git 文件变化" })).toContainText("Changes");
-    await expect(sourceControl.getByRole("region", { name: "Git 版本流程图" })).toBeVisible();
+    const gitHistoryGraph = sourceControl.getByRole("region", { name: "Git 版本流程图" });
+    await expect(gitHistoryGraph).toBeVisible();
+    await expect(gitHistoryGraph.getByRole("textbox", { name: "搜索 Git 历史" })).toBeVisible();
+    await expect(page.getByText("选中提交")).toBeVisible();
+    await expect(gitHistoryGraph.getByRole("button", { name: /提交/ }).first()).toBeVisible();
+    await expect(gitHistoryGraph.locator(".git-graph-file").first()).toBeVisible();
+    await gitHistoryGraph.locator(".git-graph-file").first().click();
+    await expect(page.getByRole("region", { name: "Git 文件对比" })).toContainText("COMMIT DIFF");
     await sourceControl.getByRole("button", { name: /geometry\.hpp/ }).first().click();
     await expect(page.getByRole("button", { name: /切换到 geometry\.hpp \(Working Tree\)/ })).toBeVisible();
     await expect(page.getByRole("region", { name: "Git 文件对比" })).toBeVisible();
@@ -396,13 +402,12 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(ecefRow.getByLabel("枚举值")).toHaveValue("bad");
     await ecefRow.getByLabel("枚举值").fill("22");
     await expect(tabStrip.getByRole("button", { name: /CoordinateFrame 未保存/ })).toBeVisible();
-    page.once("dialog", async (dialog) => {
-      expect(dialog.message()).toContain("未保存");
-      await dialog.accept();
-    });
     const editorBox = await editor.boundingBox();
     if (!editorBox) throw new Error("Missing editor box");
     await page.mouse.click(editorBox.x + 20, editorBox.y + editorBox.height - 20);
+    modal = page.getByRole("dialog", { name: "保存当前行？" });
+    await expect(modal).toContainText("当前行存在未保存的结构化更改");
+    await modal.getByRole("button", { name: "保存当前行" }).click();
     await expect(page.getByText("已保存枚举项：ECEF")).toBeVisible();
     await expect(ecefRow.getByLabel("枚举值")).toHaveCount(0);
 
@@ -420,21 +425,19 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     const zRow = editor.getByRole("row", { name: /^z\s+double/ });
     await zRow.click({ button: "right" });
     await expect(page.getByRole("menuitem", { name: "删除字段" })).toBeVisible();
-    page.once("dialog", async (dialog) => {
-      expect(dialog.message()).toContain("确认删除字段");
-      await dialog.accept();
-    });
     await page.getByRole("menuitem", { name: "删除字段" }).click();
+    modal = page.getByRole("dialog", { name: "删除字段" });
+    await expect(modal).toContainText("确认删除字段");
+    await modal.getByRole("button", { name: "删除字段" }).click();
     await expect(page.getByText("已删除字段：z")).toBeVisible();
     await expect(editor.getByRole("row", { name: /^z\s+double/ })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Vec3 y" }).click({ button: "right" });
     await expect(page.getByRole("menuitem", { name: "删除字段" })).toBeVisible();
-    page.once("dialog", async (dialog) => {
-      expect(dialog.message()).toContain("确认删除字段");
-      await dialog.accept();
-    });
     await page.getByRole("menuitem", { name: "删除字段" }).click();
+    modal = page.getByRole("dialog", { name: "删除字段" });
+    await expect(modal).toContainText("确认删除字段");
+    await modal.getByRole("button", { name: "删除字段" }).click();
     await expect(page.getByText("已删除字段：y")).toBeVisible();
     await expect(editor.getByRole("row", { name: /^y\s+double/ })).toHaveCount(0);
   } finally {

@@ -42,12 +42,12 @@
 | P8 元数据与文档 | MVP 纵切完成 | 元数据持久化、Header 注释同步、Markdown 文档生成 | 重扫不丢元数据；文档写入 `.protocol/reports/` |
 | P9 协议 Lint | MVP 纵切完成 | 规则引擎、严重等级、源码定位 | 指针/运行期类型、缺失语义、布局问题、枚举问题有测试 |
 | P10 语义 Diff | MVP 纵切完成 | 基线状态比较、字段/枚举/布局变化、兼容性分级 | fixture 可识别新增、类型变化、offset/size 等变化 |
-| P11 集成发布 | 发布门 MVP 完成 | E2E、发布检查脚本、发布检查清单和用户说明入口 | `pnpm release:check` 定义完整检查；正式安装包仍待接入 |
+| P11 集成发布 | 初始 Release 完成 | E2E、发布检查脚本、发布检查清单、Windows NSIS 安装包与 Portable 包 | `pnpm release:check` 通过；`pnpm release:installer` 可生成 `ProtoVault-0.1.0` 分发包 |
 | P12 协议网络地图 | MVP 纵切完成 | `.protocol/network`、NetworkNode、NetworkLink、ProtocolBinding、节点/链路/绑定表格 | 用户可维护实体节点、通信链路和链路上的协议绑定；协议不再直接持有生产者/消费者 |
 | P13 网络派生分析 | Loop 6 / MVP 闭环完成 | FlowView CRUD、过滤派生视图、数据流画布、网络 Inspector、FlowView Markdown 报告、节点/链路/协议瓶颈提示、示例网络配置 | 可保存业务数据流观察视角，先定义视角再进入画布查看生产节点、链路载荷和消费节点，并可生成网络数据流报告；真实运行采样待后续阶段 |
 | P14 Git 版本治理 | MVP 纵切完成 | Git 状态、分支/Tag 展示、协议 Baseline Tag、版本 Diff、P14 loop 脚本 | 基线创建要求工作区干净；版本 Diff 可对比 Git Tag 与当前工作树；旧快照入口退出 UI；发布门通过 |
 | P15 本地 AI 使用助手 | MVP 纵切完成 | AI 可读功能知识库、模块检索、Ollama status/ask API、AI 使用助手视图、模型切换、轻量模型默认、离线降级 | 不注入全量手册；按问题选择少量模块；Ollama 可用时可选择本地模型，不可用时返回离线知识库摘要 |
-| P16 Git Source Control | MVP 纵切完成 | 左侧 Source Control、暂存/取消暂存、提交、分支切换/创建、Git Inspector、文件级 Diff tab、最近提交 Graph、与基线 Tag/Diff 联动 | 可在前端完成本地 Git 提交流程；点击变更文件在中间打开对比；提交只允许当前工作区范围内暂存项；push/pull/放弃更改延后 |
+| P16 Git Source Control | MVP 纵切完成 | 左侧 Source Control、暂存/取消暂存、提交、分支切换/创建、Git Inspector、Working Tree/Index/Commit 文件级 Diff tab、可展开提交 Graph、与基线 Tag/Diff 联动 | 可在前端完成本地 Git 提交流程；点击当前变更或历史提交文件子节点在中间打开对比；提交只允许当前工作区范围内暂存项；push/pull/放弃更改延后 |
 
 ## 当前技术约束
 
@@ -59,6 +59,7 @@
 - IR 合约版本从 `1.0.0` 开始。
 - 协议网络地图采用“节点和链路是主事实，协议绑定是链路载荷，数据流是派生视图”的建模方式，避免把生产者/消费者直接写回协议类型。
 - 协议版本治理采用 Git 分支与 Tag 作为主线：分支表达实验/发布线路，Tag 表达可追溯协议基线；旧 `.protocol/snapshots` 不再作为 UI 工作流入口。
+- 初始 Windows Release 使用 electron-builder 生成 NSIS 安装包和 Portable 包；正式品牌图标、签名证书和自动更新通道仍待后续发布工程补齐。
 
 ## 当前可运行里程碑
 
@@ -84,8 +85,10 @@
 - 网络数据流视角可导出 Markdown 报告到 `.protocol/reports/network-flow-*.md`。
 - 默认示例入口 `examples` 已包含一套雷达仿真网络配置，可直接展示网络地图和数据流视角效果。
 - 工作区底栏展示 Git 分支、最近 Tag 和脏状态；顶部工具栏提供“基线 Tag”和“版本 Diff”，版本报告写入 `.protocol/baselines/working-tree.json`。
-- 左侧工作栏提供“源代码管理 / Git”视图，切换后左侧 Navigator 变为 Source Control：支持暂存、取消暂存、提交暂存更改、切换本地分支、新建并切换分支，并提供基线 Tag / 版本 Diff 快捷入口；变更文件在中间以 Diff tab 打开，左侧下方显示最近提交 Graph。
+- 左侧工作栏提供“源代码管理 / Git”视图，切换后左侧 Navigator 变为 Source Control：支持暂存、取消暂存、提交暂存更改、切换本地分支、新建并切换分支，并提供基线 Tag / 版本 Diff 快捷入口；变更文件在中间以 Diff tab 打开，左侧下方显示可展开提交 Graph，历史提交文件子节点可打开 Commit Diff。
 - “AI 使用助手”替代静态帮助页，使用模块化知识库和本地 Ollama 模型回答操作问题；当前本机可用模型为 `qwen2.5:3b` 和 `qwen3-coder:30b`，默认优先使用轻量模型。
+- 发布工程已接入 `electron-builder`，可通过 `pnpm release:installer` 生成 `apps/desktop/release/ProtoVault-0.1.0-Setup-x64.exe` 和 `ProtoVault-0.1.0-Portable-x64.exe`。
+- Header 扫描针对大目录减少无效遍历：默认跳过 `.git`、`.protocol`、`node_modules`、`dist/out/build*`、测试输出等生成目录，并在界面显示当前扫描阶段、处理数量和文件名。
 
 ## 下一阶段执行顺序
 
@@ -135,3 +138,4 @@ P14 已完成执行结果：
 3. 定义真实运行采样契约：吞吐、延迟、丢包、队列深度、CPU/GPU、磁盘 IO。
 4. 在网络地图中继续打磨表格批量编辑和导入/导出能力。
 5. 为 Git 分支/tag 增加更强业务引导，例如“实验分支、评审 Tag、发布 Tag、兼容性报告”的项目模板。
+6. 为 Release 增加正式应用图标、签名证书、自动更新和 GitHub Release 附件上传流程。

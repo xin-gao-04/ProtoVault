@@ -2,11 +2,16 @@ packages:
   - apps/*
   - packages/*
 
+overrides:
+  "@electron/get": ^5.0.0
+
 onlyBuiltDependencies:
   - electron
+  - electron-winstaller
   - esbuild
 allowBuilds:
   electron: true
+  electron-winstaller: true
   esbuild: true
 minimumReleaseAgeExclude:
   - electron@43.0.0

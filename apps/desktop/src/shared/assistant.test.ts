@@ -27,6 +27,17 @@ describe("assistant knowledge routing", () => {
     expect(prompt).toContain("提交暂存更改");
   });
 
+  it("explains expandable git graph history files", () => {
+    const modules = selectAssistantModules("Git Graph 怎么看历史提交里的文件修改？", "git-baseline");
+    const prompt = buildAssistantPrompt({
+      question: "Git Graph 怎么看历史提交里的文件修改？",
+      moduleId: "git-baseline"
+    }, modules);
+
+    expect(prompt).toContain("提交节点可展开");
+    expect(prompt).toContain("Commit Diff");
+  });
+
   it("keeps prompts bounded to selected modules", () => {
     const modules = selectAssistantModules("字段类型怎么编辑，注释如何同步到 Header？", "structured-editing");
     const prompt = buildAssistantPrompt({
