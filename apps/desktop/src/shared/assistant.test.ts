@@ -9,6 +9,12 @@ describe("assistant knowledge routing", () => {
     expect(modules.length).toBeLessThanOrEqual(4);
   });
 
+  it("routes local Ollama model switching questions to the overview module", () => {
+    const modules = selectAssistantModules("Ollama 模型怎么切换，小模型适合什么场景？");
+
+    expect(modules.map((module) => module.id)).toContain("overview");
+  });
+
   it("keeps prompts bounded to selected modules", () => {
     const modules = selectAssistantModules("字段类型怎么编辑，注释如何同步到 Header？", "structured-editing");
     const prompt = buildAssistantPrompt({

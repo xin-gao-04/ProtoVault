@@ -63,7 +63,7 @@ ProtoVault 是 Windows 优先的数据协议资产管理桌面工具，不是普
 - 左侧负责导航和入口。
 - 中间负责主要编辑。
 - 右侧负责解释和属性摘要。
-- AI 使用助手负责问答，不直接修改工程文件。
+- AI 使用助手负责问答，不直接修改工程文件；它支持切换本地 Ollama 模型，日常问答优先使用轻量模型。
 
 ---
 
@@ -639,14 +639,16 @@ http://127.0.0.1:11434
 
 ```text
 PROTOVAULT_OLLAMA_ENDPOINT=http://127.0.0.1:11434
-PROTOVAULT_OLLAMA_MODEL=qwen2.5:7b
+PROTOVAULT_OLLAMA_MODEL=qwen2.5:3b
 ```
 
 模型发现：
 
 - 调用 `/api/tags`。
 - 优先选择环境变量指定模型。
-- 否则优先选择 qwen、deepseek、llama、mistral、gemma。
+- 否则默认优先选择 `qwen2.5:3b`、`qwen2.5:1.5b`、`qwen3:4b` 等轻量模型，再回退到 qwen、deepseek、llama、mistral、gemma。
+- AI 使用助手左侧状态卡提供 “Ollama 模型” 下拉框；用户可以在已安装模型之间切换。
+- 当前推荐：日常使用 `qwen2.5:3b`，复杂代码或长上下文问题再切换到更大的本地模型。
 
 提问：
 

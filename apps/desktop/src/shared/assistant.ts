@@ -24,6 +24,7 @@ export interface AssistantKnowledgeModule {
 export interface AssistantAskInput {
   question: string;
   moduleId?: AssistantModuleId;
+  model?: string;
   workspaceSummary?: string;
 }
 
@@ -51,7 +52,7 @@ export const PROTOVAULT_ASSISTANT_MODULES: AssistantKnowledgeModule[] = [
     id: "overview",
     title: "产品总览与推荐工作流",
     summary: "解释 ProtoVault 的定位、主闭环和各入口之间的职责边界。",
-    keywords: ["总览", "工作流", "mvp", "闭环", "入口", "怎么用", "流程", "overview", "workflow"],
+    keywords: ["总览", "工作流", "mvp", "闭环", "入口", "怎么用", "流程", "AI", "助手", "Ollama", "模型", "overview", "workflow"],
     related: ["workspace", "structured-editing", "network-map", "git-baseline"],
     content: `
 ProtoVault 是 Windows 优先的数据协议资产管理桌面工具，不是普通 Header 编辑器。
@@ -59,7 +60,8 @@ ProtoVault 是 Windows 优先的数据协议资产管理桌面工具，不是普
 左侧工作栏负责切换主要视图：协议工作台、关系图谱、网络地图、AI 使用助手等。
 中间区域是主要操作区：协议表格编辑、源码预览/编辑、网络事实表格、数据流画布、报告和问答。
 右侧属性栏只做解释与摘要，不承担主要编辑；字段、枚举、网络事实等编辑应优先在中间表格完成。
-当前事实层分为两条主线：协议结构事实和网络事实。协议结构来自 Header 扫描与结构化编辑；网络事实来自节点、链路、协议绑定和 FlowView。`
+当前事实层分为两条主线：协议结构事实和网络事实。协议结构来自 Header 扫描与结构化编辑；网络事实来自节点、链路、协议绑定和 FlowView。
+AI 使用助手接入本地 Ollama，左侧状态卡可切换已安装模型；日常问答推荐轻量模型 qwen2.5:3b，复杂代码问题可切换到更大的本地模型。`
   },
   {
     id: "workspace",

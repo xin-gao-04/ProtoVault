@@ -4419,6 +4419,7 @@ function workspaceSummaryForAssistant(workspace: WorkspaceView | null): string {
 
 function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null; onBack: () => void }): React.JSX.Element {
   const [runtimeStatus, setRuntimeStatus] = React.useState<AssistantRuntimeStatus | null>(null);
+  const [selectedModel, setSelectedModel] = React.useState("");
   const [selectedModuleId, setSelectedModuleId] = React.useState<AssistantModuleId>("overview");
   const [question, setQuestion] = React.useState("如何完成一次协议字段修改并保存到 Header？");
   const [answer, setAnswer] = React.useState<AssistantAskResponse | null>(null);
@@ -4427,14 +4428,22 @@ function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null;
   React.useEffect(() => {
     let cancelled = false;
     window.protoVault.assistantStatus()
-      .then((status) => { if (!cancelled) setRuntimeStatus(status); })
+      .then((status) => {
+        if (!cancelled) {
+          setRuntimeStatus(status);
+          setSelectedModel((current) => current && status.models.includes(current) ? current : status.selectedModel ?? status.models[0] ?? "");
+        }
+      })
       .catch((error) => {
-        if (!cancelled) setRuntimeStatus({
-          available: false,
-          endpoint: "http://127.0.0.1:11434",
-          models: [],
-          message: error instanceof Error ? error.message : String(error)
-        });
+        if (!cancelled) {
+          setRuntimeStatus({
+            available: false,
+            endpoint: "http://127.0.0.1:11434",
+            models: [],
+            message: error instanceof Error ? error.message : String(error)
+          });
+          setSelectedModel("");
+        }
       });
     return () => { cancelled = true; };
   }, []);
@@ -4447,9 +4456,11 @@ function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null;
       const response = await window.protoVault.askAssistant({
         question: nextQuestion,
         moduleId: selectedModuleId,
+        model: selectedModel || undefined,
         workspaceSummary: workspaceSummaryForAssistant(workspace)
       });
       setAnswer(response);
+      if (response.model) setSelectedModel(response.model);
       setRuntimeStatus((current) => current ? { ...current, selectedModel: response.model ?? current.selectedModel } : current);
     } finally {
       setAsking(false);
@@ -4457,6 +4468,8 @@ function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null;
   }
 
   const selectedModule = PROTOVAULT_ASSISTANT_MODULES.find((module) => module.id === selectedModuleId) ?? PROTOVAULT_ASSISTANT_MODULES[0];
+  const modelOptions = runtimeStatus?.models ?? [];
+  const modelSelectValue = modelOptions.includes(selectedModel) ? selectedModel : "";
   return <section className="manual-view assistant-view" aria-label="AI 使用助手">
     <div className="manual-hero assistant-hero">
       <div>
@@ -4471,7 +4484,23 @@ function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null;
       <aside className="assistant-modules" aria-label="助手知识模块">
         <div className="assistant-status">
           <strong>{runtimeStatus?.available ? "Ollama 已连接" : "Ollama 未连接"}</strong>
-          <small>{runtimeStatus?.selectedModel ? `模型：${runtimeStatus.selectedModel}` : runtimeStatus?.message ?? "正在检测 127.0.0.1:11434"}</small>
+          <label className="assistant-model-select">
+            <span>Ollama 模型</span>
+            <select
+              aria-label="Ollama 模型"
+              value={modelSelectValue}
+              disabled={modelOptions.length === 0 || asking}
+              onChange={(event) => setSelectedModel(event.target.value)}
+            >
+              {modelOptions.length > 0
+                ? <>
+                  {!modelSelectValue && <option value="">请选择模型</option>}
+                  {modelOptions.map((model) => <option key={model} value={model}>{model}{model === "qwen2.5:3b" ? " · 轻量推荐" : ""}</option>)}
+                </>
+                : <option value="">未发现模型</option>}
+            </select>
+          </label>
+          <small>{runtimeStatus?.selectedModel ? `默认：${runtimeStatus.selectedModel}` : runtimeStatus?.message ?? "正在检测 127.0.0.1:11434"}</small>
           <small>端点：{runtimeStatus?.endpoint ?? "http://127.0.0.1:11434"}</small>
         </div>
         {PROTOVAULT_ASSISTANT_MODULES.map((module) => <button
@@ -4515,6 +4544,7 @@ function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null;
             <button className="inline-action" disabled={asking || !question.trim()} onClick={() => void ask()}>{asking ? "思考中…" : "提问"}</button>
           </div>
           <p className="assistant-hint">提示：如果 Ollama 未启动，助手会返回离线知识库摘要和启动指引；启动后会自动使用可用模型。</p>
+          <p className="assistant-hint">轻量模型建议使用 qwen2.5:3b；复杂代码问答可以切换到更大的本地模型。</p>
         </article>
 
         {answer && <article className="manual-card assistant-answer" aria-label="AI 回答">

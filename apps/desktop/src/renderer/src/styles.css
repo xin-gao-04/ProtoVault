@@ -377,12 +377,16 @@ dt { color: #747a88; } dd { margin: 0; color: #c8cbd2; }
 .assistant-chat { display: grid; gap: 14px; min-width: 0; }
 .assistant-card label { display: grid; gap: 7px; color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
 .assistant-card textarea { min-height: 92px; width: 100%; resize: vertical; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-modifier-form-field); color: var(--text-normal); padding: 11px 12px; line-height: 1.55; outline: none; }
-.assistant-card textarea:focus, .assistant-actions select:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 18%, transparent); }
+.assistant-card textarea:focus, .assistant-actions select:focus, .assistant-model-select select:focus { border-color: var(--interactive-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 18%, transparent); }
 .assistant-card details { border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: color-mix(in srgb, var(--background-primary) 70%, transparent); padding: 10px 12px; }
 .assistant-card summary { cursor: pointer; color: var(--text-accent); font-size: 12px; }
 .assistant-card pre, .assistant-answer pre, .assistant-quickref pre { overflow: auto; max-height: 420px; margin: 8px 0 0; padding: 12px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary); color: var(--text-normal); white-space: pre-wrap; line-height: 1.6; }
 .assistant-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .assistant-actions select { min-width: 240px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-modifier-form-field); color: var(--text-normal); padding: 7px 9px; outline: none; }
+.assistant-model-select { display: grid; gap: 5px; margin: 4px 0; color: var(--text-faint); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.assistant-model-select span { color: var(--text-muted); font-weight: 800; }
+.assistant-model-select select { width: 100%; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-modifier-form-field); color: var(--text-normal); padding: 7px 9px; outline: none; text-transform: none; letter-spacing: 0; }
+.assistant-model-select select:disabled { opacity: .72; cursor: not-allowed; }
 .assistant-hint { color: var(--text-faint); font-size: 12px; }
 .assistant-answer footer { display: flex; gap: 8px; flex-wrap: wrap; color: var(--text-faint); font-size: 11px; }
 .assistant-answer footer span { padding: 3px 7px; border: 1px solid var(--background-modifier-border); border-radius: 999px; background: var(--background-primary); }

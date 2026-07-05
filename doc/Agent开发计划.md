@@ -46,7 +46,7 @@
 | P12 协议网络地图 | MVP 纵切完成 | `.protocol/network`、NetworkNode、NetworkLink、ProtocolBinding、节点/链路/绑定表格 | 用户可维护实体节点、通信链路和链路上的协议绑定；协议不再直接持有生产者/消费者 |
 | P13 网络派生分析 | Loop 6 / MVP 闭环完成 | FlowView CRUD、过滤派生视图、数据流画布、网络 Inspector、FlowView Markdown 报告、节点/链路/协议瓶颈提示、示例网络配置 | 可保存业务数据流观察视角，先定义视角再进入画布查看生产节点、链路载荷和消费节点，并可生成网络数据流报告；真实运行采样待后续阶段 |
 | P14 Git 版本治理 | MVP 纵切完成 | Git 状态、分支/Tag 展示、协议 Baseline Tag、版本 Diff、P14 loop 脚本 | 基线创建要求工作区干净；版本 Diff 可对比 Git Tag 与当前工作树；旧快照入口退出 UI；发布门通过 |
-| P15 本地 AI 使用助手 | MVP 纵切完成 | AI 可读功能知识库、模块检索、Ollama status/ask API、AI 使用助手视图、离线降级 | 不注入全量手册；按问题选择少量模块；Ollama 可用时使用本地模型，不可用时返回离线知识库摘要 |
+| P15 本地 AI 使用助手 | MVP 纵切完成 | AI 可读功能知识库、模块检索、Ollama status/ask API、AI 使用助手视图、模型切换、轻量模型默认、离线降级 | 不注入全量手册；按问题选择少量模块；Ollama 可用时可选择本地模型，不可用时返回离线知识库摘要 |
 
 ## 当前技术约束
 
@@ -83,7 +83,7 @@
 - 网络数据流视角可导出 Markdown 报告到 `.protocol/reports/network-flow-*.md`。
 - 默认示例入口 `examples` 已包含一套雷达仿真网络配置，可直接展示网络地图和数据流视角效果。
 - 工作区底栏展示 Git 分支、最近 Tag 和脏状态；顶部工具栏提供“基线 Tag”和“版本 Diff”，版本报告写入 `.protocol/baselines/working-tree.json`。
-- “AI 使用助手”替代静态帮助页，使用模块化知识库和本地 Ollama 模型回答操作问题；当前本机可用模型为 `qwen3-coder:30b`。
+- “AI 使用助手”替代静态帮助页，使用模块化知识库和本地 Ollama 模型回答操作问题；当前本机可用模型为 `qwen2.5:3b` 和 `qwen3-coder:30b`，默认优先使用轻量模型。
 
 ## 下一阶段执行顺序
 

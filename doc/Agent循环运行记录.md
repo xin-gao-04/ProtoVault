@@ -2,6 +2,59 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-05 P15 Loop 2：轻量 Ollama 模型与模型切换
+
+### 目标
+
+把本地 AI 使用助手从“自动选择一个可用模型”升级为“默认轻量模型 + 用户可切换模型”的模式，降低日常问答启动和推理负担，同时保留大模型用于复杂代码问题。
+
+### 基线状态
+
+- 当前提交：`fac2d22 feat: add local AI help assistant`。
+- 本轮开始时仍存在未归属示例 Header 改动和一个 `.tmp` 文件，继续保留，不纳入提交范围。
+- 本机 Ollama 已可用，原有模型为 `qwen3-coder:30b`。
+
+### 行动
+
+- 拉取并验证轻量模型：`qwen2.5:3b`。
+- Assistant API 新增可选 `model` 参数；提问时可使用用户选择的模型。
+- 主进程模型选择策略改为优先 `qwen2.5:3b`，其次轻量 qwen 系列，再回退到其他已安装模型。
+- AI 使用助手左侧状态卡新增 “Ollama 模型” 下拉框，可在已安装模型之间切换。
+- 离线提示和 AI 知识库同步改为推荐 `ollama pull qwen2.5:3b`。
+- E2E 覆盖模型切换入口可见性。
+
+### 验证
+
+已运行：
+
+```powershell
+ollama pull qwen2.5:3b
+ollama list
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm --filter @protovault/desktop build
+pnpm --filter @protovault/desktop test:e2e
+pnpm release:check
+```
+
+结果：
+
+- Ollama 已识别 `qwen2.5:3b`（约 1.9GB）和 `qwen3-coder:30b`（约 18GB）。
+- `qwen2.5:3b` 极短生成验证通过，返回 `OK`。
+- desktop typecheck：通过。
+- desktop：4 个测试文件、23 个测试通过。
+- desktop build：通过。
+- Electron E2E：1 个测试通过。
+- 完整 `pnpm release:check` 通过。
+
+### 下一轮
+
+建议进入 P15 Loop 3：
+
+1. 为 AI 助手增加“当前选中 Header / 类型 / 网络视角”的一键上下文注入。
+2. 增加可更新知识库索引，减少文档和 shared 常量长期手工同步。
+3. 支持短轮对话历史，但每轮仍执行模块筛选和上下文压缩。
+
 ## 2026-07-05 P15：本地 AI 使用助手
 
 ### 目标

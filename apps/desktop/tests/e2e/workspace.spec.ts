@@ -143,6 +143,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(manual).toContainText("延迟预算");
     await expect(manual).toContainText("Alt");
     await expect(manual).toContainText("Ollama");
+    await expect(manual.getByLabel("Ollama 模型")).toBeVisible();
     await page.keyboard.press("Alt+ArrowLeft");
     await expect(page.getByRole("button", { name: "切换到 RadarTrack" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "内存布局" })).toBeVisible();

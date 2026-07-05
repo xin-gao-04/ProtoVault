@@ -9,7 +9,7 @@ import {
 
 const DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434";
 const OLLAMA_TIMEOUT_MS = 20_000;
-const MODEL_PREFERENCE = ["qwen", "deepseek", "llama3.1", "llama3", "mistral", "gemma"];
+const MODEL_PREFERENCE = ["qwen2.5:3b", "qwen2.5:1.5b", "qwen3:4b", "qwen", "deepseek", "llama3.1", "llama3", "mistral", "gemma"];
 
 interface OllamaTagsResponse {
   models?: Array<{ name?: string; model?: string }>;
@@ -24,7 +24,9 @@ function ollamaEndpoint(): string {
   return (process.env.PROTOVAULT_OLLAMA_ENDPOINT ?? DEFAULT_OLLAMA_ENDPOINT).replace(/\/+$/, "");
 }
 
-function selectOllamaModel(models: string[]): string | undefined {
+function selectOllamaModel(models: string[], requestedModel?: string): string | undefined {
+  const requested = requestedModel?.trim();
+  if (requested && models.includes(requested)) return requested;
   const configured = process.env.PROTOVAULT_OLLAMA_MODEL?.trim();
   if (configured && models.includes(configured)) return configured;
   if (configured && models.length > 0) return models.find((model) => model.toLowerCase().includes(configured.toLowerCase())) ?? models[0];
@@ -59,7 +61,7 @@ export async function getAssistantRuntimeStatus(): Promise<AssistantRuntimeStatu
       endpoint,
       models,
       selectedModel: selectOllamaModel(models),
-      message: models.length > 0 ? undefined : "Ollama 已连接，但没有发现可用模型。请先执行 ollama pull qwen2.5:7b 或其他模型。"
+      message: models.length > 0 ? undefined : "Ollama 已连接，但没有发现可用模型。请先执行 ollama pull qwen2.5:3b 或其他模型。"
     };
   } catch (error) {
     return {
@@ -82,7 +84,7 @@ ${summaries}
 你可以这样处理：
 1. 如果是操作问题，先在上方相关模块中定位入口，再回到工作台执行。
 2. 如果要启用 AI 问答，请启动 Ollama：ollama serve。
-3. 拉取一个本地模型，例如：ollama pull qwen2.5:7b。
+3. 拉取一个本地模型，例如：ollama pull qwen2.5:3b。
 4. 回到 ProtoVault 后重新打开 AI 使用助手，系统会自动读取可用模型。
 
 原始问题：${input.question}
@@ -96,7 +98,9 @@ export async function askLocalAssistant(input: AssistantAskInput): Promise<Assis
   const prompt = buildAssistantPrompt(input, modules);
   const status = await getAssistantRuntimeStatus();
 
-  if (!status.available || !status.selectedModel) {
+  const selectedModel = selectOllamaModel(status.models, input.model) ?? status.selectedModel;
+
+  if (!status.available || !selectedModel) {
     return {
       answer: fallbackAnswer(input, moduleIds, status.message),
       endpoint: status.endpoint,
@@ -108,12 +112,25 @@ export async function askLocalAssistant(input: AssistantAskInput): Promise<Assis
     };
   }
 
+  if (input.model?.trim() && !status.models.includes(input.model.trim())) {
+    const message = `所选模型不存在：${input.model.trim()}。请在 Ollama 中拉取该模型，或从模型列表选择已安装模型。`;
+    return {
+      answer: fallbackAnswer(input, moduleIds, message),
+      endpoint: status.endpoint,
+      moduleIds,
+      fallback: true,
+      promptSize: prompt.length,
+      elapsedMs: Date.now() - startedAt,
+      error: message
+    };
+  }
+
   try {
     const payload = await fetchJson<OllamaGenerateResponse>(`${status.endpoint}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: status.selectedModel,
+        model: selectedModel,
         prompt,
         stream: false,
         options: {
@@ -126,7 +143,7 @@ export async function askLocalAssistant(input: AssistantAskInput): Promise<Assis
     if (!answer) throw new Error(payload.error || "Ollama 返回为空。");
     return {
       answer,
-      model: status.selectedModel,
+      model: selectedModel,
       endpoint: status.endpoint,
       moduleIds,
       fallback: false,
@@ -137,7 +154,7 @@ export async function askLocalAssistant(input: AssistantAskInput): Promise<Assis
     const message = error instanceof Error ? error.message : String(error);
     return {
       answer: fallbackAnswer(input, moduleIds, message),
-      model: status.selectedModel,
+      model: selectedModel,
       endpoint: status.endpoint,
       moduleIds,
       fallback: true,
