@@ -2,6 +2,56 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-05 P15 Loop 3：Ollama 生成超时修复
+
+### 目标
+
+修复 AI 使用助手提问后只返回离线知识库的问题，避免把本地模型冷启动或较慢生成误判为 Ollama 不可用。
+
+### 基线状态
+
+- 当前提交：`aa22b4a feat: support ollama model switching`。
+- 用户截图中显示 `运行时信息：This operation was aborted`，耗时约 `20009 ms`。
+- 本机直接调用 `qwen2.5:3b` 热启动后可正常返回 `OK`，说明服务和模型本身可用。
+
+### 行动
+
+- 拆分 Ollama 状态检测超时和生成回答超时。
+- 状态检测默认 3 秒，生成回答默认 120 秒。
+- 新增 `PROTOVAULT_OLLAMA_GENERATE_TIMEOUT_MS`、`PROTOVAULT_OLLAMA_STATUS_TIMEOUT_MS`、`PROTOVAULT_OLLAMA_NUM_PREDICT`。
+- 生成回答默认限制 `num_predict=700`，降低长回答拖垮体验的概率。
+- 超时错误改为明确提示“生成回答超时”，不再只透出 `This operation was aborted`。
+- 更新 AI 使用助手提示和 AI 知识库文档。
+
+### 验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm --filter @protovault/desktop build
+pnpm --filter @protovault/desktop test:e2e
+pnpm release:check
+```
+
+结果：
+
+- desktop typecheck：通过。
+- desktop：4 个测试文件、23 个测试通过。
+- desktop build：通过。
+- Electron E2E：1 个测试通过。
+- 完整 `pnpm release:check` 通过。
+- `qwen2.5:3b` 直接生成验证通过，同类 Git/Tag 问题约 4.53 秒返回。
+
+### 下一轮
+
+建议继续做真实 UI 提问体验优化：
+
+1. 显示“模型加载中 / 正在生成”阶段性状态。
+2. 支持手动取消本次生成。
+3. 增加一次真实 ask 的可选集成测试，但不放入默认发布门，避免 CI 依赖本机模型。
+
 ## 2026-07-05 P15 Loop 2：轻量 Ollama 模型与模型切换
 
 ### 目标

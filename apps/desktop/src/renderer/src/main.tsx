@@ -4544,7 +4544,7 @@ function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null;
             <button className="inline-action" disabled={asking || !question.trim()} onClick={() => void ask()}>{asking ? "思考中…" : "提问"}</button>
           </div>
           <p className="assistant-hint">提示：如果 Ollama 未启动，助手会返回离线知识库摘要和启动指引；启动后会自动使用可用模型。</p>
-          <p className="assistant-hint">轻量模型建议使用 qwen2.5:3b；复杂代码问答可以切换到更大的本地模型。</p>
+          <p className="assistant-hint">轻量模型建议使用 qwen2.5:3b；首次加载模型可能较慢，生成回答默认最多等待约 120 秒。</p>
         </article>
 
         {answer && <article className="manual-card assistant-answer" aria-label="AI 回答">

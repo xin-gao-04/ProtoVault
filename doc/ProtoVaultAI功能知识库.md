@@ -640,6 +640,9 @@ http://127.0.0.1:11434
 ```text
 PROTOVAULT_OLLAMA_ENDPOINT=http://127.0.0.1:11434
 PROTOVAULT_OLLAMA_MODEL=qwen2.5:3b
+PROTOVAULT_OLLAMA_STATUS_TIMEOUT_MS=3000
+PROTOVAULT_OLLAMA_GENERATE_TIMEOUT_MS=120000
+PROTOVAULT_OLLAMA_NUM_PREDICT=700
 ```
 
 模型发现：
@@ -656,8 +659,11 @@ PROTOVAULT_OLLAMA_MODEL=qwen2.5:3b
 - stream=false。
 - temperature=0.2。
 - num_ctx=4096。
+- num_predict 默认 700，避免一次回答过长。
+- 状态检测默认 3 秒超时，生成回答默认 120 秒超时。模型首次加载或大模型冷启动可能超过 20 秒，因此生成超时不能和“模型不可用”混为一谈。
 
 降级：
 
 - 如果 Ollama 未启动，界面显示离线知识库摘要。
+- 如果生成回答超时，界面也会先显示离线知识库摘要，并在运行时信息中提示超时原因。
 - 不阻塞用户继续查看模块知识。

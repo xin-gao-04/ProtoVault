@@ -8,7 +8,9 @@ import {
 } from "../shared/assistant";
 
 const DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434";
-const OLLAMA_TIMEOUT_MS = 20_000;
+const OLLAMA_STATUS_TIMEOUT_MS = readPositiveIntegerEnv("PROTOVAULT_OLLAMA_STATUS_TIMEOUT_MS", 3_000);
+const OLLAMA_GENERATE_TIMEOUT_MS = readPositiveIntegerEnv("PROTOVAULT_OLLAMA_GENERATE_TIMEOUT_MS", 120_000);
+const OLLAMA_NUM_PREDICT = readPositiveIntegerEnv("PROTOVAULT_OLLAMA_NUM_PREDICT", 700);
 const MODEL_PREFERENCE = ["qwen2.5:3b", "qwen2.5:1.5b", "qwen3:4b", "qwen", "deepseek", "llama3.1", "llama3", "mistral", "gemma"];
 
 interface OllamaTagsResponse {
@@ -18,6 +20,13 @@ interface OllamaTagsResponse {
 interface OllamaGenerateResponse {
   response?: string;
   error?: string;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function ollamaEndpoint(): string {
@@ -37,13 +46,22 @@ function selectOllamaModel(models: string[], requestedModel?: string): string | 
   return models[0];
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = OLLAMA_TIMEOUT_MS): Promise<T> {
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message));
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = OLLAMA_GENERATE_TIMEOUT_MS, timeoutMessage?: string): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
     return await response.json() as T;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(timeoutMessage ?? `Ollama 请求超过 ${Math.round(timeoutMs / 1000)} 秒未返回，已中止。`);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -52,7 +70,12 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = OLLAMA_
 export async function getAssistantRuntimeStatus(): Promise<AssistantRuntimeStatus> {
   const endpoint = ollamaEndpoint();
   try {
-    const payload = await fetchJson<OllamaTagsResponse>(`${endpoint}/api/tags`, { method: "GET" }, 3_000);
+    const payload = await fetchJson<OllamaTagsResponse>(
+      `${endpoint}/api/tags`,
+      { method: "GET" },
+      OLLAMA_STATUS_TIMEOUT_MS,
+      `Ollama 状态检测超过 ${Math.round(OLLAMA_STATUS_TIMEOUT_MS / 1000)} 秒未返回。请确认 ollama serve 正常运行。`
+    );
     const models = (payload.models ?? [])
       .map((model) => model.name ?? model.model ?? "")
       .filter(Boolean);
@@ -76,16 +99,17 @@ export async function getAssistantRuntimeStatus(): Promise<AssistantRuntimeStatu
 function fallbackAnswer(input: AssistantAskInput, moduleIds: string[], error?: string): string {
   const modules = PROTOVAULT_ASSISTANT_MODULES.filter((module) => moduleIds.includes(module.id));
   const summaries = modules.map((module) => `- ${module.title}：${module.summary}`).join("\n");
-  return `本地 Ollama 当前不可用，因此先用内置知识库给出离线提示。
+  return `本地 Ollama 没有返回可用回答，因此先用内置知识库给出离线提示。
 
 相关模块：
 ${summaries}
 
 你可以这样处理：
 1. 如果是操作问题，先在上方相关模块中定位入口，再回到工作台执行。
-2. 如果要启用 AI 问答，请启动 Ollama：ollama serve。
-3. 拉取一个本地模型，例如：ollama pull qwen2.5:3b。
-4. 回到 ProtoVault 后重新打开 AI 使用助手，系统会自动读取可用模型。
+2. 如果运行时信息是超时，说明服务已连上但模型生成太慢；可重试一次、切换 qwen2.5:3b，或提高 PROTOVAULT_OLLAMA_GENERATE_TIMEOUT_MS。
+3. 如果要启用 AI 问答，请启动 Ollama：ollama serve。
+4. 拉取一个本地模型，例如：ollama pull qwen2.5:3b。
+5. 回到 ProtoVault 后重新打开 AI 使用助手，系统会自动读取可用模型。
 
 原始问题：${input.question}
 ${error ? `\n运行时信息：${error}` : ""}`;
@@ -135,10 +159,11 @@ export async function askLocalAssistant(input: AssistantAskInput): Promise<Assis
         stream: false,
         options: {
           temperature: 0.2,
-          num_ctx: 4096
+          num_ctx: 4096,
+          num_predict: OLLAMA_NUM_PREDICT
         }
       })
-    });
+    }, OLLAMA_GENERATE_TIMEOUT_MS, `Ollama 生成回答超过 ${Math.round(OLLAMA_GENERATE_TIMEOUT_MS / 1000)} 秒未返回，已中止。模型首次加载或大模型推理会比较慢，可稍后重试、切换 qwen2.5:3b，或设置 PROTOVAULT_OLLAMA_GENERATE_TIMEOUT_MS。`);
     const answer = payload.response?.trim();
     if (!answer) throw new Error(payload.error || "Ollama 返回为空。");
     return {
