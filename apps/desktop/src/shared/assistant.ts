@@ -196,6 +196,9 @@ Lint 规则覆盖指针和运行期容器、非定宽类型、缺失字段语义
     content: `
 ProtoVault 使用 Git 分支和 Tag 表达协议演进，不再使用孤立的 .protocol/snapshots 工作流。
 分支表示实验线、任务线或发布维护线；Tag 表示一次可追溯的协议基线。
+当前版本的界面只提供 Git 状态展示、创建协议基线 Tag 和版本 Diff；不提供 Git commit、切换分支、推送或完整源码管理界面。
+Git 状态展示在左侧底部工作区栏；协议相关操作在顶部工作栏的“基线 Tag”和“版本 Diff”按钮。
+提交版本需要在外部 Git 工具或命令行完成，例如 git add 和 git commit。不要回答界面里有“Git commit”按钮。
 创建基线 Tag 前必须满足：当前路径属于 Git 仓库、无冲突、当前工作区无未提交改动、Tag 名称不存在。
 基线文件写入 .protocol/baselines/*.json，包含协议类型、字段、枚举、布局、Git commit、网络节点、链路、协议绑定和 FlowView 摘要。
 版本 Diff 默认比较最近基线 Tag 与当前 working tree，覆盖字段/枚举/布局变化，也覆盖网络节点、链路、协议绑定、FlowView 和带宽变化。

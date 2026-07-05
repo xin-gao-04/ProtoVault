@@ -525,6 +525,13 @@ content:
 
 ProtoVault 使用 Git 分支和 Tag 管理协议演进。
 
+当前版本 UI 边界：
+
+- 左侧底部工作区栏只展示 Git 状态，例如当前分支、最近 Tag、dirty 改动数量。
+- 顶部工作栏提供“基线 Tag”和“版本 Diff”两个协议版本治理按钮。
+- 当前版本不提供 Git commit、切换分支、push、pull 或完整源码管理界面。
+- 如果用户问“提交版本在哪里”，必须说明：界面里没有 Git commit 按钮；需要使用外部 Git 工具或命令行先提交，再回到 ProtoVault 创建基线 Tag 或查看版本 Diff。
+
 分支作用：
 
 - 实验线。
@@ -573,7 +580,7 @@ Tag 作用：
 ```text
 编辑协议
 → Lint / 文档 / 测试
-→ Git commit
+→ 外部 Git commit
 → 创建基线 Tag
 → 版本 Diff
 ```
