@@ -16,7 +16,7 @@ import {
 import type {
   AddFieldInput,
   AddEnumValueInput,
-  CreateSnapshotInput,
+  CreateBaselineTagInput,
   CreateEnumInput,
   CreateHeaderInput,
   CreateNetworkFlowViewInput,
@@ -33,10 +33,13 @@ import type {
   DeleteNetworkNodeInput,
   DeleteProtocolBindingInput,
   DeleteStructInput,
-  DiffProtocolInput,
   GenerateDocumentInput,
   GenerateNetworkReportInput,
   GeneratedDocumentReport,
+  GitBranchInfo,
+  GitSemanticDiffInput,
+  GitTagInfo,
+  GitWorkspaceStatus,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
@@ -44,7 +47,7 @@ import type {
   SemanticDiffReport,
   NetworkNodeKind,
   NetworkTransportKind,
-  ProtocolSnapshotSummary,
+  ProtocolBaselineSummary,
   ProtocolBindingCriticality,
   UpdateNetworkLinkInput,
   UpdateNetworkFlowViewInput,
@@ -1764,6 +1767,93 @@ function safeReportId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "network-flow";
 }
 
+async function git(root: string, args: string[], options?: { allowFailure?: false }): Promise<string>;
+async function git(root: string, args: string[], options: { allowFailure: true }): Promise<string | null>;
+async function git(root: string, args: string[], options?: { allowFailure?: boolean }): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true });
+    return stdout.trim();
+  } catch (error) {
+    if (options?.allowFailure) return null;
+    const stderr = typeof (error as { stderr?: unknown }).stderr === "string" ? (error as { stderr: string }).stderr.trim() : "";
+    const message = stderr || (error instanceof Error ? error.message : String(error));
+    throw new Error(message);
+  }
+}
+
+function normalizeGitPath(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
+function parseGitStatusLine(line: string): { indexStatus: string; workingTreeStatus: string; path: string } | null {
+  if (!line.trim()) return null;
+  const indexStatus = line[0] ?? " ";
+  const workingTreeStatus = line[1] ?? " ";
+  const rawPath = line.slice(3).trim();
+  const renamed = rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) ?? rawPath : rawPath;
+  return { indexStatus, workingTreeStatus, path: normalizeGitPath(renamed.replace(/^"|"$/g, "")) };
+}
+
+async function gitWorkspacePathspec(root: string, repositoryRoot: string): Promise<string> {
+  const relativePath = normalizeGitPath(relative(repositoryRoot, root));
+  return relativePath && !relativePath.startsWith("..") ? relativePath : ".";
+}
+
+export async function getGitStatus(workspaceRoot: string): Promise<GitWorkspaceStatus> {
+  const root = resolve(workspaceRoot);
+  const repositoryRoot = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true });
+  if (!repositoryRoot) {
+    return {
+      isRepository: false,
+      isDirty: false,
+      hasConflicts: false,
+      entries: [],
+      message: "当前工作区不在 Git 仓库中。"
+    };
+  }
+  const repoRoot = resolve(repositoryRoot);
+  const pathspec = await gitWorkspacePathspec(root, repoRoot);
+  const currentBranch = await git(repoRoot, ["branch", "--show-current"], { allowFailure: true }) || undefined;
+  const headCommit = await git(repoRoot, ["rev-parse", "HEAD"], { allowFailure: true }) || undefined;
+  const latestTag = await git(repoRoot, ["describe", "--tags", "--abbrev=0"], { allowFailure: true }) || undefined;
+  const statusOutput = await git(repoRoot, ["status", "--porcelain", "--untracked-files=all", "--", pathspec], { allowFailure: true }) ?? "";
+  const entries = statusOutput.split(/\r?\n/).map(parseGitStatusLine).filter((entry): entry is GitWorkspaceStatus["entries"][number] => Boolean(entry));
+  const hasConflicts = entries.some((entry) => entry.indexStatus === "U" || entry.workingTreeStatus === "U" || ["AA", "DD"].includes(`${entry.indexStatus}${entry.workingTreeStatus}`));
+  return {
+    isRepository: true,
+    repositoryRoot: repoRoot,
+    workspaceRelativePath: pathspec,
+    currentBranch,
+    headCommit,
+    headShortCommit: headCommit?.slice(0, 7),
+    latestTag,
+    isDirty: entries.length > 0,
+    hasConflicts,
+    entries
+  };
+}
+
+export async function listGitBranches(workspaceRoot: string): Promise<GitBranchInfo[]> {
+  const status = await getGitStatus(workspaceRoot);
+  if (!status.isRepository || !status.repositoryRoot) return [];
+  const output = await git(status.repositoryRoot, ["branch", "--format=%(if)%(HEAD)%(then)*%(else) %(end)%(refname:short)|%(objectname)"], { allowFailure: true }) ?? "";
+  return output.split(/\r?\n/).filter(Boolean).map((line) => {
+    const current = line.startsWith("*");
+    const [name, commit] = line.slice(1).split("|");
+    return { name, current, commit };
+  });
+}
+
+export async function listGitTags(workspaceRoot: string): Promise<GitTagInfo[]> {
+  const status = await getGitStatus(workspaceRoot);
+  if (!status.isRepository || !status.repositoryRoot) return [];
+  const output = await git(status.repositoryRoot, ["tag", "--sort=-creatordate", "--format=%(refname:short)|%(objectname)|%(subject)|%(creatordate:iso-strict)"], { allowFailure: true }) ?? "";
+  return output.split(/\r?\n/).filter(Boolean).map((line) => {
+    const [name, commit, subject, createdAt] = line.split("|");
+    return { name, commit, subject, createdAt };
+  });
+}
+
 export async function generateNetworkReport(input: GenerateNetworkReportInput): Promise<GeneratedDocumentReport> {
   const workspace = await scanWorkspace(input.workspaceRoot);
   const flowViews = networkReportFlowViewOptions(workspace);
@@ -1856,8 +1946,8 @@ export async function generateNetworkReport(input: GenerateNetworkReportInput): 
   return { generatedAt, path: target, relativePath: reportRelativePath(workspace.rootPath, target), content };
 }
 
-interface SnapshotFile {
-  schemaVersion: 1;
+interface ProtocolStateFile {
+  schemaVersion: 2;
   id: string;
   label?: string;
   createdAt: string;
@@ -1880,27 +1970,54 @@ interface SnapshotFile {
   }>;
 }
 
-function snapshotId(label?: string): string {
-  const safeLabel = label?.trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return safeLabel ? `${stamp}-${safeLabel}` : stamp;
-}
-
-function snapshotSummary(root: string, snapshot: SnapshotFile, path: string): ProtocolSnapshotSummary {
-  return {
-    id: snapshot.id,
-    label: snapshot.label,
-    createdAt: snapshot.createdAt,
-    path,
-    relativePath: reportRelativePath(root, path),
-    typeCount: snapshot.workspace.typeCount,
-    fileCount: snapshot.workspace.fileCount
+interface BaselineFile extends ProtocolStateFile {
+  schemaVersion: 2;
+  tagName: string;
+  branch?: string;
+  commit?: string;
+  shortCommit?: string;
+  gitStatus: {
+    repositoryRoot?: string;
+    workspaceRelativePath?: string;
+    clean: boolean;
+  };
+  network: {
+    nodeCount: number;
+    linkCount: number;
+    bindingCount: number;
+    flowViewCount: number;
+    nodes: Array<{ id: string; name: string; kind: string }>;
+    links: Array<{ id: string; name: string; fromNodeId: string; toNodeId: string; transport: string; estimatedBandwidthBps: number }>;
+    bindings: Array<{ id: string; name: string; linkId: string; typeId: string; estimatedBandwidthBps: number; criticality: string }>;
+    views: Array<{ id: string; name: string; filter?: string }>;
   };
 }
 
-function snapshotFromWorkspace(workspace: WorkspaceView, id: string, label?: string): SnapshotFile {
+function baselineId(tagName: string): string {
+  return tagName.trim().replace(/[^A-Za-z0-9._/-]+/g, "-").replace(/^-+|-+$/g, "").replaceAll("/", "-").slice(0, 80) || "baseline";
+}
+
+function baselineSummary(root: string, baseline: BaselineFile, path: string): ProtocolBaselineSummary {
   return {
-    schemaVersion: 1,
+    id: baseline.id,
+    tagName: baseline.tagName,
+    branch: baseline.branch,
+    commit: baseline.commit,
+    shortCommit: baseline.shortCommit,
+    createdAt: baseline.createdAt,
+    path,
+    relativePath: reportRelativePath(root, path),
+    typeCount: baseline.workspace.typeCount,
+    fileCount: baseline.workspace.fileCount,
+    networkNodeCount: baseline.network.nodeCount,
+    networkLinkCount: baseline.network.linkCount,
+    protocolBindingCount: baseline.network.bindingCount
+  };
+}
+
+function protocolStateFromWorkspace(workspace: WorkspaceView, id: string, label?: string): ProtocolStateFile {
+  return {
+    schemaVersion: 2,
     id,
     label,
     createdAt: new Date().toISOString(),
@@ -1927,40 +2044,124 @@ function snapshotFromWorkspace(workspace: WorkspaceView, id: string, label?: str
   };
 }
 
-async function writeSnapshot(root: string, snapshot: SnapshotFile): Promise<string> {
-  const target = join(root, ".protocol", "snapshots", `${snapshot.id}.json`);
-  await atomicWriteFile(target, `${JSON.stringify(snapshot, null, 2)}\n`);
+async function baselineFromWorkspace(workspace: WorkspaceView, tagName: string, status?: GitWorkspaceStatus): Promise<BaselineFile> {
+  const gitStatus = status ?? await getGitStatus(workspace.rootPath);
+  const state = protocolStateFromWorkspace(workspace, baselineId(tagName), tagName);
+  return {
+    ...state,
+    schemaVersion: 2,
+    tagName,
+    branch: gitStatus.currentBranch,
+    commit: gitStatus.headCommit,
+    shortCommit: gitStatus.headShortCommit,
+    gitStatus: {
+      repositoryRoot: gitStatus.repositoryRoot,
+      workspaceRelativePath: gitStatus.workspaceRelativePath,
+      clean: !gitStatus.isDirty && !gitStatus.hasConflicts
+    },
+    network: {
+      nodeCount: workspace.network.nodes.length,
+      linkCount: workspace.network.links.length,
+      bindingCount: workspace.network.bindings.length,
+      flowViewCount: workspace.network.views.length,
+      nodes: workspace.network.nodes.map((node) => ({ id: node.id, name: node.name, kind: node.kind })),
+      links: workspace.network.links.map((link) => ({
+        id: link.id,
+        name: link.name,
+        fromNodeId: link.fromNodeId,
+        toNodeId: link.toNodeId,
+        transport: link.transport,
+        estimatedBandwidthBps: link.estimatedBandwidthBps
+      })),
+      bindings: workspace.network.bindings.map((binding) => ({
+        id: binding.id,
+        name: binding.name,
+        linkId: binding.linkId,
+        typeId: binding.typeId,
+        estimatedBandwidthBps: binding.estimatedBandwidthBps,
+        criticality: binding.criticality
+      })),
+      views: workspace.network.views.map((view) => ({ id: view.id, name: view.name, filter: view.filter }))
+    }
+  };
+}
+
+async function writeBaseline(root: string, baseline: BaselineFile): Promise<string> {
+  const target = join(root, ".protocol", "baselines", `${baseline.id}.json`);
+  await atomicWriteFile(target, `${JSON.stringify(baseline, null, 2)}\n`);
   return target;
 }
 
-async function readSnapshot(path: string): Promise<SnapshotFile> {
-  return JSON.parse(await fs.readFile(path, "utf8")) as SnapshotFile;
+async function readBaseline(path: string): Promise<BaselineFile> {
+  return JSON.parse(await fs.readFile(path, "utf8")) as BaselineFile;
 }
 
-async function latestSnapshotPath(root: string): Promise<string | undefined> {
-  const directory = join(root, ".protocol", "snapshots");
+async function latestBaselinePath(root: string): Promise<string | undefined> {
+  const directory = join(root, ".protocol", "baselines");
   try {
     const entries = await fs.readdir(directory);
-    const snapshots = entries.filter((entry) => entry.endsWith(".json")).sort();
-    const latest = snapshots.at(-1);
+    const baselines = entries.filter((entry) => entry.endsWith(".json")).sort();
+    const latest = baselines.at(-1);
     return latest ? join(directory, latest) : undefined;
   } catch {
     return undefined;
   }
 }
 
-export async function createProtocolSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary> {
-  const workspace = await scanWorkspace(input.workspaceRoot);
-  const snapshot = snapshotFromWorkspace(workspace, snapshotId(input.label), input.label?.trim() || undefined);
-  const path = await writeSnapshot(workspace.rootPath, snapshot);
-  return snapshotSummary(workspace.rootPath, snapshot, path);
+async function baselinePathForRef(root: string, ref?: string): Promise<string | undefined> {
+  if (!ref) return latestBaselinePath(root);
+  const direct = resolve(isAbsolute(ref) ? ref : join(root, ref));
+  try {
+    await fs.stat(direct);
+    return direct;
+  } catch {
+    // Fall through to tag-name lookup.
+  }
+  const directory = join(root, ".protocol", "baselines");
+  try {
+    const entries = await fs.readdir(directory);
+    for (const entry of entries.filter((item) => item.endsWith(".json")).sort().reverse()) {
+      const path = join(directory, entry);
+      const baseline = await readBaseline(path);
+      if (baseline.tagName === ref || baseline.id === ref) return path;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function sanitizeGitTagName(value: string): string {
+  const tag = value.trim();
+  if (!tag) throw new Error("Tag 名称不能为空。");
+  if (tag.startsWith("-") || tag.endsWith("/") || tag.includes("..") || /[\s~^:?*[\]\\]/.test(tag)) {
+    throw new Error("Tag 名称包含 Git 不支持的字符。");
+  }
+  return tag;
+}
+
+export async function createProtocolBaselineTag(input: CreateBaselineTagInput): Promise<ProtocolBaselineSummary> {
+  const root = resolve(input.workspaceRoot);
+  const tagName = sanitizeGitTagName(input.tagName);
+  const status = await getGitStatus(root);
+  if (!status.isRepository || !status.repositoryRoot) throw new Error("当前工作区不在 Git 仓库中，无法创建基线 Tag。");
+  if (status.hasConflicts) throw new Error("当前工作区存在 Git 冲突，请先解决冲突再创建基线。");
+  if (status.isDirty) throw new Error("当前工作区存在未提交改动。创建基线 Tag 前请先提交或清理改动。");
+  const existingTag = await git(status.repositoryRoot, ["tag", "--list", tagName], { allowFailure: true });
+  if (existingTag?.split(/\r?\n/).includes(tagName)) throw new Error(`Tag 已存在：${tagName}`);
+  const workspace = await scanWorkspace(root);
+  const baseline = await baselineFromWorkspace(workspace, tagName, status);
+  const path = await writeBaseline(root, baseline);
+  const message = input.message?.trim() || `ProtoVault protocol baseline ${tagName}\n\nBaseline: ${reportRelativePath(root, path)}\nCommit: ${baseline.commit ?? "unknown"}`;
+  await git(status.repositoryRoot, ["tag", "-a", tagName, "-m", message]);
+  return baselineSummary(root, baseline, path);
 }
 
 function semanticChange(kind: SemanticChange["kind"], severity: SemanticChange["severity"], message: string, targetId?: string, before?: string | number, after?: string | number): SemanticChange {
   return { id: stableId("change", `${kind}:${targetId ?? message}:${before ?? ""}:${after ?? ""}`), kind, severity, message, targetId, before, after };
 }
 
-function diffSnapshots(base: SnapshotFile, current: SnapshotFile): SemanticChange[] {
+function diffProtocolStates(base: ProtocolStateFile, current: ProtocolStateFile): SemanticChange[] {
   const changes: SemanticChange[] = [];
   const baseTypes = new Map(base.types.map((type) => [type.id, type]));
   const currentTypes = new Map(current.types.map((type) => [type.id, type]));
@@ -2023,19 +2224,75 @@ function diffSnapshots(base: SnapshotFile, current: SnapshotFile): SemanticChang
   return changes;
 }
 
-export async function diffProtocolSnapshot(input: DiffProtocolInput): Promise<SemanticDiffReport> {
+function diffNetworkBaselines(base: BaselineFile, current: BaselineFile): SemanticChange[] {
+  const changes: SemanticChange[] = [];
+  const baseNodes = new Map(base.network.nodes.map((node) => [node.id, node]));
+  const currentNodes = new Map(current.network.nodes.map((node) => [node.id, node]));
+  for (const [id, node] of currentNodes) {
+    if (!baseNodes.has(id)) changes.push(semanticChange("network-node-added", "compatible", `新增网络节点 ${node.name}。`, id));
+  }
+  for (const [id, node] of baseNodes) {
+    if (!currentNodes.has(id)) changes.push(semanticChange("network-node-removed", "review", `删除网络节点 ${node.name}。`, id));
+  }
+
+  const baseLinks = new Map(base.network.links.map((link) => [link.id, link]));
+  const currentLinks = new Map(current.network.links.map((link) => [link.id, link]));
+  for (const [id, link] of currentLinks) {
+    const before = baseLinks.get(id);
+    if (!before) {
+      changes.push(semanticChange("network-link-added", "compatible", `新增通信链路 ${link.name}。`, id));
+      continue;
+    }
+    if (before.estimatedBandwidthBps !== link.estimatedBandwidthBps) {
+      changes.push(semanticChange("network-link-bandwidth-changed", "review", `${link.name} 估算带宽从 ${formatReportBandwidth(before.estimatedBandwidthBps)} 变为 ${formatReportBandwidth(link.estimatedBandwidthBps)}。`, id, before.estimatedBandwidthBps, link.estimatedBandwidthBps));
+    }
+  }
+  for (const [id, link] of baseLinks) {
+    if (!currentLinks.has(id)) changes.push(semanticChange("network-link-removed", "review", `删除通信链路 ${link.name}。`, id));
+  }
+
+  const baseBindings = new Map(base.network.bindings.map((binding) => [binding.id, binding]));
+  const currentBindings = new Map(current.network.bindings.map((binding) => [binding.id, binding]));
+  for (const [id, binding] of currentBindings) {
+    const before = baseBindings.get(id);
+    if (!before) {
+      changes.push(semanticChange("protocol-binding-added", "compatible", `新增协议绑定 ${binding.name}。`, id));
+      continue;
+    }
+    if (before.estimatedBandwidthBps !== binding.estimatedBandwidthBps) {
+      changes.push(semanticChange("protocol-binding-bandwidth-changed", "review", `${binding.name} 估算带宽从 ${formatReportBandwidth(before.estimatedBandwidthBps)} 变为 ${formatReportBandwidth(binding.estimatedBandwidthBps)}。`, id, before.estimatedBandwidthBps, binding.estimatedBandwidthBps));
+    }
+  }
+  for (const [id, binding] of baseBindings) {
+    if (!currentBindings.has(id)) changes.push(semanticChange("protocol-binding-removed", "review", `删除协议绑定 ${binding.name}。`, id));
+  }
+
+  const baseViews = new Map(base.network.views.map((view) => [view.id, view]));
+  const currentViews = new Map(current.network.views.map((view) => [view.id, view]));
+  for (const [id, view] of currentViews) {
+    if (!baseViews.has(id)) changes.push(semanticChange("flow-view-added", "compatible", `新增数据流视角 ${view.name}。`, id));
+  }
+  for (const [id, view] of baseViews) {
+    if (!currentViews.has(id)) changes.push(semanticChange("flow-view-removed", "review", `删除数据流视角 ${view.name}。`, id));
+  }
+  return changes;
+}
+
+export async function diffProtocolBaseline(input: GitSemanticDiffInput): Promise<SemanticDiffReport> {
   const root = resolve(input.workspaceRoot);
-  const basePath = input.baseSnapshotPath ? assertWorkspaceFile(root, input.baseSnapshotPath) : await latestSnapshotPath(root);
   const workspace = await scanWorkspace(root);
-  const current = snapshotFromWorkspace(workspace, snapshotId("current"), "current");
-  const currentPath = await writeSnapshot(root, current);
-  const base = basePath ? await readSnapshot(basePath) : undefined;
-  const changes = base ? diffSnapshots(base, current) : [];
+  const current = await baselineFromWorkspace(workspace, "working-tree");
+  const currentPath = await writeBaseline(root, current);
+  const basePath = input.baseBaselinePath ? assertWorkspaceFile(root, input.baseBaselinePath) : await baselinePathForRef(root, input.baseRef);
+  const base = basePath ? await readBaseline(basePath) : undefined;
+  const changes = base ? [...diffProtocolStates(base, current), ...diffNetworkBaselines(base, current)] : [];
   const generatedAt = new Date().toISOString();
   return {
     generatedAt,
-    baseSnapshot: base && basePath ? snapshotSummary(root, base, basePath) : undefined,
-    currentSnapshot: snapshotSummary(root, current, currentPath),
+    baseBaseline: base && basePath ? baselineSummary(root, base, basePath) : undefined,
+    currentBaseline: baselineSummary(root, current, currentPath),
+    baseRef: input.baseRef ?? base?.tagName,
+    targetRef: "working-tree",
     changeCount: changes.length,
     breakingCount: changes.filter((item) => item.severity === "breaking").length,
     compatibleCount: changes.filter((item) => item.severity === "compatible").length,

@@ -11,7 +11,7 @@ import {
   createNetworkLink,
   createNetworkFlowView,
   createNetworkNode,
-  createProtocolSnapshot,
+  createProtocolBaselineTag,
   createProtocolBinding,
   createEnum,
   createHeader,
@@ -25,9 +25,11 @@ import {
   deleteNetworkNode,
   deleteProtocolBinding,
   deleteStruct,
-  diffProtocolSnapshot,
+  diffProtocolBaseline,
   generateNetworkReport,
   generateProtocolDocument,
+  getGitStatus,
+  listGitTags,
   lintWorkspace,
   renameEnum,
   renameHeader,
@@ -66,6 +68,14 @@ async function findTestClang(): Promise<string> {
     }
   }
   throw new Error("未找到 clang++，无法执行布局交叉验证测试。");
+}
+
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  await execFileAsync("git", args, {
+    cwd,
+    windowsHide: true,
+    maxBuffer: 16 * 1024 * 1024
+  });
 }
 
 async function runLayoutProbe(): Promise<ProbeMetrics> {
@@ -1002,17 +1012,54 @@ enum class PacketKind {
     }
   }, 30_000);
 
-  it("creates snapshots and reports semantic diffs", async () => {
+  it("creates git baseline tags and reports semantic diffs", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "protovault-diff-"));
     try {
+      await runGit(root, ["init"]);
+      await runGit(root, ["config", "user.email", "protovault@example.test"]);
+      await runGit(root, ["config", "user.name", "ProtoVault Test"]);
+      await writeFile(resolve(root, ".gitignore"), ".protocol/\n", "utf8");
       await createHeader({ workspaceRoot: root, relativePath: "headers/protocol.hpp" });
       let workspace = await createStruct({
         workspaceRoot: root,
         headerPath: resolve(root, "headers", "protocol.hpp"),
         structName: "Packet"
       });
-      const snapshot = await createProtocolSnapshot({ workspaceRoot: root, label: "baseline" });
-      expect(snapshot.relativePath).toMatch(/^\.protocol\/snapshots\/.*baseline\.json$/);
+      workspace = await createNetworkNode({ workspaceRoot: root, name: "Producer", kind: "model" });
+      workspace = await createNetworkNode({ workspaceRoot: root, name: "Consumer", kind: "service" });
+      const producer = workspace.network.nodes.find((node) => node.name === "Producer")!;
+      const consumer = workspace.network.nodes.find((node) => node.name === "Consumer")!;
+      workspace = await createNetworkLink({
+        workspaceRoot: root,
+        name: "Packet Link",
+        fromNodeId: producer.id,
+        toNodeId: consumer.id,
+        transport: "dds"
+      });
+      const link = workspace.network.links.find((item) => item.name === "Packet Link")!;
+      const initialPacket = workspace.types.find((type) => type.qualifiedName === "protovault::Packet")!;
+      await createProtocolBinding({
+        workspaceRoot: root,
+        name: "Packet@10Hz",
+        linkId: link.id,
+        typeId: initialPacket.id,
+        frequencyHz: 10
+      });
+      await runGit(root, ["add", "."]);
+      await runGit(root, ["commit", "-m", "baseline protocol"]);
+
+      const cleanStatus = await getGitStatus(root);
+      expect(cleanStatus.isRepository).toBe(true);
+      expect(cleanStatus.isDirty).toBe(false);
+      const baseline = await createProtocolBaselineTag({
+        workspaceRoot: root,
+        tagName: "protovault/baseline/test",
+        message: "test baseline"
+      });
+      expect(baseline.tagName).toBe("protovault/baseline/test");
+      expect(baseline.relativePath).toBe(".protocol/baselines/protovault-baseline-test.json");
+      expect(baseline.protocolBindingCount).toBe(1);
+      expect((await listGitTags(root)).map((tag) => tag.name)).toContain("protovault/baseline/test");
 
       let packet = workspace.types.find((type) => type.qualifiedName === "protovault::Packet")!;
       workspace = await addField({
@@ -1029,14 +1076,25 @@ enum class PacketKind {
         fieldType: "std::uint64_t",
         fieldName: "id"
       });
+      const updatedBinding = (await scanWorkspace(root)).network.bindings.find((binding) => binding.name === "Packet@10Hz")!;
+      await updateProtocolBinding({
+        workspaceRoot: root,
+        bindingId: updatedBinding.id,
+        name: "Packet@20Hz",
+        linkId: updatedBinding.linkId,
+        typeId: updatedBinding.typeId,
+        frequencyHz: 20
+      });
 
-      const diff = await diffProtocolSnapshot({ workspaceRoot: root, baseSnapshotPath: snapshot.path });
-      expect(diff.baseSnapshot?.id).toBe(snapshot.id);
+      const diff = await diffProtocolBaseline({ workspaceRoot: root, baseRef: "protovault/baseline/test" });
+      expect(diff.baseBaseline?.tagName).toBe("protovault/baseline/test");
+      expect(diff.currentBaseline.tagName).toBe("working-tree");
       expect(diff.changeCount).toBeGreaterThan(0);
       expect(diff.breakingCount).toBeGreaterThan(0);
       expect(diff.changes.map((change) => change.kind)).toEqual(expect.arrayContaining([
         "field-added",
-        "field-type-changed"
+        "field-type-changed",
+        "protocol-binding-bandwidth-changed"
       ]));
     } finally {
       await rm(root, { recursive: true, force: true });

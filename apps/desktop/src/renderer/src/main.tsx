@@ -2,10 +2,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import type {
   GeneratedDocumentReport,
+  GitTagInfo,
+  GitWorkspaceStatus,
   NetworkNodeKind,
   NetworkTransportKind,
   ProtocolBindingCriticality,
-  ProtocolSnapshotSummary,
+  ProtocolBaselineSummary,
   SemanticDiffReport,
   WorkspaceNetworkLinkView,
   WorkspaceNetworkNodeView,
@@ -53,7 +55,7 @@ type NavigationSnapshot = {
 type WorkspaceReportState =
   | { kind: "lint"; report: WorkspaceLintReport }
   | { kind: "document"; report: GeneratedDocumentReport }
-  | { kind: "snapshot"; report: ProtocolSnapshotSummary }
+  | { kind: "baseline"; report: ProtocolBaselineSummary }
   | { kind: "diff"; report: SemanticDiffReport };
 type ContextMenuState = {
   x: number;
@@ -104,6 +106,15 @@ const SUPPORTED_BASE_FIELD_TYPES = [
 ];
 const MAX_NAVIGATION_HISTORY = 80;
 
+function gitStatusLabel(status: GitWorkspaceStatus | null, tags: GitTagInfo[]): string {
+  if (!status) return "Git 状态读取中…";
+  if (!status.isRepository) return "非 Git 工作区";
+  const branch = status.currentBranch ?? "detached";
+  const dirty = status.isDirty ? ` · ${status.entries.length} 个改动` : " · clean";
+  const tag = status.latestTag ?? tags[0]?.name;
+  return `Git ${branch}${tag ? ` · ${tag}` : ""}${dirty}`;
+}
+
 function navigationSnapshotEquals(a: NavigationSnapshot | null, b: NavigationSnapshot | null): boolean {
   if (!a || !b) return a === b;
   return a.centerViewMode === b.centerViewMode
@@ -125,6 +136,8 @@ function pushNavigationSnapshot(stack: NavigationSnapshot[], snapshot: Navigatio
 function App(): React.JSX.Element {
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
   const [workspace, setWorkspace] = React.useState<WorkspaceView | null>(null);
+  const [gitStatus, setGitStatus] = React.useState<GitWorkspaceStatus | null>(null);
+  const [gitTags, setGitTags] = React.useState<GitTagInfo[]>([]);
   const [selectedTypeId, setSelectedTypeId] = React.useState<string | null>(null);
   const [selectedFilePath, setSelectedFilePath] = React.useState<string | null>(null);
   const [selectedMemberId, setSelectedMemberId] = React.useState<string | null>(null);
@@ -352,6 +365,35 @@ function App(): React.JSX.Element {
     setExternalChange(change);
     setUiNotice(`检测到外部修改：${change.relativePath ?? "工作区 Header"}`);
   }), []);
+
+  React.useEffect(() => {
+    if (!workspace) {
+      setGitStatus(null);
+      setGitTags([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      window.protoVault.gitStatus(workspace.rootPath),
+      window.protoVault.gitTags(workspace.rootPath)
+    ])
+      .then(([status, tags]) => {
+        if (cancelled) return;
+        setGitStatus(status);
+        setGitTags(tags);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGitStatus({
+          isRepository: false,
+          isDirty: false,
+          hasConflicts: false,
+          entries: []
+        });
+        setGitTags([]);
+      });
+    return () => { cancelled = true; };
+  }, [workspace?.rootPath, workspace?.files.length, workspace?.types.length, workspace?.network.updatedAt]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -892,23 +934,52 @@ function App(): React.JSX.Element {
     });
   }
 
-  async function createSnapshotReport(): Promise<void> {
+  function defaultBaselineTagName(): string {
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+    return `protovault/baseline/${stamp}`;
+  }
+
+  async function createBaselineReport(): Promise<void> {
     if (!workspace) return;
     await runWorkspaceAction(async () => {
-      const report = await window.protoVault.createSnapshot({ workspaceRoot: workspace.rootPath, label: "manual" });
-      setWorkspaceReport({ kind: "snapshot", report });
-      setUiNotice(`协议快照已创建：${report.relativePath}`);
+      const latestStatus = await window.protoVault.gitStatus(workspace.rootPath);
+      if (!latestStatus.isRepository) {
+        setUiNotice("当前工作区不在 Git 仓库中，无法创建基线 Tag");
+        return;
+      }
+      if (latestStatus.isDirty) {
+        setUiNotice("当前工作区存在未提交改动，请先提交或清理后再创建基线 Tag");
+        return;
+      }
+      const suggested = defaultBaselineTagName();
+      const tagName = window.prompt("创建协议基线 Git Tag", suggested)?.trim();
+      if (!tagName) return;
+      const report = await window.protoVault.createBaselineTag({
+        workspaceRoot: workspace.rootPath,
+        tagName,
+        message: `ProtoVault protocol baseline ${tagName}`
+      });
+      setGitStatus(await window.protoVault.gitStatus(workspace.rootPath));
+      setGitTags(await window.protoVault.gitTags(workspace.rootPath));
+      setWorkspaceReport({ kind: "baseline", report });
+      setUiNotice(`协议基线 Tag 已创建：${report.tagName}`);
     });
   }
 
-  async function diffSnapshotReport(): Promise<void> {
+  async function runSemanticDiffReport(): Promise<void> {
     if (!workspace) return;
     await runWorkspaceAction(async () => {
-      const report = await window.protoVault.diff({ workspaceRoot: workspace.rootPath });
+      const latestStatus = await window.protoVault.gitStatus(workspace.rootPath);
+      const report = await window.protoVault.semanticDiff({
+        workspaceRoot: workspace.rootPath,
+        baseRef: latestStatus.latestTag
+      });
       setWorkspaceReport({ kind: "diff", report });
-      setUiNotice(report.baseSnapshot
-        ? `语义 Diff 完成：${report.changeCount} 个变化`
-        : "已创建首个当前快照；暂无历史快照可对比");
+      setGitStatus(latestStatus);
+      setGitTags(await window.protoVault.gitTags(workspace.rootPath));
+      setUiNotice(report.baseBaseline
+        ? `版本 Diff 完成：${report.changeCount} 个变化`
+        : "暂无可用协议基线 Tag；已生成当前工作树比较结果");
     });
   }
 
@@ -1743,6 +1814,7 @@ function App(): React.JSX.Element {
           <div className="workspace-dock-summary">
             <span>{workspace?.name ?? "未打开工作区"}</span>
             <small>{workspace ? `${workspace.files.length} Headers · ${workspace.types.length} Types` : "选择目录或加载示例"}</small>
+            {workspace && <small>{gitStatusLabel(gitStatus, gitTags)}</small>}
           </div>
           <div className="workspace-dock-actions">
             <button aria-label="打开本地目录" title="打开本地目录" disabled={loading} onClick={() => void openWorkspace(false)}>▣</button>
@@ -1794,8 +1866,8 @@ function App(): React.JSX.Element {
             {workspace && <>
               <button className="inline-action" disabled={loading} onClick={() => void runLintReport()}>Lint</button>
               <button className="inline-action" disabled={loading} onClick={() => void generateDocumentReport()}>文档</button>
-              <button className="inline-action" disabled={loading} onClick={() => void createSnapshotReport()}>快照</button>
-              <button className="inline-action" disabled={loading} onClick={() => void diffSnapshotReport()}>Diff</button>
+              <button className="inline-action" disabled={loading} onClick={() => void createBaselineReport()}>基线 Tag</button>
+              <button className="inline-action" disabled={loading} onClick={() => void runSemanticDiffReport()}>版本 Diff</button>
             </>}
             {uiNotice && <small className="notice" role="status">{uiNotice}</small>}
             <small className="health">{health}</small>
@@ -1808,7 +1880,7 @@ function App(): React.JSX.Element {
           onRescan={() => void rescanCurrentWorkspace()}
           onDiff={() => {
             setExternalChange(null);
-            void diffSnapshotReport();
+            void runSemanticDiffReport();
           }}
           onDismiss={() => setExternalChange(null)}
         />}
@@ -3215,8 +3287,8 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
         <p className="eyebrow">REPORT</p>
         <h2>{report.kind === "lint" ? "协议 Lint"
           : report.kind === "document" ? documentTitle
-            : report.kind === "snapshot" ? "协议快照"
-              : "语义 Diff"}</h2>
+            : report.kind === "baseline" ? "协议基线 Tag"
+              : "版本 Diff"}</h2>
       </div>
       <button className="inline-action" onClick={onClose}>关闭报告</button>
     </div>
@@ -3245,13 +3317,16 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
       <pre className="report-preview">{report.report.content.slice(0, 4000)}</pre>
     </>}
 
-    {report.kind === "snapshot" && <>
+    {report.kind === "baseline" && <>
       <div className="report-summary">
         <span>{report.report.typeCount} Types</span>
         <span>{report.report.fileCount} Headers</span>
+        <span>{report.report.protocolBindingCount} Bindings</span>
       </div>
-      <p>快照已写入：</p>
+      <p>基线已写入，并创建 Git Tag：</p>
+      <code>{report.report.tagName}</code>
       <code>{report.report.relativePath}</code>
+      {report.report.shortCommit && <p>Commit：{report.report.shortCommit}</p>}
     </>}
 
     {report.kind === "diff" && <>
@@ -3261,7 +3336,10 @@ function WorkspaceReportPanel({ report, workspaceRoot, onClose }: {
         <span>Compatible {report.report.compatibleCount}</span>
         <span>Review {report.report.reviewCount}</span>
       </div>
-      <p>{report.report.baseSnapshot ? `基线：${report.report.baseSnapshot.relativePath}` : "暂无历史基线；已创建当前快照。"}</p>
+      <p>{report.report.baseBaseline
+        ? `基线：${report.report.baseBaseline.tagName} · ${report.report.baseBaseline.relativePath}`
+        : "暂无历史基线；当前仅生成 working-tree 结果。"}</p>
+      <p>目标：{report.report.targetRef}</p>
       {report.report.changes.length === 0
         ? <p className="report-empty">没有语义变化。</p>
         : <div className="report-list">
@@ -4334,7 +4412,7 @@ function ManualView({ workspace, onBack }: { workspace: WorkspaceView | null; on
           <li>在中间表格直接编辑字段、枚举值、注释和初始化值。</li>
           <li>用协议关系图谱检查类型引用关系，用网络地图维护节点、链路和协议绑定。</li>
           <li>先在“数据流视角”定义观察范围，再进入“数据流画布”查看生产节点、链路载荷和消费节点。</li>
-          <li>通过 Lint、文档、快照和 Diff 检查协议演进风险。</li>
+          <li>通过 Lint、文档、Git 基线 Tag 和版本 Diff 检查协议演进风险。</li>
         </ol>
       </article>
 

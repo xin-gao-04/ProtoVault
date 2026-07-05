@@ -15,6 +15,10 @@
     "core:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/core.ps1 test",
     "agent:loop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent-loop.ps1 quick",
     "agent:loop:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent-loop.ps1 status",
-    "agent:loop:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent-loop.ps1 release"
+    "agent:loop:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent-loop.ps1 release",
+    "agent:p14": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/p14-git-loop.ps1 quick",
+    "agent:p14:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/p14-git-loop.ps1 status",
+    "agent:p14:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/p14-git-loop.ps1 release",
+    "agent:p14:all": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/p14-git-loop.ps1 all"
   }
 }

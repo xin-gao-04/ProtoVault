@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AddFieldInput,
   AddEnumValueInput,
-  CreateSnapshotInput,
+  CreateBaselineTagInput,
   CreateEnumInput,
   CreateHeaderInput,
   CreateNetworkLinkInput,
@@ -19,14 +19,17 @@ import type {
   DeleteNetworkFlowViewInput,
   DeleteProtocolBindingInput,
   DeleteStructInput,
-  DiffProtocolInput,
   GenerateDocumentInput,
   GenerateNetworkReportInput,
   GeneratedDocumentReport,
+  GitBranchInfo,
+  GitSemanticDiffInput,
+  GitTagInfo,
+  GitWorkspaceStatus,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
-  ProtocolSnapshotSummary,
+  ProtocolBaselineSummary,
   SemanticDiffReport,
   UpdateNetworkLinkInput,
   UpdateNetworkNodeInput,
@@ -87,8 +90,11 @@ export interface ProtoVaultDesktopApi {
   lint(workspaceRoot: string): Promise<WorkspaceLintReport>;
   generateDocument(input: GenerateDocumentInput): Promise<GeneratedDocumentReport>;
   generateNetworkReport(input: GenerateNetworkReportInput): Promise<GeneratedDocumentReport>;
-  createSnapshot(input: CreateSnapshotInput): Promise<ProtocolSnapshotSummary>;
-  diff(input: DiffProtocolInput): Promise<SemanticDiffReport>;
+  gitStatus(workspaceRoot: string): Promise<GitWorkspaceStatus>;
+  gitBranches(workspaceRoot: string): Promise<GitBranchInfo[]>;
+  gitTags(workspaceRoot: string): Promise<GitTagInfo[]>;
+  createBaselineTag(input: CreateBaselineTagInput): Promise<ProtocolBaselineSummary>;
+  semanticDiff(input: GitSemanticDiffInput): Promise<SemanticDiffReport>;
 }
 
 contextBridge.exposeInMainWorld("protoVault", {
@@ -142,6 +148,9 @@ contextBridge.exposeInMainWorld("protoVault", {
   lint: (workspaceRoot) => ipcRenderer.invoke("protocol:lint", workspaceRoot),
   generateDocument: (input) => ipcRenderer.invoke("protocol:generate-document", input),
   generateNetworkReport: (input) => ipcRenderer.invoke("network:generate-report", input),
-  createSnapshot: (input) => ipcRenderer.invoke("protocol:create-snapshot", input),
-  diff: (input) => ipcRenderer.invoke("protocol:diff", input)
+  gitStatus: (workspaceRoot) => ipcRenderer.invoke("git:status", workspaceRoot),
+  gitBranches: (workspaceRoot) => ipcRenderer.invoke("git:branches", workspaceRoot),
+  gitTags: (workspaceRoot) => ipcRenderer.invoke("git:tags", workspaceRoot),
+  createBaselineTag: (input) => ipcRenderer.invoke("git:create-baseline-tag", input),
+  semanticDiff: (input) => ipcRenderer.invoke("git:semantic-diff", input)
 } satisfies ProtoVaultDesktopApi);

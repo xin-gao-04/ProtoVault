@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONTRACT_VERSION, serviceRequestSchema, workspaceSchema, workspaceViewSchema } from "./index.js";
+import { CONTRACT_VERSION, semanticDiffReportSchema, serviceRequestSchema, workspaceSchema, workspaceViewSchema } from "./index.js";
 
 describe("workspace contract", () => {
   it("round-trips a minimal workspace", () => {
@@ -16,6 +16,45 @@ describe("workspace contract", () => {
 
   it("rejects an unknown API method", () => {
     expect(serviceRequestSchema.safeParse({ id: "1", method: "workspace/delete", payload: {} }).success).toBe(false);
+  });
+
+  it("validates a git baseline semantic diff report", () => {
+    const baseline = {
+      id: "protovault-baseline-test",
+      tagName: "protovault/baseline/test",
+      branch: "main",
+      commit: "0123456789abcdef",
+      shortCommit: "0123456",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      path: "D:/demo/.protocol/baselines/protovault-baseline-test.json",
+      relativePath: ".protocol/baselines/protovault-baseline-test.json",
+      typeCount: 1,
+      fileCount: 1,
+      networkNodeCount: 2,
+      networkLinkCount: 1,
+      protocolBindingCount: 1
+    };
+    const report = {
+      generatedAt: "2026-07-05T00:01:00.000Z",
+      baseBaseline: baseline,
+      currentBaseline: { ...baseline, tagName: "working-tree" },
+      baseRef: "protovault/baseline/test",
+      targetRef: "working-tree",
+      changeCount: 1,
+      breakingCount: 0,
+      compatibleCount: 0,
+      reviewCount: 1,
+      changes: [{
+        id: "change:binding-bandwidth",
+        kind: "protocol-binding-bandwidth-changed",
+        severity: "review",
+        message: "Packet@20Hz bandwidth changed.",
+        before: 80,
+        after: 160
+      }]
+    };
+
+    expect(semanticDiffReportSchema.parse(report)).toEqual(report);
   });
 
   it("validates the desktop workspace view contract", () => {

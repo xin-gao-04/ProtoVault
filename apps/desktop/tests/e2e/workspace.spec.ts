@@ -32,11 +32,10 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await page.getByRole("button", { name: "文档" }).click();
     await expect(page.getByRole("region", { name: "协议报告" })).toContainText(".protocol/reports/protocol-documentation.md");
     await page.getByRole("button", { name: "关闭报告" }).click();
-    await page.getByRole("button", { name: "快照" }).click();
-    await expect(page.getByRole("region", { name: "协议报告" })).toContainText(".protocol/snapshots/");
-    await page.getByRole("button", { name: "关闭报告" }).click();
-    await page.getByRole("button", { name: "Diff" }).click();
-    await expect(page.getByRole("region", { name: "协议报告" })).toContainText("语义 Diff");
+    await expect(page.getByRole("button", { name: "基线 Tag" })).toBeVisible();
+    await page.getByRole("button", { name: "版本 Diff" }).click();
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText("版本 Diff");
+    await expect(page.getByRole("region", { name: "协议报告" })).toContainText("working-tree");
     await page.getByRole("button", { name: "关闭报告" }).click();
     await page.getByRole("button", { name: "网络地图" }).click();
     const network = page.getByRole("region", { name: "协议网络地图" });

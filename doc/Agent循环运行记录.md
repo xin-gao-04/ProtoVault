@@ -2,6 +2,75 @@
 
 本文档记录采用 LoopAgent / loop engineering 思路后的实际运行轨迹。它不是普通更新日志，而是每轮长循环的“状态快照 + 验收记录 + 下一轮入口”。
 
+## 2026-07-05 P14 Loop 0-5：Git 基线与版本治理
+
+### 目标
+
+把旧的协议快照工作流替换为 Git 分支 / Tag 驱动的版本治理：分支表示工作线，Tag 表示协议基线，版本 Diff 对比基线与当前工作树，同时纳入网络事实层变化。
+
+### 基线状态
+
+- 当前提交：`47dcfa3 feat: refine flow navigation and manual`。
+- 本轮开始时仍存在未归属示例 Header 改动和一个 `.tmp` 文件：
+  - `examples/radar-workspace/headers/common/geometry.hpp`
+  - `examples/radar-workspace/headers/common/time.hpp`
+  - `examples/radar-workspace/headers/diagnostics/faults.hpp`
+  - `examples/radar-workspace/headers/telemetry/status.hpp`
+  - `examples/radar-workspace/headers/common/.time.hpp.29896.1783053185857.tmp`
+- 这些文件继续保留，不纳入提交范围。
+
+### 行动
+
+- 新增 Git/Baseline 类型、IPC 和 preload API。
+- 主进程实现：
+  - 工作区 Git 状态读取。
+  - 分支与 Tag 查询。
+  - 创建协议基线 Tag。
+  - 基线文件写入 `.protocol/baselines/*.json`。
+  - 版本 Diff：协议状态 + 网络事实变化。
+- UI 替换：
+  - `快照` → `基线 Tag`。
+  - `Diff` → `版本 Diff`。
+  - 工作区底栏展示分支、最近 Tag 和脏状态。
+- 公共 UI API 不再暴露旧 snapshot 入口。
+- 新增 P14 loop 脚本：
+  - `scripts/p14-git-loop.ps1`
+  - `pnpm agent:p14`
+  - `pnpm agent:p14:all`
+- 文档更新：
+  - `doc/Agent开发计划.md`
+  - `doc/ProtoVault使用手册.md`
+  - `doc/开发更新日志.md`
+
+### 当前验证
+
+已运行：
+
+```powershell
+pnpm --filter @protovault/contracts test
+pnpm --filter @protovault/desktop typecheck
+pnpm --filter @protovault/desktop test
+pnpm agent:p14
+pnpm --filter @protovault/desktop build
+pnpm --filter @protovault/desktop test:e2e
+pnpm release:check
+```
+
+当前结果：
+
+- contracts：1 个测试文件、4 个测试通过。
+- desktop typecheck：通过。
+- desktop：3 个测试文件、20 个测试通过。
+- P14 quick loop：通过。
+- desktop build：通过。
+- Electron E2E：1 个测试通过。
+- C++ core：CMake configure/build 通过，CTest `core-self-test` 通过。
+- 完整 `pnpm release:check` 通过。
+
+### 下一轮入口
+
+P14 的当前 MVP 闭环已通过发布门。下一轮可以继续把 Git 分支/tag 映射为更强业务模板，例如“实验分支 → 评审 Tag → 发布 Tag → 兼容性报告”。
+
 ## 2026-07-03 Loop 3-5：网络上下文、报告与瓶颈提示收束
 
 ### 目标

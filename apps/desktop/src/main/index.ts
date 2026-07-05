@@ -7,7 +7,7 @@ import { createServiceHealth } from "../shared/service";
 import type {
   AddFieldInput,
   AddEnumValueInput,
-  CreateSnapshotInput,
+  CreateBaselineTagInput,
   CreateEnumInput,
   CreateHeaderInput,
   CreateNetworkLinkInput,
@@ -24,9 +24,9 @@ import type {
   DeleteNetworkNodeInput,
   DeleteProtocolBindingInput,
   DeleteStructInput,
-  DiffProtocolInput,
   GenerateDocumentInput,
   GenerateNetworkReportInput,
+  GitSemanticDiffInput,
   RenameEnumInput,
   RenameHeaderInput,
   RenameStructInput,
@@ -50,7 +50,7 @@ import {
   createNetworkLink,
   createNetworkFlowView,
   createNetworkNode,
-  createProtocolSnapshot,
+  createProtocolBaselineTag,
   createProtocolBinding,
   createEnum,
   createHeader,
@@ -64,7 +64,7 @@ import {
   deleteNetworkNode,
   deleteProtocolBinding,
   deleteStruct,
-  diffProtocolSnapshot,
+  diffProtocolBaseline,
   generateNetworkReport,
   generateProtocolDocument,
   lintWorkspace,
@@ -82,7 +82,10 @@ import {
   updateField,
   updateHeaderContent,
   updateHeaderIncludes,
-  updateNote
+  updateNote,
+  getGitStatus,
+  listGitBranches,
+  listGitTags
 } from "./workspace";
 
 interface AppPreferences {
@@ -313,8 +316,11 @@ app.whenReady().then(() => {
   ipcMain.handle("protocol:lint", (_event, workspaceRoot: string) => lintWorkspace(workspaceRoot));
   ipcMain.handle("protocol:generate-document", (_event, input: GenerateDocumentInput) => generateProtocolDocument(input));
   ipcMain.handle("network:generate-report", (_event, input: GenerateNetworkReportInput) => generateNetworkReport(input));
-  ipcMain.handle("protocol:create-snapshot", (_event, input: CreateSnapshotInput) => createProtocolSnapshot(input));
-  ipcMain.handle("protocol:diff", (_event, input: DiffProtocolInput) => diffProtocolSnapshot(input));
+  ipcMain.handle("git:status", (_event, workspaceRoot: string) => getGitStatus(workspaceRoot));
+  ipcMain.handle("git:branches", (_event, workspaceRoot: string) => listGitBranches(workspaceRoot));
+  ipcMain.handle("git:tags", (_event, workspaceRoot: string) => listGitTags(workspaceRoot));
+  ipcMain.handle("git:create-baseline-tag", (_event, input: CreateBaselineTagInput) => createProtocolBaselineTag(input));
+  ipcMain.handle("git:semantic-diff", (_event, input: GitSemanticDiffInput) => diffProtocolBaseline(input));
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

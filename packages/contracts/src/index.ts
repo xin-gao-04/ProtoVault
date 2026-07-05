@@ -141,12 +141,37 @@ export const protocolSnapshotSchema = z.object({
   workspace: workspaceSchema
 });
 
+export const semanticChangeKindSchema = z.enum([
+  "type-added",
+  "type-removed",
+  "field-added",
+  "field-removed",
+  "field-type-changed",
+  "field-offset-changed",
+  "enum-value-added",
+  "enum-value-removed",
+  "enum-value-number-changed",
+  "type-size-changed",
+  "network-node-added",
+  "network-node-removed",
+  "network-link-added",
+  "network-link-removed",
+  "network-link-bandwidth-changed",
+  "protocol-binding-added",
+  "protocol-binding-removed",
+  "protocol-binding-bandwidth-changed",
+  "flow-view-added",
+  "flow-view-removed"
+]);
+
 export const semanticChangeSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["added", "removed", "renamed", "type-changed", "layout-changed", "metadata-changed"]),
-  targetId: z.string().min(1),
-  compatibility: z.enum(["compatible", "possibly-breaking", "breaking"]),
-  summary: z.string().min(1)
+  kind: semanticChangeKindSchema,
+  severity: z.enum(["breaking", "compatible", "review"]),
+  message: z.string().min(1),
+  targetId: z.string().optional(),
+  before: z.union([z.string(), z.number()]).optional(),
+  after: z.union([z.string(), z.number()]).optional()
 });
 
 export const apiErrorSchema = z.object({
@@ -161,7 +186,8 @@ export const serviceRequestSchema = z.object({
   method: z.enum([
     "workspace/open", "workspace/scan", "workspace/status", "protocol/get",
     "protocol/update", "protocol/generate", "protocol/layout", "protocol/lint",
-    "protocol/diff", "sync/status", "sync/resolve"
+    "protocol/diff", "git/status", "git/branches", "git/tags",
+    "git/create-baseline-tag", "git/semantic-diff", "sync/status", "sync/resolve"
   ]),
   payload: z.unknown()
 });
@@ -351,6 +377,68 @@ export const workspaceViewSchema = z.object({
   scanner: z.string().min(1)
 });
 
+export const gitStatusEntrySchema = z.object({
+  path: z.string().min(1),
+  indexStatus: z.string(),
+  workingTreeStatus: z.string()
+});
+
+export const gitWorkspaceStatusSchema = z.object({
+  isRepository: z.boolean(),
+  repositoryRoot: z.string().optional(),
+  workspaceRelativePath: z.string().optional(),
+  currentBranch: z.string().optional(),
+  headCommit: z.string().optional(),
+  headShortCommit: z.string().optional(),
+  latestTag: z.string().optional(),
+  isDirty: z.boolean(),
+  hasConflicts: z.boolean(),
+  entries: z.array(gitStatusEntrySchema),
+  message: z.string().optional()
+});
+
+export const gitBranchInfoSchema = z.object({
+  name: z.string().min(1),
+  current: z.boolean(),
+  commit: z.string().optional()
+});
+
+export const gitTagInfoSchema = z.object({
+  name: z.string().min(1),
+  commit: z.string().optional(),
+  subject: z.string().optional(),
+  createdAt: z.string().optional()
+});
+
+export const protocolBaselineSummarySchema = z.object({
+  id: z.string().min(1),
+  tagName: z.string().min(1),
+  branch: z.string().optional(),
+  commit: z.string().optional(),
+  shortCommit: z.string().optional(),
+  createdAt: z.string().datetime(),
+  path: z.string().min(1),
+  relativePath: z.string().min(1),
+  typeCount: z.number().int().nonnegative(),
+  fileCount: z.number().int().nonnegative(),
+  networkNodeCount: z.number().int().nonnegative(),
+  networkLinkCount: z.number().int().nonnegative(),
+  protocolBindingCount: z.number().int().nonnegative()
+});
+
+export const semanticDiffReportSchema = z.object({
+  generatedAt: z.string().datetime(),
+  baseBaseline: protocolBaselineSummarySchema.optional(),
+  currentBaseline: protocolBaselineSummarySchema,
+  baseRef: z.string().optional(),
+  targetRef: z.string().min(1),
+  changeCount: z.number().int().nonnegative(),
+  breakingCount: z.number().int().nonnegative(),
+  compatibleCount: z.number().int().nonnegative(),
+  reviewCount: z.number().int().nonnegative(),
+  changes: z.array(semanticChangeSchema)
+});
+
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type ProtocolFile = z.infer<typeof protocolFileSchema>;
 export type ProtocolStruct = z.infer<typeof structSchema>;
@@ -364,3 +452,8 @@ export type ApiError = z.infer<typeof apiErrorSchema>;
 export type ServiceRequest = z.infer<typeof serviceRequestSchema>;
 export type WorkspaceViewContract = z.infer<typeof workspaceViewSchema>;
 export type WorkspaceNetworkMapViewContract = z.infer<typeof workspaceNetworkMapViewSchema>;
+export type GitWorkspaceStatusContract = z.infer<typeof gitWorkspaceStatusSchema>;
+export type GitBranchInfoContract = z.infer<typeof gitBranchInfoSchema>;
+export type GitTagInfoContract = z.infer<typeof gitTagInfoSchema>;
+export type ProtocolBaselineSummaryContract = z.infer<typeof protocolBaselineSummarySchema>;
+export type SemanticDiffReportContract = z.infer<typeof semanticDiffReportSchema>;

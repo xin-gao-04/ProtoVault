@@ -168,6 +168,39 @@ export interface WorkspaceView {
   scanner: string;
 }
 
+export interface GitStatusEntry {
+  path: string;
+  indexStatus: string;
+  workingTreeStatus: string;
+}
+
+export interface GitWorkspaceStatus {
+  isRepository: boolean;
+  repositoryRoot?: string;
+  workspaceRelativePath?: string;
+  currentBranch?: string;
+  headCommit?: string;
+  headShortCommit?: string;
+  latestTag?: string;
+  isDirty: boolean;
+  hasConflicts: boolean;
+  entries: GitStatusEntry[];
+  message?: string;
+}
+
+export interface GitBranchInfo {
+  name: string;
+  current: boolean;
+  commit?: string;
+}
+
+export interface GitTagInfo {
+  name: string;
+  commit?: string;
+  subject?: string;
+  createdAt?: string;
+}
+
 export interface WorkspaceDiagnostic {
   severity: "error" | "warning";
   message: string;
@@ -430,19 +463,26 @@ export interface GeneratedDocumentReport {
   content: string;
 }
 
-export interface CreateSnapshotInput {
+export interface CreateBaselineTagInput {
   workspaceRoot: string;
-  label?: string;
+  tagName: string;
+  message?: string;
 }
 
-export interface ProtocolSnapshotSummary {
+export interface ProtocolBaselineSummary {
   id: string;
-  label?: string;
+  tagName: string;
+  branch?: string;
+  commit?: string;
+  shortCommit?: string;
   createdAt: string;
   path: string;
   relativePath: string;
   typeCount: number;
   fileCount: number;
+  networkNodeCount: number;
+  networkLinkCount: number;
+  protocolBindingCount: number;
 }
 
 export type SemanticChangeKind =
@@ -455,7 +495,17 @@ export type SemanticChangeKind =
   | "enum-value-added"
   | "enum-value-removed"
   | "enum-value-number-changed"
-  | "type-size-changed";
+  | "type-size-changed"
+  | "network-node-added"
+  | "network-node-removed"
+  | "network-link-added"
+  | "network-link-removed"
+  | "network-link-bandwidth-changed"
+  | "protocol-binding-added"
+  | "protocol-binding-removed"
+  | "protocol-binding-bandwidth-changed"
+  | "flow-view-added"
+  | "flow-view-removed";
 
 export interface SemanticChange {
   id: string;
@@ -467,15 +517,18 @@ export interface SemanticChange {
   after?: string | number;
 }
 
-export interface DiffProtocolInput {
+export interface GitSemanticDiffInput {
   workspaceRoot: string;
-  baseSnapshotPath?: string;
+  baseRef?: string;
+  baseBaselinePath?: string;
 }
 
 export interface SemanticDiffReport {
   generatedAt: string;
-  baseSnapshot?: ProtocolSnapshotSummary;
-  currentSnapshot: ProtocolSnapshotSummary;
+  baseBaseline?: ProtocolBaselineSummary;
+  currentBaseline: ProtocolBaselineSummary;
+  baseRef?: string;
+  targetRef: string;
   changeCount: number;
   breakingCount: number;
   compatibleCount: number;
