@@ -276,7 +276,9 @@ describe("scanWorkspace", () => {
       await mkdir(resolve(root, "headers", "common"), { recursive: true });
       await mkdir(resolve(root, "headers", "messages"), { recursive: true });
       await mkdir(resolve(root, "node_modules", "noise"), { recursive: true });
+      await mkdir(resolve(root, "rapidjson"), { recursive: true });
       await writeFile(resolve(root, "node_modules", "noise", "ignored.hpp"), "struct ShouldNotAppear { int bad; };\n", "utf8");
+      await writeFile(resolve(root, "rapidjson", "document.h"), "struct RapidJsonInternalValue { int bad; };\n", "utf8");
       await writeFile(resolve(root, "headers", "core", "types.h"), `#pragma once
 #include <cstdint>
 namespace proto {
@@ -332,6 +334,7 @@ struct Status {
         "headers/status.hxx"
       ]);
       expect(byName.has("ShouldNotAppear")).toBe(false);
+      expect(byName.has("RapidJsonInternalValue")).toBe(false);
       expect(byName.get("proto::Mode")?.underlyingType).toContain("uint8_t");
       expect(byName.get("proto::common::PackedPacket")?.pack).toBe(1);
       expect(byName.get("proto::messages::Frame")?.fields.map((field) => [field.name, field.type])).toEqual([

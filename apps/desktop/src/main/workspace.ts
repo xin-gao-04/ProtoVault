@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
-import { cpus } from "node:os";
+import { execFile, spawn } from "node:child_process";
+import { createWriteStream, promises as fs } from "node:fs";
+import { cpus, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { workspaceViewSchema } from "@protovault/contracts";
@@ -89,6 +89,8 @@ import type {
 
 const execFileAsync = promisify(execFile);
 const HEADER_EXTENSIONS = new Set([".h", ".hh", ".hpp", ".hxx"]);
+const AST_DUMP_DEFAULT_MAX_MB = 256;
+const AST_DUMP_STDERR_MAX_BYTES = 2 * 1024 * 1024;
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".cache",
   ".git",
@@ -103,6 +105,27 @@ const IGNORED_DIRECTORY_NAMES = new Set([
   "playwright-report",
   "release",
   "test-results"
+]);
+const VENDOR_DIRECTORY_NAMES = new Set([
+  "boost",
+  "deps",
+  "dependencies",
+  "eigen",
+  "external",
+  "extern",
+  "fmt",
+  "glm",
+  "googletest",
+  "gtest",
+  "nlohmann",
+  "pugixml",
+  "rapidjson",
+  "spdlog",
+  "third-party",
+  "third_party",
+  "vendor",
+  "vendors",
+  "yaml-cpp"
 ]);
 
 const BASE_TYPE_SIZE: Record<string, { size: number; alignment: number }> = {
@@ -190,7 +213,11 @@ interface WorkspaceDiscovery {
 
 function shouldSkipDirectory(name: string): boolean {
   const normalized = name.toLowerCase();
-  return IGNORED_DIRECTORY_NAMES.has(normalized) || normalized.startsWith("build") || normalized.startsWith("cmake-build");
+  const includeVendorHeaders = ["1", "true", "yes"].includes((process.env.PROTOVAULT_INCLUDE_VENDOR_HEADERS ?? "").toLowerCase());
+  return IGNORED_DIRECTORY_NAMES.has(normalized)
+    || (!includeVendorHeaders && VENDOR_DIRECTORY_NAMES.has(normalized))
+    || normalized.startsWith("build")
+    || normalized.startsWith("cmake-build");
 }
 
 function includeRootsForHeaders(root: string, headers: string[]): string[] {
@@ -908,7 +935,100 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item
 function clangParseConcurrency(): number {
   const configured = Number(process.env.PROTOVAULT_SCAN_CONCURRENCY);
   if (Number.isInteger(configured) && configured > 0) return Math.min(configured, 8);
-  return Math.max(1, Math.min(4, cpus().length));
+  return Math.max(1, Math.min(2, cpus().length));
+}
+
+function astDumpMaxBytes(): number {
+  const configured = Number(process.env.PROTOVAULT_AST_DUMP_MAX_MB);
+  const value = Number.isFinite(configured) && configured > 0 ? configured : AST_DUMP_DEFAULT_MAX_MB;
+  return Math.floor(Math.min(Math.max(value, 16), 2048) * 1024 * 1024);
+}
+
+function formatBytes(value: number): string {
+  if (value >= 1024 * 1024) return `${Math.round(value / 1024 / 1024)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
+function quoteCommandArg(value: string): string {
+  return /\s/.test(value) ? `"${value.replaceAll("\"", "\\\"")}"` : value;
+}
+
+async function runClangAstDump(clang: string, args: string[], root: string, header: string): Promise<string> {
+  const maxBytes = astDumpMaxBytes();
+  const astPath = join(tmpdir(), `protovault-ast-${process.pid}-${Date.now()}-${randomUUID()}.json`);
+  const command = [clang, ...args].map(quoteCommandArg).join(" ");
+  let stderr = "";
+  let stdoutBytes = 0;
+  let exceeded = false;
+
+  try {
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      let settled = false;
+      let streamError: unknown;
+      const output = createWriteStream(astPath);
+      const child = spawn(clang, args, { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+
+      const finish = (error?: unknown): void => {
+        if (settled) return;
+        settled = true;
+        if (error) rejectPromise(error);
+        else resolvePromise();
+      };
+
+      output.on("error", (error) => {
+        streamError = error;
+        child.kill();
+      });
+      output.on("drain", () => child.stdout.resume());
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdoutBytes += chunk.length;
+        if (stdoutBytes > maxBytes) {
+          exceeded = true;
+          child.kill();
+          return;
+        }
+        if (!output.write(chunk)) child.stdout.pause();
+      });
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        if (stderr.length >= AST_DUMP_STDERR_MAX_BYTES) return;
+        const remaining = AST_DUMP_STDERR_MAX_BYTES - stderr.length;
+        stderr += chunk.toString("utf8").slice(0, remaining);
+      });
+
+      child.on("error", (error) => {
+        output.end(() => finish(error));
+      });
+
+      child.on("close", (code, signal) => {
+        output.end(() => {
+          if (streamError) {
+            finish(streamError);
+            return;
+          }
+          if (exceeded) {
+            const relativeHeader = relative(root, header).replaceAll("\\", "/");
+            finish(new Error([
+              `Clang AST 输出超过 ${formatBytes(maxBytes)}，已停止解析 ${relativeHeader}。`,
+              "这通常说明该 Header 展开了大型第三方库或项目实现细节，例如 rapidjson、pugixml、复杂宏或深层 include。",
+              `可临时设置 PROTOVAULT_AST_DUMP_MAX_MB=512 或 1024 提高上限；更推荐后续在工作区配置中排除第三方 include 目录。`
+            ].join("\n")));
+            return;
+          }
+          if (code !== 0) {
+            finish(new Error(`Command failed: ${command}\n${stderr || `clang exited with code ${code}${signal ? `, signal ${signal}` : ""}`}`));
+            return;
+          }
+          finish();
+        });
+      });
+    });
+    return await fs.readFile(astPath, "utf8");
+  } finally {
+    await fs.rm(astPath, { force: true });
+  }
 }
 
 function applyMemoryLayouts(types: WorkspaceTypeView[]): WorkspaceTypeView[] {
@@ -1172,13 +1292,134 @@ function detectEnumUnderlyingType(content: string, lineNumber: number, enumName:
   return match?.[1]?.trim();
 }
 
+function stripCommentsPreserveLines(content: string): string {
+  return content
+    .replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\r\n]/g, " "))
+    .replace(/\/\/.*$/gm, "");
+}
+
+function countOccurrences(value: string, char: string): number {
+  return [...value].filter((item) => item === char).length;
+}
+
+function namespaceAtLine(content: string, targetLine: number): string[] {
+  const lines = stripCommentsPreserveLines(content).split(/\r?\n/);
+  const stack: Array<{ name: string; depth: number }> = [];
+  let braceDepth = 0;
+
+  for (let index = 0; index < Math.min(targetLine, lines.length); index += 1) {
+    while (stack.length > 0 && braceDepth < stack[stack.length - 1].depth) stack.pop();
+    const line = lines[index];
+    for (const match of line.matchAll(/\bnamespace\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\{/g)) {
+      for (const part of match[1].split("::")) {
+        stack.push({ name: part, depth: braceDepth + 1 });
+      }
+    }
+    if (index + 1 >= targetLine) break;
+    braceDepth += countOccurrences(line, "{") - countOccurrences(line, "}");
+  }
+  return stack.map((item) => item.name);
+}
+
+function extractAstDumpCandidateNames(content: string): string[] {
+  const withoutLineComments = stripCommentsPreserveLines(content);
+  const names = new Set<string>();
+  for (const match of withoutLineComments.matchAll(/\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?=[\{:;])/g)) {
+    names.add(match[1]);
+  }
+  for (const match of withoutLineComments.matchAll(/\benum\s+(?:class\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?=[:\{])/g)) {
+    names.add(match[1]);
+  }
+  return [...names];
+}
+
+function parseAstDumpDocuments(stdout: string): AstNode[] {
+  const text = stdout.trim();
+  if (!text) return [];
+  const documents: AstNode[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (start === -1) {
+      if (/\s/.test(char)) continue;
+      if (char !== "{") throw new Error(`无法解析 Clang AST JSON：意外字符 ${char}`);
+      start = index;
+      depth = 0;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        documents.push(JSON.parse(text.slice(start, index + 1)) as AstNode);
+        start = -1;
+      }
+    }
+  }
+
+  if (start !== -1) throw new Error("无法解析 Clang AST JSON：输出不完整。");
+  return documents;
+}
+
+function applySourceNamespaceHints(types: WorkspaceTypeView[], content: string): WorkspaceTypeView[] {
+  return types.map((type) => {
+    if (type.qualifiedName.includes("::") || !type.location?.line) return type;
+    const namespaces = namespaceAtLine(content, type.location.line);
+    if (namespaces.length === 0) return type;
+    const qualifiedName = [...namespaces, type.name].join("::");
+    return {
+      ...type,
+      id: stableId(type.kind, qualifiedName),
+      qualifiedName,
+      fields: type.fields.map((field) => ({
+        ...field,
+        id: stableId("field", `${qualifiedName}::${field.name}`)
+      })),
+      values: type.values.map((value) => ({
+        ...value,
+        id: stableId("enum-value", `${qualifiedName}::${value.name}`)
+      }))
+    };
+  });
+}
+
 async function scanHeader(clang: string, header: string, root: string, includeRoots: string[], content: string): Promise<WorkspaceTypeView[]> {
   const includeArgs = includeRoots.flatMap((includeRoot) => ["-I", includeRoot]);
-  const { stdout } = await execFileAsync(clang, [
-    "-x", "c++-header", "-std=c++20", ...includeArgs,
-    "-Xclang", "-ast-dump=json", "-fsyntax-only", header
-  ], { cwd: root, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
-  return applyHeaderLayoutHints(collectTypes(JSON.parse(stdout) as AstNode, root, header), content);
+  const candidateNames = extractAstDumpCandidateNames(content);
+  if (candidateNames.length === 0) return [];
+
+  const types: WorkspaceTypeView[] = [];
+  for (const candidateName of candidateNames) {
+    const stdout = await runClangAstDump(clang, [
+      "-x", "c++-header", "-std=c++20", ...includeArgs,
+      "-Xclang", "-ast-dump=json", "-Xclang", `-ast-dump-filter=${candidateName}`,
+      "-fsyntax-only", header
+    ], root, header);
+    for (const document of parseAstDumpDocuments(stdout)) {
+      types.push(...collectTypes(document, root, header));
+    }
+  }
+  const namespacedTypes = applySourceNamespaceHints(types, content);
+  const deduplicated = new Map(namespacedTypes.map((type) => [type.id, type]));
+  return applyHeaderLayoutHints([...deduplicated.values()], content);
 }
 
 async function validateHeaderContent(root: string, header: string, content: string): Promise<void> {
