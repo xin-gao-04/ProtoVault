@@ -1990,6 +1990,7 @@ function App(): React.JSX.Element {
           onOpenFileLocation={(entry) => void openGitEntryLocation(gitStatus, entry)}
           onCreateBaseline={() => void createBaselineReport()}
           onRunDiff={() => void runSemanticDiffReport()}
+          onGenerateDocument={() => void generateDocumentReport()}
         /> : <>
           <div className="navigator-title">
             <div>
@@ -4996,6 +4997,125 @@ function GitCommitGraphPanel({ graph, currentBranch, selectedCommitHash, onSelec
   </section>;
 }
 
+function formatGitTagDate(value?: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function GitVersionAssetPanel({
+  workspace,
+  status,
+  branches,
+  tags,
+  currentBranch,
+  loading,
+  newBranchName,
+  onNewBranchNameChange,
+  onCheckoutBranch,
+  onCreateBranch,
+  onCreateBaseline,
+  onRunDiff,
+  onGenerateDocument
+}: {
+  workspace: WorkspaceView;
+  status: GitWorkspaceStatus;
+  branches: GitBranchInfo[];
+  tags: GitTagInfo[];
+  currentBranch: string;
+  loading: boolean;
+  newBranchName: string;
+  onNewBranchNameChange(value: string): void;
+  onCheckoutBranch(branchName: string): void;
+  onCreateBranch(branchName: string): void;
+  onCreateBaseline(): void;
+  onRunDiff(): void;
+  onGenerateDocument(): void;
+}): React.JSX.Element {
+  const currentCommit = status.headShortCommit ?? status.headCommit?.slice(0, 8) ?? "no HEAD";
+  const latestTag = status.latestTag ?? tags[0]?.name ?? "暂无基线";
+  const protocolPackageLabel = `${workspace.files.length} Headers · ${workspace.types.length} Types`;
+  const changedCount = status.entries.length;
+  const branchPreview = branches.slice(0, 6);
+  const tagPreview = tags.slice(0, 5);
+
+  return <section className="git-version-vault" aria-label="协议版本资产">
+    <header>
+      <div>
+        <p className="eyebrow">VERSION VAULT</p>
+        <h3>协议版本资产</h3>
+      </div>
+      <span className={status.isDirty ? "version-state dirty" : "version-state clean"}>{status.isDirty ? `${changedCount} changes` : "clean"}</span>
+    </header>
+
+    <div className="version-snapshot-grid" aria-label="当前版本快照">
+      <span><small>当前线</small><b>{currentBranch}</b></span>
+      <span><small>提交点</small><b>{currentCommit}</b></span>
+      <span><small>最近基线</small><b>{latestTag}</b></span>
+      <span><small>协议包</small><b>{protocolPackageLabel}</b></span>
+    </div>
+
+    <div className="version-primary-actions" aria-label="版本快捷操作">
+      <button disabled={loading} onClick={onCreateBaseline} title="将当前干净提交固定为协议基线 Tag">🏷 创建基线 Tag</button>
+      <button disabled={loading} onClick={onRunDiff} title="比较当前协议 IR 与历史基线">△ 版本 Diff</button>
+      <button disabled={loading} onClick={onGenerateDocument} title="导出当前工作区协议文档">⇩ 导出文档</button>
+    </div>
+
+    <details className="version-branch-card" open>
+      <summary>分支：实验线 / 发布线</summary>
+      <label className="git-select-label">
+        <span>切换分支</span>
+        <select aria-label="Git 分支" value={currentBranch} disabled={loading} onChange={(event) => onCheckoutBranch(event.target.value)}>
+          {branches.length > 0 ? branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.current ? "● " : ""}{branch.name}</option>) : <option value={currentBranch}>{currentBranch}</option>}
+        </select>
+      </label>
+      <div className="version-ref-list" aria-label="分支列表">
+        {branchPreview.map((branch) => <button key={branch.name} disabled={loading || branch.current} className={branch.current ? "active" : ""} onClick={() => onCheckoutBranch(branch.name)} title={branch.commit ? `${branch.name} · ${branch.commit.slice(0, 8)}` : branch.name}>
+          <b>{branch.current ? "●" : "⑂"}</b><span>{branch.name}</span>
+        </button>)}
+        {branches.length > branchPreview.length && <em>+{branches.length - branchPreview.length}</em>}
+      </div>
+      <div className="git-branch-create">
+        <input aria-label="新建 Git 分支名称" value={newBranchName} placeholder="feature/radar-protocol-v2" onChange={(event) => onNewBranchNameChange(event.target.value)} />
+        <button className="inline-action" disabled={loading || !newBranchName.trim()} onClick={() => {
+          onCreateBranch(newBranchName.trim());
+          onNewBranchNameChange("");
+        }}>新建并切换</button>
+      </div>
+      <p className="git-hint">建议：分支用于协议实验、客户版本、仿真场景；合入前用版本 Diff 检查字段、布局和兼容性变化。</p>
+    </details>
+
+    <details className="version-branch-card">
+      <summary>Tag：可交付协议基线</summary>
+      {tagPreview.length === 0 ? <p className="git-empty">暂无 Tag。创建基线后，Tag 会成为可回溯的协议版本点。</p> : <ul className="version-tag-list">
+        {tagPreview.map((tag) => <li key={tag.name}>
+          <b>🏷 {tag.name}</b>
+          <small>{tag.commit?.slice(0, 8) ?? "—"} · {formatGitTagDate(tag.createdAt)}{tag.subject ? ` · ${tag.subject}` : ""}</small>
+        </li>)}
+      </ul>}
+    </details>
+
+    <details className="version-merge-card">
+      <summary>多文件夹合并 / 导出设计</summary>
+      <ol>
+        <li>挂载多个协议文件夹为独立“协议包”，保留各自分支、Tag、Header 范围。</li>
+        <li>按稳定 ID / namespace / 文件来源合成 IR，冲突进入合并报告，不直接覆盖源文件。</li>
+        <li>导出为文档、语义 Diff 报告、协议包快照；后续再接入生成 Header 包和 Git archive。</li>
+      </ol>
+      <div className="version-package-row">
+        <span><b>{workspace.name}</b><small>{workspace.rootPath}</small></span>
+        <em>{protocolPackageLabel}</em>
+      </div>
+      <div className="version-primary-actions">
+        <button disabled title="下一阶段接入多工作区挂载">＋ 挂载文件夹</button>
+        <button disabled title="下一阶段接入协议包合并引擎">合并预览</button>
+        <button disabled title="下一阶段接入版本包导出">导出版本包</button>
+      </div>
+    </details>
+  </section>;
+}
+
 function GitSourceControlNavigator({
   workspace,
   status,
@@ -5017,7 +5137,8 @@ function GitSourceControlNavigator({
   onSelectCommit,
   onOpenFileLocation,
   onCreateBaseline,
-  onRunDiff
+  onRunDiff,
+  onGenerateDocument
 }: {
   workspace: WorkspaceView;
   status: GitWorkspaceStatus | null;
@@ -5040,6 +5161,7 @@ function GitSourceControlNavigator({
   onOpenFileLocation(entry: GitWorkspaceStatus["entries"][number]): void;
   onCreateBaseline(): void;
   onRunDiff(): void;
+  onGenerateDocument(): void;
 }): React.JSX.Element {
   const [commitMessage, setCommitMessage] = React.useState("");
   const [newBranchName, setNewBranchName] = React.useState("");
@@ -5107,23 +5229,21 @@ function GitSourceControlNavigator({
         >提交暂存更改</button>
         {status.hasConflicts && <p className="git-warning">检测到冲突，请先解决冲突再提交。</p>}
       </div>
-      <details className="source-control-branches">
-        <summary>分支与基线</summary>
-        <label className="git-select-label">
-          <span>当前分支</span>
-          <select aria-label="Git 分支" value={currentBranch} disabled={loading} onChange={(event) => onCheckoutBranch(event.target.value)}>
-            {branches.length > 0 ? branches.map((branch) => <option key={branch.name} value={branch.name}>{branch.current ? "● " : ""}{branch.name}</option>) : <option value={currentBranch}>{currentBranch}</option>}
-          </select>
-        </label>
-        <div className="git-branch-create">
-          <input aria-label="新建 Git 分支名称" value={newBranchName} placeholder="feature/protocol-edit" onChange={(event) => setNewBranchName(event.target.value)} />
-          <button className="inline-action" disabled={loading || !newBranchName.trim()} onClick={() => {
-            onCreateBranch(newBranchName.trim());
-            setNewBranchName("");
-          }}>新建并切换</button>
-        </div>
-        <p className="git-hint">最近 Tag：{status.latestTag ?? tags[0]?.name ?? "暂无"}</p>
-      </details>
+      <GitVersionAssetPanel
+        workspace={workspace}
+        status={status}
+        branches={branches}
+        tags={tags}
+        currentBranch={currentBranch}
+        loading={loading}
+        newBranchName={newBranchName}
+        onNewBranchNameChange={setNewBranchName}
+        onCheckoutBranch={onCheckoutBranch}
+        onCreateBranch={onCreateBranch}
+        onCreateBaseline={onCreateBaseline}
+        onRunDiff={onRunDiff}
+        onGenerateDocument={onGenerateDocument}
+      />
     </section>
 
     <nav className="source-control-changes" aria-label="Git 文件变化">
@@ -5178,9 +5298,9 @@ function buildLineDiff(oldContent: string, newContent: string): DiffLine[] {
 function GitDiffWorkspace({ tab, diff, loading }: { tab: Extract<WorkspaceTab, { kind: "git-diff" }> | null; diff: GitFileDiff | null; loading: boolean }): React.JSX.Element {
   if (!tab) {
     return <section className="git-diff-empty" aria-label="Git 对比">
-      <p className="eyebrow">DIFF EDITOR</p>
-      <h2>从左侧 Changes 中选择一个文件</h2>
-      <p>单击变更文件会打开 Working Tree / Index 对比；展开 GRAPH 的提交节点后，点击文件子节点会打开历史 Commit 对比。</p>
+      <p className="eyebrow">VERSION WORKSPACE</p>
+      <h2>从左侧管理分支、Tag、协议包和文件 Diff</h2>
+      <p>分支用于协议实验线或发布线，Tag 用于固定可交付基线；单击 Changes 文件打开 Working Tree / Index 对比，展开 GRAPH 的提交节点后可查看历史 Commit 对比。</p>
     </section>;
   }
   if (!diff) {

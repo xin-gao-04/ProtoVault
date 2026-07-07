@@ -471,6 +471,40 @@ kbd { display: inline-grid; place-items: center; min-width: 22px; height: 21px; 
 .source-control-branches { padding: 7px 8px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: color-mix(in srgb, var(--background-primary) 68%, transparent); }
 .source-control-branches summary { cursor: pointer; color: var(--text-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
 .source-control-branches label, .source-control-branches .git-branch-create, .source-control-branches .git-hint { margin-top: 8px; }
+.git-version-vault { display: grid; gap: 10px; padding: 10px; border: 1px solid color-mix(in srgb, var(--interactive-accent) 28%, var(--background-modifier-border)); border-radius: var(--radius-m); background: linear-gradient(135deg, color-mix(in srgb, var(--interactive-accent) 10%, transparent), color-mix(in srgb, var(--background-primary) 76%, transparent)); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-normal) 6%, transparent); }
+.git-version-vault > header { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+.git-version-vault h3 { margin: 0; font-size: 13px; }
+.version-state { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 850; text-transform: uppercase; }
+.version-state.clean { color: var(--color-green); background: color-mix(in srgb, var(--color-green) 14%, transparent); }
+.version-state.dirty { color: var(--color-yellow); background: color-mix(in srgb, var(--color-yellow) 18%, transparent); }
+.version-snapshot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.version-snapshot-grid span { display: grid; gap: 2px; min-width: 0; padding: 7px; border: 1px solid color-mix(in srgb, var(--background-modifier-border) 75%, transparent); border-radius: var(--radius-s); background: color-mix(in srgb, var(--background-primary) 70%, transparent); }
+.version-snapshot-grid small { overflow: hidden; color: var(--text-faint); font-size: 9px; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.version-snapshot-grid b { overflow: hidden; color: var(--text-normal); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.version-primary-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.version-primary-actions button { min-height: 27px; padding: 0 8px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--interactive-normal); color: var(--text-normal); font-size: 11px; }
+.version-primary-actions button:hover:not(:disabled) { border-color: var(--interactive-accent); background: var(--background-modifier-hover); color: var(--text-accent-hover); }
+.version-primary-actions button:disabled { opacity: .45; }
+.version-branch-card, .version-merge-card { padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: color-mix(in srgb, var(--background-primary) 66%, transparent); }
+.version-branch-card summary, .version-merge-card summary { cursor: pointer; color: var(--text-muted); font-size: 11px; font-weight: 850; }
+.version-branch-card label, .version-branch-card .git-branch-create, .version-branch-card .git-hint { margin-top: 8px; }
+.version-ref-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.version-ref-list button { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; gap: 5px; padding: 4px 7px; border: 1px solid var(--background-modifier-border); border-radius: 999px; background: transparent; color: var(--text-muted); font-size: 10px; }
+.version-ref-list button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.version-ref-list button.active { border-color: var(--interactive-accent); background: color-mix(in srgb, var(--interactive-accent) 18%, transparent); color: var(--text-accent-hover); }
+.version-ref-list button:hover:not(:disabled) { background: var(--background-modifier-hover); color: var(--text-accent-hover); }
+.version-ref-list em { align-self: center; color: var(--text-faint); font-size: 10px; font-style: normal; }
+.version-tag-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.version-tag-list li { display: grid; gap: 2px; min-width: 0; padding: 6px 7px; border-radius: var(--radius-s); background: color-mix(in srgb, var(--interactive-accent) 8%, transparent); }
+.version-tag-list b, .version-tag-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.version-tag-list b { color: var(--text-normal); font-size: 11px; }
+.version-tag-list small { color: var(--text-faint); font-size: 10px; }
+.version-merge-card ol { margin: 8px 0; padding-left: 18px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.version-package-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin: 8px 0; padding: 7px; border-radius: var(--radius-s); background: color-mix(in srgb, var(--background-secondary) 72%, transparent); }
+.version-package-row span { min-width: 0; display: grid; gap: 2px; }
+.version-package-row b, .version-package-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.version-package-row b { font-size: 11px; }
+.version-package-row small, .version-package-row em { color: var(--text-faint); font-size: 10px; font-style: normal; }
 .source-control-changes { min-height: 140px; overflow: auto; margin-top: 10px; padding-right: 2px; }
 .source-control-panel .git-change-section { margin-bottom: 8px; }
 .source-control-panel .git-change-section header { position: sticky; top: 0; z-index: 1; min-height: 25px; background: var(--background-secondary); }
