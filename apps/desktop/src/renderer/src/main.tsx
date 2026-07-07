@@ -1965,7 +1965,7 @@ function App(): React.JSX.Element {
         <button className={centerViewMode === "network" ? "active" : ""} aria-label="网络地图" title="网络地图" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("network"); }}>⇄</button>
         <button className={centerViewMode === "git" ? "active" : ""} aria-label="源代码管理" title="源代码管理 / Git" disabled={!workspace} onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("git"); }}>⑂</button>
         <button className={centerViewMode === "manual" ? "active" : ""} aria-label="AI 使用助手" title="AI 使用助手 / 本地 Ollama" onClick={() => { setActiveAction(null); setWorkspaceReport(null); setCenterViewMode("manual"); }}>?</button>
-        <button aria-label="问题面板">!</button>
+        <button aria-label="问题面板 / 运行 Lint" title="问题面板 / 运行 Lint" disabled={!workspace || loading} onClick={() => { setActiveAction(null); setCenterViewMode("workspace"); void runLintReport(); }}>!</button>
       </aside>
       <aside className={centerViewMode === "git" ? "navigator source-control-sidebar" : "navigator"}>
         {centerViewMode === "git" && workspace ? <GitSourceControlNavigator
@@ -1999,14 +1999,14 @@ function App(): React.JSX.Element {
             </div>
           </div>
           <div className="tree-actions" aria-label="协议树操作">
-            <button aria-label="新增数据结构" title="新增数据结构" disabled={!workspace || loading} onClick={() => openStructuredAction("create-struct")}>✎</button>
-            <button aria-label="新增枚举" title="新增枚举" disabled={!workspace || loading} onClick={() => openStructuredAction("create-enum")}>E＋</button>
-            <button aria-label="新建 Header 文件" title="新建 Header 文件" disabled={!workspace || loading} onClick={() => openStructuredAction("create-header")}>▣＋</button>
-            <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => openStructuredAction("add-field")}>＋f</button>
-            <button aria-label="添加枚举项" title="添加枚举项" disabled={selectedType?.kind !== "enum" || loading} onClick={() => openStructuredAction("add-enum-value")}>＋#</button>
-            <button aria-label="排序协议树" title="排序协议树" disabled={!workspace} onClick={() => setUiNotice("协议树已按目录、Header、类型排序")}>↥</button>
-            <button aria-label="搜索协议树" title="搜索协议树" disabled={!workspace} aria-pressed={treeSearchOpen} onClick={() => setTreeSearchOpen((open) => !open)}>⌕</button>
-            <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}>⌃⌄</button>
+            <button aria-label="新增数据结构" title="新增数据结构" disabled={!workspace || loading} onClick={() => openStructuredAction("create-struct")}><span className="tree-action-icon">✎</span><span>Struct</span></button>
+            <button aria-label="新增枚举" title="新增枚举" disabled={!workspace || loading} onClick={() => openStructuredAction("create-enum")}><span className="tree-action-icon">E＋</span><span>Enum</span></button>
+            <button aria-label="新建 Header 文件" title="新建 Header 文件" disabled={!workspace || loading} onClick={() => openStructuredAction("create-header")}><span className="tree-action-icon">▣＋</span><span>Header</span></button>
+            <button aria-label="添加字段" title="添加字段" disabled={selectedType?.kind !== "struct" || loading} onClick={() => openStructuredAction("add-field")}><span className="tree-action-icon">＋f</span><span>字段</span></button>
+            <button aria-label="添加枚举项" title="添加枚举项" disabled={selectedType?.kind !== "enum" || loading} onClick={() => openStructuredAction("add-enum-value")}><span className="tree-action-icon">＋#</span><span>枚举项</span></button>
+            <button aria-label="排序协议树" title="排序协议树" disabled={!workspace} onClick={() => setUiNotice("协议树已按目录、Header、类型排序")}><span className="tree-action-icon">↥</span><span>排序</span></button>
+            <button aria-label="搜索协议树" title="搜索协议树" disabled={!workspace} aria-pressed={treeSearchOpen} onClick={() => setTreeSearchOpen((open) => !open)}><span className="tree-action-icon">⌕</span><span>搜索</span></button>
+            <button aria-label="折叠全部" title="折叠全部" disabled={!workspace} onClick={collapseAll}><span className="tree-action-icon">⌃⌄</span><span>折叠</span></button>
           </div>
           {workspace && treeSearchOpen && <div className="tree-search" role="search">
             <input
@@ -2053,7 +2053,7 @@ function App(): React.JSX.Element {
           </div>
           <div className="workspace-dock-actions">
             <button aria-label="打开本地目录" title="打开本地目录" disabled={loading} onClick={() => void openWorkspace(false)}>▣</button>
-            <button aria-label={workspace ? "重新扫描示例" : "加载示例项目"} title={workspace ? "重新扫描示例" : "加载示例项目"} disabled={loading} onClick={() => void openWorkspace(true)}>{loading ? "…" : "↻"}</button>
+            <button aria-label={workspace ? "重新扫描当前工作区" : "加载示例项目"} title={workspace ? "重新扫描当前工作区" : "加载示例项目"} disabled={loading} onClick={() => { if (workspace) void rescanCurrentWorkspace(); else void openWorkspace(true); }}>{loading ? "…" : "↻"}</button>
             <button aria-label="工作区设置" title="工作区设置" onClick={() => setSettingsOpen((open) => !open)}>⚙</button>
           </div>
           {settingsOpen && <div className="workspace-settings-popover" role="dialog" aria-label="工作区设置">
@@ -5112,6 +5112,7 @@ function GitVersionAssetPanel({
         <button disabled title="下一阶段接入协议包合并引擎">合并预览</button>
         <button disabled title="下一阶段接入版本包导出">导出版本包</button>
       </div>
+      <p className="version-coming-soon">设计态入口：当前不会执行真实合并或写盘；下一阶段会接入多协议包挂载、冲突报告和版本包导出。</p>
     </details>
   </section>;
 }
@@ -5201,8 +5202,6 @@ function GitSourceControlNavigator({
       <div className="source-control-toolbar">
         <button disabled={loading || unstagedEntries.length === 0} onClick={onStageAll} title="全部暂存">＋</button>
         <button disabled={loading || stagedEntries.length === 0} onClick={onUnstageAll} title="全部取消暂存">−</button>
-        <button disabled={loading} onClick={onCreateBaseline} title="创建协议基线 Tag">🏷</button>
-        <button disabled={loading} onClick={onRunDiff} title="查看版本 Diff">△</button>
       </div>
       <div className="source-control-commit">
         <textarea

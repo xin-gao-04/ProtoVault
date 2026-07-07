@@ -97,8 +97,9 @@ input, select, textarea { font: inherit; color: var(--text-normal); }
 .eyebrow { color: var(--text-accent); font-size: 11px; letter-spacing: .15em; text-transform: uppercase; }
 .navigator h2, .inspector h2 { font-size: 12px; color: var(--text-muted); letter-spacing: .12em; text-transform: uppercase; }
 .navigator-title { flex: 0 0 auto; padding: 2px 4px 14px; }
-.tree-actions { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 42px; padding: 0 8px; border-top: 1px solid var(--background-modifier-border); border-bottom: 1px solid var(--background-modifier-border); }
-.tree-actions button { display: grid; place-items: center; min-width: 30px; height: 30px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; }
+.tree-actions { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 6px; min-height: 42px; padding: 6px 8px; border-top: 1px solid var(--background-modifier-border); border-bottom: 1px solid var(--background-modifier-border); }
+.tree-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 30px; height: 28px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 11px; line-height: 1; }
+.tree-action-icon { font-size: 13px; font-weight: 800; }
 .tree-actions button:hover:not(:disabled) { background: var(--interactive-hover); color: var(--text-accent-hover); }
 .tree-actions button[aria-pressed="true"] { background: var(--background-modifier-active-hover); color: var(--text-accent-hover); }
 .tree-actions button:disabled { opacity: .35; }
@@ -500,6 +501,7 @@ kbd { display: inline-grid; place-items: center; min-width: 22px; height: 21px; 
 .version-tag-list b { color: var(--text-normal); font-size: 11px; }
 .version-tag-list small { color: var(--text-faint); font-size: 10px; }
 .version-merge-card ol { margin: 8px 0; padding-left: 18px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.version-coming-soon { margin: 6px 0 0; color: var(--text-faint); font-size: 10px; line-height: 1.45; }
 .version-package-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin: 8px 0; padding: 7px; border-radius: var(--radius-s); background: color-mix(in srgb, var(--background-secondary) 72%, transparent); }
 .version-package-row span { min-width: 0; display: grid; gap: 2px; }
 .version-package-row b, .version-package-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
