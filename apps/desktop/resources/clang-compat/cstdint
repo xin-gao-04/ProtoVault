@@ -1,0 +1,23 @@
+#pragma once
+
+// ProtoVault bundles this tiny compatibility header so supported protocol
+// headers using <cstdint> can be parsed on machines without a separate MSVC
+// or C++ standard-library installation. It intentionally covers only the
+// fixed-width integer aliases used by the MVP protocol IR.
+
+#include_next <stdint.h>
+
+namespace std {
+using ::int8_t;
+using ::int16_t;
+using ::int32_t;
+using ::int64_t;
+using ::intptr_t;
+using ::intmax_t;
+using ::uint8_t;
+using ::uint16_t;
+using ::uint32_t;
+using ::uint64_t;
+using ::uintptr_t;
+using ::uintmax_t;
+}

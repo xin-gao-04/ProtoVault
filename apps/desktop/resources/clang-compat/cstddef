@@ -1,0 +1,12 @@
+#pragma once
+
+// Minimal <cstddef> compatibility for ProtoVault's bundled Clang parser.
+// This is not intended to replace a full C++ standard library.
+
+#include_next <stddef.h>
+
+namespace std {
+using ::ptrdiff_t;
+using ::size_t;
+using nullptr_t = decltype(nullptr);
+}

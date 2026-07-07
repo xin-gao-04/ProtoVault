@@ -1,0 +1,4 @@
+#pragma once
+
+// C++ bool is a language builtin. This compatibility header exists only so
+// limited protocol headers including <cstdbool> can still be parsed.

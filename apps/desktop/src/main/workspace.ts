@@ -91,6 +91,11 @@ const execFileAsync = promisify(execFile);
 const HEADER_EXTENSIONS = new Set([".h", ".hh", ".hpp", ".hxx"]);
 const AST_DUMP_DEFAULT_MAX_MB = 256;
 const AST_DUMP_STDERR_MAX_BYTES = 2 * 1024 * 1024;
+const DESKTOP_ROOT_FROM_MAIN = resolve(__dirname, "..", "..");
+const PROTOVAULT_TOOLS_DIR = "protovault-tools";
+const CLANG_COMPAT_DIR = "clang-compat";
+let cachedClangPath: string | undefined;
+let cachedGitPath: string | undefined;
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".cache",
   ".git",
@@ -257,16 +262,115 @@ async function discoverWorkspace(root: string): Promise<WorkspaceDiscovery> {
   };
 }
 
+function electronResourcesPath(): string | undefined {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  return resourcesPath ? resolve(resourcesPath) : undefined;
+}
+
+function optionalJoin(root: string | undefined, ...segments: string[]): string | undefined {
+  return root ? join(root, ...segments) : undefined;
+}
+
+async function executableWorks(candidate: string | undefined, versionArgs = ["--version"]): Promise<string | undefined> {
+  if (!candidate) return undefined;
+  try {
+    await execFileAsync(candidate, versionArgs, { windowsHide: true });
+    return candidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function bundledToolCandidate(relativeToolPath: string): Array<string | undefined> {
+  return [
+    optionalJoin(electronResourcesPath(), PROTOVAULT_TOOLS_DIR, ...relativeToolPath.split("/")),
+    join(DESKTOP_ROOT_FROM_MAIN, "vendor-tools", ...relativeToolPath.split("/"))
+  ];
+}
+
+async function firstWorkingExecutable(candidates: Array<string | undefined>, versionArgs = ["--version"]): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    const working = await executableWorks(candidate, versionArgs);
+    if (working) return working;
+  }
+  return undefined;
+}
+
 async function findClang(): Promise<string> {
+  if (cachedClangPath) return cachedClangPath;
   const configured = process.env.PROTOVAULT_CLANG_PATH;
-  const candidates = [configured, "C:\\Program Files\\LLVM\\bin\\clang++.exe", "clang++.exe"].filter(Boolean) as string[];
+  const candidates = [
+    configured,
+    ...bundledToolCandidate("llvm/bin/clang++.exe"),
+    "C:\\Program Files\\LLVM\\bin\\clang++.exe",
+    "clang++.exe"
+  ];
+  const clang = await firstWorkingExecutable(candidates);
+  if (!clang) {
+    throw new Error("未找到 Clang。发布包应内置 LLVM/Clang；开发模式请安装 LLVM，或设置 PROTOVAULT_CLANG_PATH。");
+  }
+  cachedClangPath = clang;
+  return clang;
+}
+
+async function clangCompatibilityIncludeRoots(): Promise<string[]> {
+  const candidates = [
+    optionalJoin(electronResourcesPath(), CLANG_COMPAT_DIR),
+    join(DESKTOP_ROOT_FROM_MAIN, "resources", CLANG_COMPAT_DIR)
+  ].filter(Boolean) as string[];
+  const roots: string[] = [];
   for (const candidate of candidates) {
     try {
-      await execFileAsync(candidate, ["--version"], { windowsHide: true });
-      return candidate;
-    } catch { /* try the next candidate */ }
+      const stat = await fs.stat(candidate);
+      if (stat.isDirectory()) roots.push(candidate);
+    } catch {
+      // Optional compatibility include path.
+    }
   }
-  throw new Error("未找到 Clang。请安装 LLVM，或设置 PROTOVAULT_CLANG_PATH。 ");
+  return [...new Set(roots)];
+}
+
+async function clangCommonArgs(includeRoots: string[]): Promise<string[]> {
+  const compatibilityRoots = await clangCompatibilityIncludeRoots();
+  return [
+    ...compatibilityRoots.flatMap((includeRoot) => ["-isystem", includeRoot]),
+    ...includeRoots.flatMap((includeRoot) => ["-I", includeRoot])
+  ];
+}
+
+async function findGit(): Promise<string> {
+  if (cachedGitPath) return cachedGitPath;
+  const configured = process.env.PROTOVAULT_GIT_PATH;
+  const candidates = [
+    configured,
+    ...bundledToolCandidate("git/cmd/git.exe"),
+    ...bundledToolCandidate("git/mingw64/bin/git.exe"),
+    "C:\\Program Files\\Git\\cmd\\git.exe",
+    "git"
+  ];
+  const gitPath = await firstWorkingExecutable(candidates);
+  if (!gitPath) {
+    throw new Error("未找到 Git。发布包应内置 Git；开发模式请安装 Git，或设置 PROTOVAULT_GIT_PATH。");
+  }
+  cachedGitPath = gitPath;
+  return gitPath;
+}
+
+function gitRuntimeEnv(gitPath: string): NodeJS.ProcessEnv {
+  const normalized = resolve(gitPath);
+  const lower = normalized.toLowerCase();
+  const root = lower.endsWith("\\cmd\\git.exe") || lower.endsWith("/cmd/git.exe")
+    ? resolve(dirname(normalized), "..")
+    : lower.endsWith("\\mingw64\\bin\\git.exe") || lower.endsWith("/mingw64/bin/git.exe")
+      ? resolve(dirname(normalized), "..", "..")
+      : undefined;
+  const extraPath = root
+    ? [join(root, "cmd"), join(root, "mingw64", "bin"), join(root, "usr", "bin")]
+    : [dirname(normalized)];
+  return {
+    ...process.env,
+    PATH: [...extraPath, process.env.PATH ?? ""].filter(Boolean).join(";")
+  };
 }
 
 function stableId(kind: string, qualifiedName: string): string {
@@ -1402,7 +1506,7 @@ function applySourceNamespaceHints(types: WorkspaceTypeView[], content: string):
 }
 
 async function scanHeader(clang: string, header: string, root: string, includeRoots: string[], content: string): Promise<WorkspaceTypeView[]> {
-  const includeArgs = includeRoots.flatMap((includeRoot) => ["-I", includeRoot]);
+  const includeArgs = await clangCommonArgs(includeRoots);
   const candidateNames = extractAstDumpCandidateNames(content);
   if (candidateNames.length === 0) return [];
 
@@ -1425,7 +1529,7 @@ async function scanHeader(clang: string, header: string, root: string, includeRo
 async function validateHeaderContent(root: string, header: string, content: string): Promise<void> {
   const clang = await findClang();
   const discovery = await discoverWorkspace(root);
-  const includeArgs = [root, ...discovery.directories].flatMap((includeRoot) => ["-I", includeRoot]);
+  const includeArgs = await clangCommonArgs([root, ...discovery.directories]);
   const tempPath = join(dirname(header), `.${basename(header)}.${process.pid}.${Date.now()}.validate${extname(header) || ".hpp"}`);
   await fs.writeFile(tempPath, content, "utf8");
   try {
@@ -2043,7 +2147,12 @@ async function git(root: string, args: string[], options?: { allowFailure?: fals
 async function git(root: string, args: string[], options: { allowFailure: true; trim?: boolean }): Promise<string | null>;
 async function git(root: string, args: string[], options?: { allowFailure?: boolean; trim?: boolean }): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true });
+    const gitPath = await findGit();
+    const { stdout } = await execFileAsync(gitPath, ["-C", root, ...args], {
+      encoding: "utf8",
+      windowsHide: true,
+      env: gitRuntimeEnv(gitPath)
+    });
     return options?.trim === false ? stdout.replace(/\r?\n$/, "") : stdout.trim();
   } catch (error) {
     if (options?.allowFailure) return null;

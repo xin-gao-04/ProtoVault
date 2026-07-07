@@ -5,6 +5,7 @@ coverage/
 playwright-report/
 test-results/
 apps/desktop/release/
+apps/desktop/vendor-tools/
 .vite/
 .protocol/
 !examples/.protocol/

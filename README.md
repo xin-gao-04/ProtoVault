@@ -93,12 +93,21 @@ Unsupported constructs should produce diagnostics with source locations instead 
 
 ### Prerequisites
 
+For running the packaged Windows app:
+
+- Windows 10/11
+- No separate Git or LLVM/Clang installation is required. The Windows installer bundles the Git and Clang toolchain used by ProtoVault.
+- Ollama is optional and only needed for the local AI assistant.
+
+For development and building the installer:
+
 - Windows 10/11
 - Node.js 22 or newer
 - pnpm 11
 - CMake 3.25 or newer
 - Visual Studio 2022 Build Tools with the C++ workload
-- LLVM/Clang available on PATH, or installed in a standard Windows location
+- LLVM/Clang available on PATH, installed in a standard Windows location, or configured through `PROTOVAULT_LLVM_ROOT`
+- Git for Windows available on PATH, installed in a standard Windows location, or configured through `PROTOVAULT_GIT_ROOT`
 
 ### Install dependencies
 
@@ -119,6 +128,8 @@ In the app, click **加载示例项目** to load the bundled sample workspace.
 ```powershell
 pnpm release:installer
 ```
+
+The installer build runs `scripts/prepare-bundled-tools.ps1` and copies a local LLVM/Clang + Git for Windows toolchain into `apps/desktop/vendor-tools/`. That directory is ignored by Git and packaged as Electron `extraResources`.
 
 Generated artifacts:
 
