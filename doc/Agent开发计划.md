@@ -42,7 +42,7 @@
 | P8 元数据与文档 | MVP 纵切完成 | 元数据持久化、Header 注释同步、Markdown 文档生成 | 重扫不丢元数据；文档写入 `.protocol/reports/` |
 | P9 协议 Lint | MVP 纵切完成 | 规则引擎、严重等级、源码定位 | 指针/运行期类型、缺失语义、布局问题、枚举问题有测试 |
 | P10 语义 Diff | MVP 与稳定身份完成 | 基线状态比较、字段/枚举/布局变化、兼容性分级、SQLite identity store | fixture 可识别新增、类型/布局变化和 Struct/Field/Enum/枚举值改名；低置信度外部改名确认仍待可视化 |
-| P11 集成发布 | `v0.2.0` Release 收尾中 | E2E、发布检查脚本、发布检查清单、Windows NSIS 安装包与 Portable 包 | `pnpm release:check` 通过；`pnpm release:installer` 生成 `ProtoVault-0.2.0` 分发包；目标机无需 Node/Git/Clang |
+| P11 集成发布 | `v0.2.1` Release 收尾中 | E2E、发布检查脚本、发布检查清单、Windows NSIS 安装包与 Portable 包 | `pnpm release:check` 通过；`pnpm release:installer` 生成 `ProtoVault-0.2.1` 分发包；目标机无需 Node/Git/Clang |
 | P12 协议网络地图 | MVP 纵切完成 | `.protocol/network`、NetworkNode、NetworkLink、ProtocolBinding、节点/链路/绑定表格 | 用户可维护实体节点、通信链路和链路上的协议绑定；协议不再直接持有生产者/消费者 |
 | P13 网络派生分析 | Loop 6 / MVP 闭环完成 | FlowView CRUD、过滤派生视图、数据流画布、网络 Inspector、FlowView Markdown 报告、节点/链路/协议瓶颈提示、示例网络配置 | 可保存业务数据流观察视角，先定义视角再进入画布查看生产节点、链路载荷和消费节点，并可生成网络数据流报告；真实运行采样待后续阶段 |
 | P14 Git 版本治理 | MVP 纵切完成 | Git 状态、分支/Tag 展示、协议 Baseline Tag、版本 Diff、P14 loop 脚本 | 基线创建要求工作区干净；版本 Diff 可对比 Git Tag 与当前工作树；旧快照入口退出 UI；发布门通过 |
@@ -92,7 +92,7 @@
 - 工作区底栏展示 Git 分支、最近 Tag 和脏状态；顶部工具栏提供“基线 Tag”和“版本 Diff”，版本报告写入 `.protocol/baselines/working-tree.json`。
 - 左侧工作栏提供“源代码管理 / Git”视图，切换后左侧 Navigator 变为 Source Control：支持暂存、取消暂存、提交暂存更改、切换本地分支、新建并切换分支，并提供基线 Tag / 版本 Diff 快捷入口；变更文件在中间以 Diff tab 打开，左侧下方显示可展开提交 Graph，历史提交文件子节点可打开 Commit Diff。
 - “AI 使用助手”替代静态帮助页，使用模块化知识库和本地 Ollama 模型回答操作问题；当前本机可用模型为 `qwen2.5:3b` 和 `qwen3-coder:30b`，默认优先使用轻量模型。
-- 发布工程已接入 `electron-builder`，可通过 `pnpm release:installer` 生成 `apps/desktop/release/ProtoVault-0.2.0-Setup-x64.exe` 和 `ProtoVault-0.2.0-Portable-x64.exe`。
+- 发布工程已接入 `electron-builder`，可通过 `pnpm release:installer` 生成 `apps/desktop/release/ProtoVault-0.2.1-Setup-x64.exe` 和 `ProtoVault-0.2.1-Portable-x64.exe`。
 - Header 扫描针对大目录减少无效遍历：默认跳过 `.git`、`.protocol`、`node_modules`、`dist/out/build*`、测试输出等生成目录，并在界面显示当前扫描阶段、处理数量和文件名。
 - `.protocol/cache/workspace-index.sqlite` 保存 Header 指纹、依赖指纹、最后有效 IR 和稳定身份；缓存目录不进入 Git。
 - 新扫描会取消同一窗口的旧扫描并终止对应 Clang 子进程，避免旧结果覆盖新工作区。
