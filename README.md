@@ -228,6 +228,7 @@ This replaces the older standalone snapshot workflow and keeps protocol history 
 - [User manual](doc/ProtoVault使用手册.md)
 - [AI assistant knowledge base](doc/ProtoVaultAI功能知识库.md)
 - [Full feature mental model](doc/ProtoVault全功能心智模型_v2026-07-05.md)
+- [Product audit and P18 architecture upgrade](doc/产品审核与架构升级建议_2026-07-10.md)
 - [Development log](doc/开发更新日志.md)
 
 ## Roadmap

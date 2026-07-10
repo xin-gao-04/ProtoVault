@@ -97,6 +97,67 @@ struct Packet${index} {
     }
   }, 45_000);
 
+  it("reuses unchanged Header parses and invalidates include dependents", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-local-cache-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "base.hpp"), `#pragma once
+struct BasePacket { int value; };
+`, "utf8");
+      await writeFile(resolve(root, "headers", "derived.hpp"), `#pragma once
+#include "base.hpp"
+struct DerivedPacket { BasePacket base; };
+`, "utf8");
+
+      await scanWorkspace(root);
+      const cachedMessages: string[] = [];
+      const cached = await scanWorkspace(root, {
+        onProgress: (event) => {
+          if (event.phase === "parse") cachedMessages.push(event.message);
+        }
+      });
+      expect(cached.types.map((type) => type.name)).toEqual(expect.arrayContaining(["BasePacket", "DerivedPacket"]));
+      expect(cachedMessages.some((message) => message.includes("复用缓存"))).toBe(true);
+
+      await writeFile(resolve(root, "headers", "base.hpp"), `#pragma once
+struct BasePacket { int value; int sequence; };
+`, "utf8");
+      const invalidatedMessages: string[] = [];
+      const invalidated = await scanWorkspace(root, {
+        onProgress: (event) => {
+          if (event.phase === "parse") invalidatedMessages.push(event.message);
+        }
+      });
+      expect(invalidated.types.find((type) => type.name === "BasePacket")?.fields.map((field) => field.name)).toContain("sequence");
+      expect(invalidatedMessages.some((message) => message.includes("复用缓存"))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("keeps the last valid in-memory IR when a previously valid Header breaks", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-local-last-valid-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      const headerPath = resolve(root, "headers", "packet.hpp");
+      await writeFile(headerPath, "#pragma once\nstruct Packet { int id; };\n", "utf8");
+      const valid = await scanWorkspace(root);
+      expect(valid.types.find((type) => type.name === "Packet")?.fields.map((field) => field.name)).toEqual(["id"]);
+
+      await writeFile(headerPath, "#pragma once\nstruct Packet { int id int sequence; };\n", "utf8");
+      const broken = await scanWorkspace(root);
+      expect(broken.types.find((type) => type.name === "Packet")?.fields.map((field) => field.name)).toEqual(["id"]);
+      expect(broken.diagnostics.some((diagnostic) => diagnostic.message.includes("上次有效"))).toBe(true);
+
+      await writeFile(headerPath, "#pragma once\nstruct Packet { int id; int sequence; };\n", "utf8");
+      const repaired = await scanWorkspace(root);
+      expect(repaired.types.find((type) => type.name === "Packet")?.fields.map((field) => field.name)).toEqual(["id", "sequence"]);
+      expect(repaired.diagnostics).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("reports broken headers without losing valid local protocol files", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "protovault-local-broken-"));
     try {

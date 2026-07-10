@@ -32,22 +32,24 @@
 | 阶段 | 状态 | 交付物 | 验收门 |
 |---|---|---|---|
 | P0 工程初始化 | 已完成 | pnpm monorepo、Electron/React、CMake、CI | 桌面端与 C++ 核心可构建、测试可运行 |
-| P1 领域模型与契约 | MVP 收束完成 | IR Schema、版本、错误与 API 请求模型、桌面 WorkspaceView 契约校验 | TS 契约与桌面扫描出口校验通过；C++ Schema 往返仍待服务深化 |
-| P2 工作区管理 | MVP 完成 | 任意目录打开、多级 Header/空目录发现、`.protocol/workspace.json` 目录记录、Header 文件监听 | fixture 父目录可打开；外部 Header 修改会触发冲突提示 |
-| P3 Header 解析 | 基础完成 | Clang AST 扫描、类型/字段/枚举、include 归属修正与诊断 | 示例 fixture 通过；复杂宏/模板仍排除 |
+| P1 领域模型与契约 | MVP 契约基线完成 / 待收敛 | IR Schema、版本、错误与 API 请求模型、桌面 WorkspaceView 契约校验 | TS 契约与桌面扫描出口校验通过；Canonical IR 与运行态 WorkspaceView 仍是两套模型，C++ 往返未进入主链路 |
+| P2 工作区管理 | MVP 完成 / 增量索引待实现 | 任意目录打开、多级 Header/空目录发现、`.protocol/workspace.json` 目录记录、Header 文件监听 | fixture 父目录可打开；外部 Header 修改会触发冲突提示；SQLite 持久索引尚未实现 |
+| P3 Header 解析 | MVP 基础完成 / Worker 化待实现 | Clang AST 扫描、类型/字段/枚举、include 归属修正、诊断和进程内依赖缓存 | 示例 fixture 通过；复杂宏/模板仍排除；持久缓存、取消和崩溃隔离待实现 |
 | P4 ABI 布局 | 已完成 MVP | size、offset、alignment、padding、pack、enum underlying type | 与编译器 `sizeof/offsetof` 基准一致 |
 | P5 工作台 UI | 基础纵切完成 | Obsidian 风格合并树、字段、源码、属性、问题面板、三栏拖拽和主题变量兼容 | 示例工作区浏览定位 E2E 已通过 |
 | P6 编辑与生成 | MVP 纵切完成 | 新建 Header、创建 struct/enum、字段/枚举项 CRUD、受控 Header 片段生成、写后重扫 | 基础写入、确定性片段生成和 E2E 通过；完整 IR→Header 生成器仍待深化 |
-| P7 双向同步 | MVP 纵切完成 | Header 内容 hash、保存前冲突保护、保存后重扫、外部修改提示面板 | 源码编辑不会静默覆盖外部修改；外部修改可重新扫描或查看 Diff |
+| P7 双向同步 | MVP 纵切完成 / 冲突中心待深化 | Header 内容 hash、保存前冲突保护、保存后重扫、外部修改提示、会话内最后有效 IR | 源码编辑不会静默覆盖外部修改；持久最后有效 IR 和 Disk/Base/Draft 三方合并待实现 |
 | P8 元数据与文档 | MVP 纵切完成 | 元数据持久化、Header 注释同步、Markdown 文档生成 | 重扫不丢元数据；文档写入 `.protocol/reports/` |
 | P9 协议 Lint | MVP 纵切完成 | 规则引擎、严重等级、源码定位 | 指针/运行期类型、缺失语义、布局问题、枚举问题有测试 |
-| P10 语义 Diff | MVP 纵切完成 | 基线状态比较、字段/枚举/布局变化、兼容性分级 | fixture 可识别新增、类型变化、offset/size 等变化 |
+| P10 语义 Diff | MVP 纵切完成 / 稳定身份待实现 | 基线状态比较、字段/枚举/布局变化、兼容性分级 | fixture 可识别新增、类型变化、offset/size；当前名称哈希 ID 会使改名退化为删除+新增 |
 | P11 集成发布 | 初始 Release 完成 | E2E、发布检查脚本、发布检查清单、Windows NSIS 安装包与 Portable 包 | `pnpm release:check` 通过；`pnpm release:installer` 可生成 `ProtoVault-0.1.0` 分发包 |
 | P12 协议网络地图 | MVP 纵切完成 | `.protocol/network`、NetworkNode、NetworkLink、ProtocolBinding、节点/链路/绑定表格 | 用户可维护实体节点、通信链路和链路上的协议绑定；协议不再直接持有生产者/消费者 |
 | P13 网络派生分析 | Loop 6 / MVP 闭环完成 | FlowView CRUD、过滤派生视图、数据流画布、网络 Inspector、FlowView Markdown 报告、节点/链路/协议瓶颈提示、示例网络配置 | 可保存业务数据流观察视角，先定义视角再进入画布查看生产节点、链路载荷和消费节点，并可生成网络数据流报告；真实运行采样待后续阶段 |
 | P14 Git 版本治理 | MVP 纵切完成 | Git 状态、分支/Tag 展示、协议 Baseline Tag、版本 Diff、P14 loop 脚本 | 基线创建要求工作区干净；版本 Diff 可对比 Git Tag 与当前工作树；旧快照入口退出 UI；发布门通过 |
 | P15 本地 AI 使用助手 | MVP 纵切完成 | AI 可读功能知识库、模块检索、Ollama status/ask API、AI 使用助手视图、模型切换、轻量模型默认、离线降级 | 不注入全量手册；按问题选择少量模块；Ollama 可用时可选择本地模型，不可用时返回离线知识库摘要 |
 | P16 Git Source Control | MVP 纵切完成 | 左侧 Source Control、暂存/取消暂存、提交、分支切换/创建、Git Inspector、Working Tree/Index/Commit 文件级 Diff tab、可展开提交 Graph、与基线 Tag/Diff 联动 | 可在前端完成本地 Git 提交流程；点击当前变更或历史提交文件子节点在中间打开对比；提交只允许当前工作区范围内暂存项；push/pull/放弃更改延后 |
+| P17 稳定性与分发 | 初始完成 | 文件/进程场景测试、真实大目录 AST 流式输出、随包 Git/Clang、Setup/Portable | Desktop 35 个单测、Contracts 4 个测试、Electron E2E 3 个测试通过；正式签名和升级通道待实现 |
+| P18 核心架构硬化 | 待启动 | Canonical IR 收敛、稳定 ID、SQLite 增量索引、Parser Worker、前端模块化、冲突中心 | 见 `产品审核与架构升级建议_2026-07-10.md` 的 P18 Loop 计划 |
 
 ## 当前技术约束
 
@@ -139,3 +141,19 @@ P14 已完成执行结果：
 4. 在网络地图中继续打磨表格批量编辑和导入/导出能力。
 5. 为 Git 分支/tag 增加更强业务引导，例如“实验分支、评审 Tag、发布 Tag、兼容性报告”的项目模板。
 6. 为 Release 增加正式应用图标、签名证书、自动更新和 GitHub Release 附件上传流程。
+
+## 2026-07-10 审核后的执行收敛
+
+此前计划以功能纵切为主，P12-P17 已使产品具备较完整的演示和本地使用能力。审核确认下一阶段不能继续按功能数量衡量完成度，必须优先补足底层可信度。
+
+P18 默认按以下顺序推进：
+
+1. 用 ADR 固定 Canonical IR 与运行投影的边界。
+2. 建立持久稳定 ID，先解决类型和字段改名的身份延续。
+3. 建立 SQLite 增量索引和重启可复用的 Header IR cache。
+4. 将 Clang 解析放入可取消、可超时、可崩溃恢复的 Parser Worker。
+5. 拆分 `renderer/src/main.tsx` 和 `main/workspace.ts`，按领域和视图建立模块边界。
+6. 完成 Disk/Base/Draft 三方冲突中心。
+7. 再进入远端 Git、多协议包合成和发布工程深化。
+
+详细差距、架构方案和性能预算见 `doc/产品审核与架构升级建议_2026-07-10.md`。

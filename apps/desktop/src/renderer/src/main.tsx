@@ -35,6 +35,7 @@ import {
   type AssistantRuntimeStatus
 } from "../../shared/assistant";
 import { APP_THEMES, graphThemeForAppTheme, type AppThemeId, type GraphThemePreset } from "./themes";
+import { ProblemsPanel } from "./components/ProblemsPanel";
 import "./styles.css";
 
 type ProtocolTreeNode =
@@ -53,7 +54,6 @@ type FieldTypeOption = { group: "composite" | "base"; value: string; label: stri
 type DirtyStructuralEdit =
   | { kind: "field"; typeId: string; fieldId: string; fieldName: string; fieldType: string; fieldInitializer: string; savedFieldName: string; savedFieldType: string; savedFieldInitializer: string }
   | { kind: "enum-value"; typeId: string; valueId: string; valueName: string; valueNumber: string; savedValueName: string; savedValueNumber: string };
-type DirtyDataFlowEdit = { producers: string[]; consumers: string[] };
 type CenterViewMode = "workspace" | "graph" | "network" | "git" | "manual";
 type NetworkTabMode = "nodes" | "links" | "bindings" | "flows" | "flow-canvas";
 type NavigationSnapshot = {
@@ -99,7 +99,6 @@ type ProtocolGraphNode =
   | { id: string; kind: "network-node"; label: string; networkNode: WorkspaceNetworkNodeView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
   | { id: string; kind: "protocol-binding"; label: string; binding: WorkspaceProtocolBindingView; x: number; y: number; z: number; metrics: GraphNodeMetrics }
   | { id: string; kind: "producer" | "consumer"; label: string; x: number; y: number; z: number; metrics: GraphNodeMetrics };
-type ProtocolGraphMode = "dependency" | "data-flow";
 type ProtocolGraphEdge = { id: string; from: string; to: string; label: string; kind: "contains" | "references" | "flow" };
 type GraphSimNode = ProtocolGraphNode & { vx: number; vy: number; vz: number; radius: number; screenX: number; screenY: number; screenRadius: number };
 type GraphSimEdge = ProtocolGraphEdge & { source: GraphSimNode; target: GraphSimNode };
@@ -113,6 +112,13 @@ type GraphNodeMetrics = {
   layoutRisk: GraphRiskLevel;
   layoutRiskLabel: string;
   paddingRatio: number;
+};
+type WorkspaceLayoutPreferences = {
+  navigatorWidth: number;
+  inspectorWidth: number;
+  navigatorCollapsed: boolean;
+  inspectorCollapsed: boolean;
+  toolbarCollapsed: boolean;
 };
 
 const SUPPORTED_BASE_FIELD_TYPES = [
@@ -131,6 +137,34 @@ const SUPPORTED_BASE_FIELD_TYPES = [
   "std::byte"
 ];
 const MAX_NAVIGATION_HISTORY = 80;
+const LAYOUT_STORAGE_KEY = "protovault:workspace-layout";
+
+function readWorkspaceLayoutPreferences(): WorkspaceLayoutPreferences {
+  const fallback: WorkspaceLayoutPreferences = {
+    navigatorWidth: 340,
+    inspectorWidth: 260,
+    navigatorCollapsed: false,
+    inspectorCollapsed: false,
+    toolbarCollapsed: false
+  };
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as Partial<WorkspaceLayoutPreferences>;
+    return {
+      navigatorWidth: typeof stored.navigatorWidth === "number" ? clamp(stored.navigatorWidth, 260, 680) : fallback.navigatorWidth,
+      inspectorWidth: typeof stored.inspectorWidth === "number" ? clamp(stored.inspectorWidth, 220, 560) : fallback.inspectorWidth,
+      navigatorCollapsed: stored.navigatorCollapsed === true,
+      inspectorCollapsed: stored.inspectorCollapsed === true,
+      toolbarCollapsed: stored.toolbarCollapsed === true
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+}
 
 function gitStatusLabel(status: GitWorkspaceStatus | null, tags: GitTagInfo[]): string {
   if (!status) return "Git 状态读取中…";
@@ -159,7 +193,16 @@ function pushNavigationSnapshot(stack: NavigationSnapshot[], snapshot: Navigatio
   return [...stack, snapshot].slice(-MAX_NAVIGATION_HISTORY);
 }
 
+function useEventCallback<TArgs extends unknown[], TResult>(callback: (...args: TArgs) => TResult): (...args: TArgs) => TResult {
+  const callbackRef = React.useRef(callback);
+  React.useLayoutEffect(() => {
+    callbackRef.current = callback;
+  });
+  return React.useCallback((...args: TArgs) => callbackRef.current(...args), []);
+}
+
 function App(): React.JSX.Element {
+  const initialLayoutPreferences = React.useRef(readWorkspaceLayoutPreferences()).current;
   const [health, setHealth] = React.useState("正在连接本地协议服务…");
   const [workspace, setWorkspace] = React.useState<WorkspaceView | null>(null);
   const [gitStatus, setGitStatus] = React.useState<GitWorkspaceStatus | null>(null);
@@ -174,11 +217,11 @@ function App(): React.JSX.Element {
   const [expandedNodeIds, setExpandedNodeIds] = React.useState<Set<string>>(new Set());
   const [treeSearchOpen, setTreeSearchOpen] = React.useState(false);
   const [treeSearchQuery, setTreeSearchQuery] = React.useState("");
-  const [navigatorWidth, setNavigatorWidth] = React.useState(340);
-  const [inspectorWidth, setInspectorWidth] = React.useState(260);
-  const [navigatorCollapsed, setNavigatorCollapsed] = React.useState(false);
-  const [inspectorCollapsed, setInspectorCollapsed] = React.useState(false);
-  const [toolbarCollapsed, setToolbarCollapsed] = React.useState(false);
+  const [navigatorWidth, setNavigatorWidth] = React.useState(initialLayoutPreferences.navigatorWidth);
+  const [inspectorWidth, setInspectorWidth] = React.useState(initialLayoutPreferences.inspectorWidth);
+  const [navigatorCollapsed, setNavigatorCollapsed] = React.useState(initialLayoutPreferences.navigatorCollapsed);
+  const [inspectorCollapsed, setInspectorCollapsed] = React.useState(initialLayoutPreferences.inspectorCollapsed);
+  const [toolbarCollapsed, setToolbarCollapsed] = React.useState(initialLayoutPreferences.toolbarCollapsed);
   const [uiNotice, setUiNotice] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -208,7 +251,6 @@ function App(): React.JSX.Element {
   const [editingEnumValueId, setEditingEnumValueId] = React.useState<string | null>(null);
   const [dirtyNotes, setDirtyNotes] = React.useState<Record<string, string>>({});
   const [dirtyStructuralEdits, setDirtyStructuralEdits] = React.useState<Record<string, DirtyStructuralEdit>>({});
-  const [dirtyDataFlows, setDirtyDataFlows] = React.useState<Record<string, DirtyDataFlowEdit>>({});
   const [sourceDrafts, setSourceDrafts] = React.useState<Record<string, string>>({});
   const [tabs, setTabs] = React.useState<WorkspaceTab[]>([]);
   const [previewTab, setPreviewTab] = React.useState<WorkspaceTab | null>(null);
@@ -247,8 +289,8 @@ function App(): React.JSX.Element {
         ? { id: selectedType.id, label: `${selectedType.kind === "struct" ? "Struct" : "Enum"} ${selectedType.qualifiedName}`, note: selectedType.note ?? "" }
         : null;
   const dirtyTabIds = React.useMemo(
-    () => workspace ? buildDirtyTabIds(workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows, sourceDrafts) : new Set<string>(),
-    [workspace, dirtyNotes, dirtyStructuralEdits, dirtyDataFlows, sourceDrafts]
+    () => workspace ? buildDirtyTabIds(workspace, dirtyNotes, dirtyStructuralEdits, sourceDrafts) : new Set<string>(),
+    [workspace, dirtyNotes, dirtyStructuralEdits, sourceDrafts]
   );
   const selectedFieldTypeOptions = React.useMemo(
     () => workspace && selectedType ? buildFieldTypeOptions(workspace, selectedType) : buildBaseFieldTypeOptions(),
@@ -256,7 +298,7 @@ function App(): React.JSX.Element {
   );
   const selectedLayout = selectedType?.layout ?? null;
   const rawTree = React.useMemo(() => workspace ? buildProtocolTree(workspace) : [], [workspace]);
-  const dependencyGraphContext = React.useMemo(() => workspace ? buildProtocolGraph(workspace, "dependency") : null, [workspace]);
+  const dependencyGraphContext = React.useMemo(() => workspace ? buildProtocolGraph(workspace) : null, [workspace]);
   const graphContext = centerViewMode === "graph" && graphInspectorState ? graphInspectorState.graph : dependencyGraphContext;
   const selectedGraphNode = React.useMemo(() => {
     if (!graphContext) return null;
@@ -391,6 +433,44 @@ function App(): React.JSX.Element {
     setUiNotice(direction === "back" ? "已返回上一步界面" : "已前进到下一步界面");
   }
 
+  const handleGlobalClick = useEventCallback((): void => {
+    setContextMenu(null);
+    setTabContextMenu(null);
+  });
+
+  const handleGlobalKeyDown = useEventCallback((event: KeyboardEvent): void => {
+    const textEntryActive = isTextEntryTarget(event.target);
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
+      if (textEntryActive) return;
+      event.preventDefault();
+      void navigateHistory("back");
+      return;
+    }
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowRight") {
+      if (textEntryActive) return;
+      event.preventDefault();
+      void navigateHistory("forward");
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void saveActiveChanges();
+      return;
+    }
+    if (event.key === "F2") {
+      if (textEntryActive) return;
+      event.preventDefault();
+      triggerEditSelected();
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (promptDialog) resolvePromptDialog(null);
+      else if (confirmDialog) resolveConfirmDialog(false);
+      else if (settingsOpen) setSettingsOpen(false);
+      else handleGlobalClick();
+    }
+  });
+
   React.useEffect(() => {
     window.protoVault.health()
       .then((result) => setHealth(`服务就绪 · Contract ${result.contractVersion}`))
@@ -445,7 +525,7 @@ function App(): React.JSX.Element {
         setSelectedGitCommitHash(null);
       });
     return () => { cancelled = true; };
-  }, [workspace?.rootPath, workspace?.files.length, workspace?.types.length, workspace?.network.updatedAt]);
+  }, [workspace]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -473,12 +553,29 @@ function App(): React.JSX.Element {
   }, [uiNotice]);
 
   React.useEffect(() => {
+    if (loading || scanProgress?.phase !== "done") return;
+    const timer = window.setTimeout(() => setScanProgress(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [loading, scanProgress?.phase]);
+
+  React.useEffect(() => {
     document.body.dataset.appTheme = appThemeId;
     const lightTheme = appThemeId === "ink" || appThemeId === "obsidian-light";
     document.body.classList.toggle("theme-light", lightTheme);
     document.body.classList.toggle("theme-dark", !lightTheme);
     window.localStorage.setItem("protovault:app-theme", appThemeId);
   }, [appThemeId]);
+
+  React.useEffect(() => {
+    const preferences: WorkspaceLayoutPreferences = {
+      navigatorWidth,
+      inspectorWidth,
+      navigatorCollapsed,
+      inspectorCollapsed,
+      toolbarCollapsed
+    };
+    window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(preferences));
+  }, [inspectorCollapsed, inspectorWidth, navigatorCollapsed, navigatorWidth, toolbarCollapsed]);
 
   React.useEffect(() => {
     currentNavigationSnapshotRef.current = currentNavigationSnapshot;
@@ -505,39 +602,13 @@ function App(): React.JSX.Element {
   }, [currentNavigationSnapshot]);
 
   React.useEffect(() => {
-    function closeMenu(): void {
-      setContextMenu(null);
-      setTabContextMenu(null);
-    }
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
-        event.preventDefault();
-        void navigateHistory("back");
-        return;
-      }
-      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowRight") {
-        event.preventDefault();
-        void navigateHistory("forward");
-        return;
-      }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void saveActiveChanges();
-        return;
-      }
-      if (event.key === "F2") {
-        event.preventDefault();
-        triggerEditSelected();
-      }
-      if (event.key === "Escape") closeMenu();
-    }
-    window.addEventListener("click", closeMenu);
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("click", handleGlobalClick);
+    window.addEventListener("keydown", handleGlobalKeyDown);
     return () => {
-      window.removeEventListener("click", closeMenu);
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("click", handleGlobalClick);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
     };
-  });
+  }, [handleGlobalClick, handleGlobalKeyDown]);
 
   async function openWorkspace(sample: boolean): Promise<void> {
     setLoading(true);
@@ -790,6 +861,23 @@ function App(): React.JSX.Element {
       return;
     }
     if (await openTypeTab(type)) setCenterViewMode("workspace");
+  }
+
+  async function openDiagnosticLocation(diagnostic: WorkspaceView["diagnostics"][number]): Promise<void> {
+    if (!workspace || !diagnostic.file) {
+      setUiNotice("该问题没有可跳转的源码位置");
+      return;
+    }
+    const diagnosticPath = normalizePath(diagnostic.file);
+    const file = workspace.files.find((item) => normalizePath(item.path) === diagnosticPath);
+    if (!file) {
+      setUiNotice("问题来自工作区外部依赖，当前无法直接打开");
+      return;
+    }
+    if (await openFileTab(file)) {
+      setCenterViewMode("workspace");
+      setUiNotice(diagnostic.line ? `已定位到 ${file.relativePath}:${diagnostic.line}` : `已打开 ${file.relativePath}`);
+    }
   }
 
   async function deleteFieldWithConfirm(type: WorkspaceTypeView, field: WorkspaceFieldView): Promise<void> {
@@ -1486,22 +1574,6 @@ function App(): React.JSX.Element {
     });
   }
 
-  function updateDataFlowDraft(type: WorkspaceTypeView, producers: string[], consumers: string[]): void {
-    const savedProducers = type.dataFlow?.producers ?? [];
-    const savedConsumers = type.dataFlow?.consumers ?? [];
-    setDirtyDataFlows((current) => {
-      const next = { ...current };
-      if (stringArrayEquals(producers, savedProducers) && stringArrayEquals(consumers, savedConsumers)) delete next[type.id];
-      else next[type.id] = { producers, consumers };
-      return next;
-    });
-  }
-
-  async function saveNote(): Promise<void> {
-    if (!workspace || !selectedNoteTarget) return;
-    await saveNoteTarget(selectedNoteTarget.id);
-  }
-
   async function saveNoteTarget(targetId: string): Promise<boolean> {
     if (!workspace) return false;
     if (dirtyNotes[targetId] === undefined) {
@@ -1518,20 +1590,6 @@ function App(): React.JSX.Element {
         return next;
       });
       setUiNotice("注释已同步到 Header 和 .protocol/meta/metadata.json");
-    });
-  }
-
-  async function updateDataFlowForType(type: WorkspaceTypeView, producers: string[], consumers: string[]): Promise<boolean> {
-    if (!workspace) return false;
-    return runWorkspaceAction(async () => {
-      const result = await window.protoVault.updateDataFlow({ workspaceRoot: workspace.rootPath, typeId: type.id, producers, consumers });
-      setWorkspace(result);
-      setDirtyDataFlows((current) => {
-        const next = { ...current };
-        delete next[type.id];
-        return next;
-      });
-      setUiNotice("数据流标签已保存到 .protocol/meta/metadata.json");
     });
   }
 
@@ -1619,10 +1677,6 @@ function App(): React.JSX.Element {
     }
     if (selectedNoteTarget && dirtyNotes[selectedNoteTarget.id] !== undefined) {
       return saveNoteTarget(selectedNoteTarget.id);
-    }
-    if (selectedType && dirtyDataFlows[selectedType.id]) {
-      const edit = dirtyDataFlows[selectedType.id];
-      return updateDataFlowForType(selectedType, edit.producers, edit.consumers);
     }
     if (selectedType) {
       const memberIds = new Set([...selectedType.fields.map((field) => field.id), ...selectedType.values.map((value) => value.id), selectedType.id]);
@@ -1870,7 +1924,6 @@ function App(): React.JSX.Element {
       const ids = new Set([type.id, ...type.fields.map((field) => field.id), ...type.values.map((value) => value.id)]);
       setDirtyNotes((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
       setDirtyStructuralEdits((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
-      setDirtyDataFlows((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== type.id)));
     }
   }
 
@@ -2312,24 +2365,22 @@ function App(): React.JSX.Element {
           workspace={workspace}
           graph={graphContext}
           selectedNode={selectedGraphNode}
-          dirtyDataFlows={dirtyDataFlows}
           onOpenNode={openGraphNode}
           onSelectNode={selectGraphNode}
-          onDataFlowDraftChange={updateDataFlowDraft}
-          onUpdateDataFlow={(type, producers, consumers) => void updateDataFlowForType(type, producers, consumers)}
         />
           : selectedType ? <ProtocolInspector
               type={selectedType}
               layout={selectedLayout}
               selectedField={selectedField}
               selectedEnumValue={selectedEnumValue}
-              dirtyDataFlows={dirtyDataFlows}
-              onDataFlowDraftChange={updateDataFlowDraft}
-              onUpdateDataFlow={(type, producers, consumers) => void updateDataFlowForType(type, producers, consumers)}
             />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
             : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
-        {workspace && <section className="problems"><h2>问题 · {workspace.diagnostics.length}</h2>{workspace.diagnostics.length === 0 ? <p className="ok">没有扫描问题</p> : workspace.diagnostics.map((item, index) => <p className="problem" key={index}>{item.message}</p>)}</section>}
+        {workspace && <ProblemsPanel
+          diagnostics={workspace.diagnostics}
+          workspaceRoot={workspace.rootPath}
+          onOpenDiagnostic={(diagnostic) => { void openDiagnosticLocation(diagnostic); }}
+        />}
       </aside>
       {confirmDialog && <ConfirmDialog
         dialog={confirmDialog}
@@ -2610,10 +2661,9 @@ function buildDirtyTabIds(
   workspace: WorkspaceView,
   dirtyNotes: Record<string, string>,
   dirtyStructuralEdits: Record<string, DirtyStructuralEdit>,
-  dirtyDataFlows: Record<string, DirtyDataFlowEdit>,
   sourceDrafts: Record<string, string>
 ): Set<string> {
-  const dirtyIds = new Set([...Object.keys(dirtyNotes), ...Object.keys(dirtyStructuralEdits), ...Object.keys(dirtyDataFlows)]);
+  const dirtyIds = new Set([...Object.keys(dirtyNotes), ...Object.keys(dirtyStructuralEdits)]);
   const tabIds = new Set<string>();
   for (const file of workspace.files) {
     if (sourceDrafts[file.path] !== undefined && sourceDrafts[file.path] !== file.content) {
@@ -5553,7 +5603,7 @@ function ProtocolGraphView({ workspace, selectedTypeId, selectedFilePath, appThe
   const [graphSearchQuery, setGraphSearchQuery] = React.useState("");
   const [selectedGraphNodeId, setSelectedGraphNodeId] = React.useState<string | null>(null);
   const graphTheme = graphThemeForAppTheme(appThemeId);
-  const graph = React.useMemo(() => buildProtocolGraph(workspace, "dependency"), [workspace]);
+  const graph = React.useMemo(() => buildProtocolGraph(workspace), [workspace]);
   const focusedNodeId = selectedGraphNodeId ?? (selectedTypeId ? `type:${selectedTypeId}` : selectedFilePath ? `file:${selectedFilePath}` : null);
   const relationDepth = React.useMemo(() => buildGraphRelationDepth(graph.edges, focusedNodeId), [graph.edges, focusedNodeId]);
   const normalizedGraphSearch = graphSearchQuery.trim().toLowerCase();
@@ -5826,16 +5876,11 @@ function graphNodeKindLabel(node: ProtocolGraphNode): string {
   return node.kind === "producer" ? "生产节点" : "消费节点";
 }
 
-function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode, flowView?: WorkspaceFlowView): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
+function buildProtocolGraph(workspace: WorkspaceView): { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] } {
   const files = workspace.files;
   const types = workspace.types;
-  const flowAnalysis = mode === "data-flow" && flowView ? deriveFlowViewAnalysis(workspace, flowView) : null;
-  const flowTypeIds = new Set(flowAnalysis?.bindings.map((binding) => binding.typeId) ?? []);
-  const visibleTypes = mode === "data-flow" && flowAnalysis && workspace.network.bindings.length > 0
-    ? types.filter((type) => flowTypeIds.has(type.id))
-    : types;
   const fileRadius = 330;
-  const typeRadius = Math.max(115, Math.min(240, 105 + visibleTypes.length * 4));
+  const typeRadius = Math.max(115, Math.min(240, 105 + types.length * 4));
   const emptyMetrics: GraphNodeMetrics = {
     inboundReferences: 0,
     outboundReferences: 0,
@@ -5847,17 +5892,17 @@ function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode, f
     paddingRatio: 0
   };
   const nodes: ProtocolGraphNode[] = [
-    ...(mode === "dependency" ? files.map((file, index) => {
+    ...files.map((file, index) => {
       const point = radialPoint(index, Math.max(files.length, 1), fileRadius, 0, 0, -Math.PI / 2);
       return { id: `file:${file.path}`, kind: "file" as const, label: file.relativePath.split("/").at(-1) ?? file.relativePath, file, ...point, z: Math.sin(index * 1.9) * 90, metrics: { ...emptyMetrics } };
-    }) : []),
-    ...visibleTypes.map((type, index) => {
-      const point = radialPoint(index, Math.max(visibleTypes.length, 1), typeRadius, 0, 0, -Math.PI / 2 + Math.PI / Math.max(visibleTypes.length, 2));
+    }),
+    ...types.map((type, index) => {
+      const point = radialPoint(index, Math.max(types.length, 1), typeRadius, 0, 0, -Math.PI / 2 + Math.PI / Math.max(types.length, 2));
       return { id: `type:${type.id}`, kind: type.kind, label: type.name, type, ...point, z: Math.cos(index * 1.35) * 70, metrics: { ...emptyMetrics } };
     })
   ];
   const edges: ProtocolGraphEdge[] = [];
-  if (mode === "dependency") for (const type of types) {
+  for (const type of types) {
     const sourceTypeId = `type:${type.id}`;
     const ownerFile = files.find((file) => file.path === type.file);
     if (ownerFile) {
@@ -5870,98 +5915,6 @@ function buildProtocolGraph(workspace: WorkspaceView, mode: ProtocolGraphMode, f
       if (!target) continue;
       edges.push({ id: `ref:${field.id}:${target.id}`, from: sourceTypeId, to: `type:${target.id}`, label: field.name, kind: "references" });
     }
-  }
-  if (mode === "data-flow" && flowAnalysis && workspace.network.bindings.length > 0) {
-    const nodeTotal = Math.max(flowAnalysis.nodes.length, 1);
-    for (const [index, node] of flowAnalysis.nodes.entries()) {
-      const point = radialPoint(index, nodeTotal, 390, 0, 0, -Math.PI / 2);
-      nodes.push({
-        id: `network-node:${node.id}`,
-        kind: "network-node",
-        label: node.name,
-        networkNode: node,
-        ...point,
-        z: Math.sin(index * 1.2) * 105,
-        metrics: {
-          ...emptyMetrics,
-          inboundReferences: node.incomingLinkCount,
-          outboundReferences: node.outgoingLinkCount,
-          impactScore: Math.max(2, node.incomingLinkCount + node.outgoingLinkCount + Math.log2(node.incomingBandwidthBps + node.outgoingBandwidthBps + 1)),
-          layoutRisk: node.incomingBandwidthBps + node.outgoingBandwidthBps >= 1024 * 1024 ? "warning" : "normal",
-          layoutRiskLabel: `出 ${formatBandwidth(node.outgoingBandwidthBps)} / 入 ${formatBandwidth(node.incomingBandwidthBps)}`
-        }
-      });
-    }
-
-    const bindingTotal = Math.max(flowAnalysis.bindings.length, 1);
-    const linkById = new Map(flowAnalysis.links.map((link) => [link.id, link]));
-    for (const [index, binding] of flowAnalysis.bindings.entries()) {
-      const point = radialPoint(index, bindingTotal, 250, 0, 0, Math.PI / 2);
-      const risk = riskForBinding(binding);
-      nodes.push({
-        id: `binding:${binding.id}`,
-        kind: "protocol-binding",
-        label: binding.name,
-        binding,
-        ...point,
-        z: Math.cos(index * 1.7) * 72,
-        metrics: {
-          ...emptyMetrics,
-          inboundReferences: 1,
-          outboundReferences: binding.protocolName ? 2 : 1,
-          impactScore: Math.max(2, Math.log2(binding.estimatedBandwidthBps + 1) + (binding.criticality === "critical" ? 5 : binding.criticality === "high" ? 3 : 0)),
-          layoutRisk: risk.level,
-          layoutRiskLabel: risk.label
-        }
-      });
-      const link = linkById.get(binding.linkId);
-      if (!link) continue;
-      const fromId = `network-node:${link.fromNodeId}`;
-      const toId = `network-node:${link.toNodeId}`;
-      const bindingId = `binding:${binding.id}`;
-      const typeId = `type:${binding.typeId}`;
-      edges.push({ id: `flow:${fromId}:${bindingId}`, from: fromId, to: bindingId, label: link.name, kind: "flow" });
-      if (flowTypeIds.has(binding.typeId)) {
-        edges.push({ id: `flow:${bindingId}:${typeId}`, from: bindingId, to: typeId, label: binding.protocolName ?? binding.typeId, kind: "flow" });
-        edges.push({ id: `flow:${typeId}:${toId}`, from: typeId, to: toId, label: `${binding.frequencyHz} Hz`, kind: "flow" });
-      } else {
-        edges.push({ id: `flow:${bindingId}:${toId}`, from: bindingId, to: toId, label: `${binding.frequencyHz} Hz`, kind: "flow" });
-      }
-    }
-  } else if (mode === "data-flow") {
-    const actorNodes = new Map<string, ProtocolGraphNode>();
-    function actorNode(label: string, kind: "producer" | "consumer", index: number): ProtocolGraphNode {
-      const id = `${kind}:${label}`;
-      const existing = actorNodes.get(id);
-      if (existing) return existing;
-      const point = radialPoint(index, Math.max(6, actorNodes.size + 6), kind === "producer" ? 355 : 420, 0, 0, kind === "producer" ? -Math.PI * 0.8 : Math.PI * 0.2);
-      const node: ProtocolGraphNode = {
-        id,
-        kind,
-        label,
-        ...point,
-        z: kind === "producer" ? -80 + actorNodes.size * 4 : 80 - actorNodes.size * 3,
-        metrics: { ...emptyMetrics, impactScore: 2, layoutRiskLabel: kind === "producer" ? "生产节点" : "消费节点" }
-      };
-      actorNodes.set(id, node);
-      return node;
-    }
-    let actorIndex = 0;
-    for (const type of types) {
-      const flow = type.dataFlow;
-      if (!flow) continue;
-      for (const producer of flow.producers) {
-        const actor = actorNode(producer, "producer", actorIndex);
-        actorIndex += 1;
-        edges.push({ id: `flow:${actor.id}:type:${type.id}`, from: actor.id, to: `type:${type.id}`, label: "produces", kind: "flow" });
-      }
-      for (const consumer of flow.consumers) {
-        const actor = actorNode(consumer, "consumer", actorIndex);
-        actorIndex += 1;
-        edges.push({ id: `flow:type:${type.id}:${actor.id}`, from: `type:${type.id}`, to: actor.id, label: "consumes", kind: "flow" });
-      }
-    }
-    nodes.push(...actorNodes.values());
   }
   const inbound = new Map<string, number>();
   const outbound = new Map<string, number>();
@@ -6051,14 +6004,6 @@ function riskForType(type: WorkspaceTypeView, diagnosticCount: number): { level:
   if (paddingRatio >= 0.35) return { level: "critical", label: `Padding ${Math.round(paddingRatio * 100)}%`, paddingRatio };
   if (paddingRatio >= 0.2 || layout.paddingBytes >= 16) return { level: "warning", label: `Padding ${formatBytes(layout.paddingBytes)}`, paddingRatio };
   return { level: "normal", label: "布局稳定", paddingRatio };
-}
-
-function riskForBinding(binding: WorkspaceProtocolBindingView): { level: GraphRiskLevel; label: string } {
-  if (binding.payloadSize === undefined) return { level: "warning", label: "未知载荷大小" };
-  if (binding.criticality === "critical") return { level: "critical", label: `关键协议 · ${formatBandwidth(binding.estimatedBandwidthBps)}` };
-  if (binding.criticality === "high") return { level: "warning", label: `高优先级 · ${formatBandwidth(binding.estimatedBandwidthBps)}` };
-  if (binding.estimatedBandwidthBps >= 1024 * 1024) return { level: "warning", label: `高吞吐 · ${formatBandwidth(binding.estimatedBandwidthBps)}` };
-  return { level: "normal", label: `${formatBandwidth(binding.estimatedBandwidthBps)} · ${binding.frequencyHz} Hz` };
 }
 
 function graphNodeRadius(node: ProtocolGraphNode): number {
@@ -6624,15 +6569,12 @@ function protocolBindingCriticalityLabel(criticality: ProtocolBindingCriticality
   return optionLabel(PROTOCOL_BINDING_CRITICALITY_OPTIONS, criticality);
 }
 
-function GraphInspector({ workspace, graph, selectedNode, dirtyDataFlows, onOpenNode, onSelectNode, onDataFlowDraftChange, onUpdateDataFlow }: {
+function GraphInspector({ workspace, graph, selectedNode, onOpenNode, onSelectNode }: {
   workspace: WorkspaceView;
   graph: { nodes: ProtocolGraphNode[]; edges: ProtocolGraphEdge[] };
   selectedNode: ProtocolGraphNode | null;
-  dirtyDataFlows: Record<string, DirtyDataFlowEdit>;
   onOpenNode(node: ProtocolGraphNode): void;
   onSelectNode(node: ProtocolGraphNode): void;
-  onDataFlowDraftChange(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
-  onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
 }): React.JSX.Element {
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
   const referenceEdges = graph.edges.filter((edge) => edge.kind === "references");
@@ -6848,81 +6790,11 @@ function GraphNodeList({ nodes, emptyText, onSelectNode, onOpenNode }: {
   </div>;
 }
 
-function DataFlowEditor({ type, dirtyDataFlow, onDraftChange, onUpdateDataFlow }: {
-  type: WorkspaceTypeView;
-  dirtyDataFlow?: DirtyDataFlowEdit;
-  onDraftChange(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
-  onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
-}): React.JSX.Element {
-  const savedProducers = type.dataFlow?.producers ?? [];
-  const savedConsumers = type.dataFlow?.consumers ?? [];
-  const currentProducers = dirtyDataFlow?.producers ?? savedProducers;
-  const currentConsumers = dirtyDataFlow?.consumers ?? savedConsumers;
-  const [producerText, setProducerText] = React.useState(currentProducers.join(", "));
-  const [consumerText, setConsumerText] = React.useState(currentConsumers.join(", "));
-
-  React.useEffect(() => {
-    setProducerText(currentProducers.join(", "));
-    setConsumerText(currentConsumers.join(", "));
-  }, [type.id, currentProducers.join("\u0000"), currentConsumers.join("\u0000")]);
-
-  const producers = parseFlowTags(producerText);
-  const consumers = parseFlowTags(consumerText);
-  const dirty = dirtyDataFlow !== undefined;
-  const isBaseData = producers.length === 0 && consumers.length === 0;
-
-  function changeProducers(value: string): void {
-    setProducerText(value);
-    onDraftChange(type, parseFlowTags(value), parseFlowTags(consumerText));
-  }
-
-  function changeConsumers(value: string): void {
-    setConsumerText(value);
-    onDraftChange(type, parseFlowTags(producerText), parseFlowTags(value));
-  }
-
-  return <section className="property-card data-flow-editor">
-    <h3>数据流标签</h3>
-    <p className="readonly-note">{isBaseData ? "生产节点和消费节点均为空，当前按基础数据类型处理。" : "这些标签会在图谱的数据流模式中生成 Producer → Data → Consumer 关系。"}</p>
-    <label>
-      <span>生产节点</span>
-      <textarea aria-label={`${type.name} 生产节点`} value={producerText} placeholder="例如：RadarDriver, ReplayTool" onChange={(event) => changeProducers(event.target.value)} />
-    </label>
-    <TagPreview tags={producers} emptyText="无生产节点" />
-    <label>
-      <span>消费节点</span>
-      <textarea aria-label={`${type.name} 消费节点`} value={consumerText} placeholder="例如：Tracker, Telemetry" onChange={(event) => changeConsumers(event.target.value)} />
-    </label>
-    <TagPreview tags={consumers} emptyText="无消费节点" />
-    <div className="graph-inspector-actions">
-      <button className="inline-action" disabled={!dirty} onClick={() => onUpdateDataFlow(type, producers, consumers)}>保存数据流</button>
-      <button className="inline-action ghost" disabled={!producerText && !consumerText} onClick={() => { setProducerText(""); setConsumerText(""); onDraftChange(type, [], []); }}>清空</button>
-    </div>
-  </section>;
-}
-
-function TagPreview({ tags, emptyText }: { tags: string[]; emptyText: string }): React.JSX.Element {
-  return tags.length === 0
-    ? <small className="tag-empty">{emptyText}</small>
-    : <div className="tag-list">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div>;
-}
-
-function parseFlowTags(value: string): string[] {
-  return [...new Set(value.split(/[,，;\n\r]+/).map((item) => item.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-}
-
-function stringArrayEquals(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((item, index) => item === right[index]);
-}
-
-function ProtocolInspector({ type, layout, selectedField, selectedEnumValue, dirtyDataFlows, onDataFlowDraftChange, onUpdateDataFlow }: {
+function ProtocolInspector({ type, layout, selectedField, selectedEnumValue }: {
   type: WorkspaceTypeView;
   layout: WorkspaceMemoryLayoutView | null;
   selectedField?: WorkspaceFieldView;
   selectedEnumValue?: WorkspaceEnumValueView;
-  dirtyDataFlows: Record<string, DirtyDataFlowEdit>;
-  onDataFlowDraftChange(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
-  onUpdateDataFlow(type: WorkspaceTypeView, producers: string[], consumers: string[]): void;
 }): React.JSX.Element {
   const selectedFieldLayout = selectedField && type.kind === "struct" && layout
     ? layout.fields.find((field) => field.fieldId === selectedField.id)

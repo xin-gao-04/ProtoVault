@@ -96,6 +96,10 @@ const PROTOVAULT_TOOLS_DIR = "protovault-tools";
 const CLANG_COMPAT_DIR = "clang-compat";
 let cachedClangPath: string | undefined;
 let cachedGitPath: string | undefined;
+const HEADER_PARSE_CACHE_LIMIT = 4096;
+const GIT_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
+const headerParseCache = new Map<string, { fingerprint: string; types: WorkspaceTypeView[] }>();
+const gitRepositoryContextCache = new Map<string, Promise<GitRepositoryContext | null>>();
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".cache",
   ".git",
@@ -214,6 +218,11 @@ function hasIncludedFrom(location?: AstLocation): boolean {
 interface WorkspaceDiscovery {
   directories: string[];
   headers: string[];
+}
+
+interface GitRepositoryContext {
+  repositoryRoot: string;
+  workspaceRelativePath: string;
 }
 
 function shouldSkipDirectory(name: string): boolean {
@@ -1042,6 +1051,12 @@ function clangParseConcurrency(): number {
   return Math.max(1, Math.min(2, cpus().length));
 }
 
+function headerReadConcurrency(): number {
+  const configured = Number(process.env.PROTOVAULT_READ_CONCURRENCY);
+  if (Number.isInteger(configured) && configured > 0) return Math.min(configured, 32);
+  return Math.max(1, Math.min(12, cpus().length * 2));
+}
+
 function astDumpMaxBytes(): number {
   const configured = Number(process.env.PROTOVAULT_AST_DUMP_MAX_MB);
   const value = Number.isFinite(configured) && configured > 0 ? configured : AST_DUMP_DEFAULT_MAX_MB;
@@ -1529,7 +1544,7 @@ async function scanHeader(clang: string, header: string, root: string, includeRo
 async function validateHeaderContent(root: string, header: string, content: string): Promise<void> {
   const clang = await findClang();
   const discovery = await discoverWorkspace(root);
-  const includeArgs = await clangCommonArgs([root, ...discovery.directories]);
+  const includeArgs = await clangCommonArgs(includeRootsForHeaders(root, [header, ...discovery.headers]));
   const tempPath = join(dirname(header), `.${basename(header)}.${process.pid}.${Date.now()}.validate${extname(header) || ".hpp"}`);
   await fs.writeFile(tempPath, content, "utf8");
   try {
@@ -1553,7 +1568,7 @@ function diagnosticFromError(file: string | undefined, error: unknown): Workspac
     file: parsed?.file ?? file,
     line: parsed?.line,
     column: parsed?.column,
-    message
+    message: parsed?.message ?? message
   };
 }
 
@@ -1579,6 +1594,69 @@ async function readFileView(path: string, root: string): Promise<WorkspaceFileVi
   const content = await fs.readFile(path, "utf8");
   const includes = [...content.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm)].map((match) => match[1]);
   return { path, relativePath: relative(root, path).replaceAll("\\", "/"), includes, content, contentHash: contentHash(content) };
+}
+
+function headerDependencyFingerprints(root: string, files: WorkspaceFileView[], clang: string): Map<string, string> {
+  const headerByRelativePath = new Map(files.map((file) => [normalizeRelativePath(file.relativePath), file.path]));
+  const fileByPath = new Map(files.map((file) => [file.path, file]));
+  const dependencies = new Map(files.map((file) => [
+    file.path,
+    file.includes
+      .map((includeValue) => resolveInternalInclude(root, file.path, includeValue, headerByRelativePath))
+      .filter((value): value is string => Boolean(value))
+  ]));
+
+  return new Map(files.map((file) => {
+    const reachable = new Set<string>();
+    const stack = [file.path];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (reachable.has(current)) continue;
+      reachable.add(current);
+      for (const dependency of dependencies.get(current) ?? []) stack.push(dependency);
+    }
+    const fingerprint = createHash("sha256")
+      .update(clang)
+      .update("\0")
+      .update([...reachable]
+        .sort((left, right) => left.localeCompare(right))
+        .map((path) => `${normalizeRelativePath(relative(root, path))}:${fileByPath.get(path)?.contentHash ?? "missing"}`)
+        .join("\n"))
+      .digest("hex");
+    return [file.path, fingerprint];
+  }));
+}
+
+function cachedHeaderTypes(header: string, fingerprint: string): WorkspaceTypeView[] | undefined {
+  const key = resolve(header).toLowerCase();
+  const cached = headerParseCache.get(key);
+  if (!cached || cached.fingerprint !== fingerprint) return undefined;
+  headerParseCache.delete(key);
+  headerParseCache.set(key, cached);
+  return cached.types;
+}
+
+function lastValidHeaderTypes(header: string): WorkspaceTypeView[] | undefined {
+  return headerParseCache.get(resolve(header).toLowerCase())?.types;
+}
+
+function cacheHeaderTypes(header: string, fingerprint: string, types: WorkspaceTypeView[]): void {
+  const key = resolve(header).toLowerCase();
+  headerParseCache.delete(key);
+  headerParseCache.set(key, { fingerprint, types });
+  while (headerParseCache.size > HEADER_PARSE_CACHE_LIMIT) {
+    const oldestKey = headerParseCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    headerParseCache.delete(oldestKey);
+  }
+}
+
+function discardStaleHeaderCache(root: string, headers: string[]): void {
+  const normalizedRoot = `${resolve(root).toLowerCase()}\\`;
+  const active = new Set(headers.map((header) => resolve(header).toLowerCase()));
+  for (const key of headerParseCache.keys()) {
+    if (key.startsWith(normalizedRoot) && !active.has(key)) headerParseCache.delete(key);
+  }
 }
 
 function readDirectoryView(path: string, root: string): WorkspaceDirectoryView {
@@ -1661,19 +1739,22 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
 
   const discovery = await discoverWorkspace(root);
   const headers = discovery.headers;
+  discardStaleHeaderCache(root, headers);
   const directories = discovery.directories.map((directory) => readDirectoryView(directory, root));
   emitProgress(options, { phase: "read", message: `发现 ${headers.length} 个 Header，正在读取文件…`, current: 0, total: Math.max(headers.length, 1) });
-  const files: WorkspaceFileView[] = [];
-  for (const [index, header] of headers.entries()) {
-    files.push(await readFileView(header, root));
+  let readHeaders = 0;
+  const files = await mapWithConcurrency(headers, headerReadConcurrency(), async (header) => {
+    const file = await readFileView(header, root);
+    readHeaders += 1;
     emitProgress(options, {
       phase: "read",
       message: `读取 Header：${relative(root, header).replaceAll("\\", "/")}`,
-      current: index + 1,
+      current: readHeaders,
       total: Math.max(headers.length, 1),
       file: header
     });
-  }
+    return file;
+  });
   const contentByHeader = new Map(files.map((file) => [file.path, file.content]));
   const diagnostics: WorkspaceView["diagnostics"] = [];
   let scanner = "Clang AST";
@@ -1685,21 +1766,41 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
     try {
       const clang = await findClang();
       const includeRoots = includeRootsForHeaders(root, headers);
+      const dependencyFingerprints = headerDependencyFingerprints(root, files, clang);
       scanner = `Clang AST · ${clang}`;
       emitProgress(options, { phase: "parse", message: "正在启动 Clang AST 扫描…", current: 0, total: headers.length });
       let parsedHeaders = 0;
+      let cacheHits = 0;
       const batches = await mapWithConcurrency(headers, clangParseConcurrency(), async (header) => {
+        let usedCache = false;
         try {
-          return await scanHeader(clang, header, root, includeRoots, contentByHeader.get(header) ?? await fs.readFile(header, "utf8"));
+          const fingerprint = dependencyFingerprints.get(header) ?? contentHash(contentByHeader.get(header) ?? "");
+          const cached = cachedHeaderTypes(header, fingerprint);
+          if (cached) {
+            usedCache = true;
+            cacheHits += 1;
+            return cached;
+          }
+          const parsed = await scanHeader(clang, header, root, includeRoots, contentByHeader.get(header) ?? await fs.readFile(header, "utf8"));
+          cacheHeaderTypes(header, fingerprint, parsed);
+          return parsed;
         }
         catch (error) {
           diagnostics.push(diagnosticFromError(header, error));
-          return [];
+          const fallback = lastValidHeaderTypes(header);
+          if (fallback && fallback.length > 0) {
+            diagnostics.push({
+              severity: "warning",
+              file: header,
+              message: `当前 Header 解析失败，已保留上次有效的 ${fallback.length} 个协议类型；修复源码后重新扫描即可恢复最新 IR。`
+            });
+          }
+          return fallback ?? [];
         } finally {
           parsedHeaders += 1;
           emitProgress(options, {
             phase: "parse",
-            message: `解析 Header：${relative(root, header).replaceAll("\\", "/")}`,
+            message: `${usedCache ? "复用缓存" : "解析 Header"}：${relative(root, header).replaceAll("\\", "/")}${cacheHits > 0 ? ` · 缓存 ${cacheHits}` : ""}`,
             current: parsedHeaders,
             total: headers.length,
             file: header
@@ -1710,6 +1811,11 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
       types = applyMemoryLayouts([...deduplicated.values()].sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName)));
     } catch (error) {
       diagnostics.push(diagnosticFromError(undefined, error));
+      const fallbackTypes = headers.flatMap((header) => lastValidHeaderTypes(header) ?? []);
+      if (fallbackTypes.length > 0) {
+        types = applyMemoryLayouts([...new Map(fallbackTypes.map((type) => [type.id, type])).values()]);
+        diagnostics.push({ severity: "warning", message: `Clang 扫描不可用，当前展示上次有效的 ${types.length} 个协议类型。` });
+      }
     }
   }
 
@@ -2148,10 +2254,11 @@ async function git(root: string, args: string[], options: { allowFailure: true; 
 async function git(root: string, args: string[], options?: { allowFailure?: boolean; trim?: boolean }): Promise<string | null> {
   try {
     const gitPath = await findGit();
-    const { stdout } = await execFileAsync(gitPath, ["-C", root, ...args], {
+    const { stdout } = await execFileAsync(gitPath, ["-C", root, "-c", "core.quotepath=false", ...args], {
       encoding: "utf8",
       windowsHide: true,
-      env: gitRuntimeEnv(gitPath)
+      env: gitRuntimeEnv(gitPath),
+      maxBuffer: GIT_OUTPUT_MAX_BYTES
     });
     return options?.trim === false ? stdout.replace(/\r?\n$/, "") : stdout.trim();
   } catch (error) {
@@ -2188,6 +2295,32 @@ function parseGitStatusLine(line: string): { indexStatus: string; workingTreeSta
 async function gitWorkspacePathspec(root: string, repositoryRoot: string): Promise<string> {
   const relativePath = normalizeGitPath(relative(repositoryRoot, root));
   return relativePath && !relativePath.startsWith("..") ? relativePath : ".";
+}
+
+async function resolveGitRepositoryContext(workspaceRoot: string): Promise<GitRepositoryContext | null> {
+  const root = resolve(workspaceRoot);
+  const cacheKey = root.toLowerCase();
+  const cached = gitRepositoryContextCache.get(cacheKey);
+  if (cached) return cached;
+
+  const pending = (async (): Promise<GitRepositoryContext | null> => {
+    const repositoryRoot = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true });
+    if (!repositoryRoot) return null;
+    const resolvedRepositoryRoot = resolve(repositoryRoot);
+    return {
+      repositoryRoot: resolvedRepositoryRoot,
+      workspaceRelativePath: await gitWorkspacePathspec(root, resolvedRepositoryRoot)
+    };
+  })();
+  gitRepositoryContextCache.set(cacheKey, pending);
+  try {
+    const context = await pending;
+    if (!context) gitRepositoryContextCache.delete(cacheKey);
+    return context;
+  } catch (error) {
+    gitRepositoryContextCache.delete(cacheKey);
+    throw error;
+  }
 }
 
 function validateGitRelativePath(path: string): string {
@@ -2235,9 +2368,8 @@ async function gitOperationResult(workspaceRoot: string, message: string, includ
 }
 
 export async function getGitStatus(workspaceRoot: string): Promise<GitWorkspaceStatus> {
-  const root = resolve(workspaceRoot);
-  const repositoryRoot = await git(root, ["rev-parse", "--show-toplevel"], { allowFailure: true });
-  if (!repositoryRoot) {
+  const context = await resolveGitRepositoryContext(workspaceRoot);
+  if (!context) {
     return {
       isRepository: false,
       isDirty: false,
@@ -2246,18 +2378,22 @@ export async function getGitStatus(workspaceRoot: string): Promise<GitWorkspaceS
       message: "当前工作区不在 Git 仓库中。"
     };
   }
-  const repoRoot = resolve(repositoryRoot);
-  const pathspec = await gitWorkspacePathspec(root, repoRoot);
-  const currentBranch = await git(repoRoot, ["branch", "--show-current"], { allowFailure: true }) || undefined;
-  const headCommit = await git(repoRoot, ["rev-parse", "HEAD"], { allowFailure: true }) || undefined;
-  const latestTag = await git(repoRoot, ["describe", "--tags", "--abbrev=0"], { allowFailure: true }) || undefined;
-  const statusOutput = await git(repoRoot, ["status", "--porcelain", "--untracked-files=all", "--", pathspec], { allowFailure: true, trim: false }) ?? "";
+  const [currentBranchValue, headCommitValue, latestTagValue, statusOutputValue] = await Promise.all([
+    git(context.repositoryRoot, ["branch", "--show-current"], { allowFailure: true }),
+    git(context.repositoryRoot, ["rev-parse", "HEAD"], { allowFailure: true }),
+    git(context.repositoryRoot, ["describe", "--tags", "--abbrev=0"], { allowFailure: true }),
+    git(context.repositoryRoot, ["status", "--porcelain", "--untracked-files=all", "--", context.workspaceRelativePath], { allowFailure: true, trim: false })
+  ]);
+  const currentBranch = currentBranchValue || undefined;
+  const headCommit = headCommitValue || undefined;
+  const latestTag = latestTagValue || undefined;
+  const statusOutput = statusOutputValue ?? "";
   const entries = statusOutput.split(/\r?\n/).map(parseGitStatusLine).filter((entry): entry is GitWorkspaceStatus["entries"][number] => Boolean(entry));
   const hasConflicts = entries.some((entry) => entry.indexStatus === "U" || entry.workingTreeStatus === "U" || ["AA", "DD"].includes(`${entry.indexStatus}${entry.workingTreeStatus}`));
   return {
     isRepository: true,
-    repositoryRoot: repoRoot,
-    workspaceRelativePath: pathspec,
+    repositoryRoot: context.repositoryRoot,
+    workspaceRelativePath: context.workspaceRelativePath,
     currentBranch,
     headCommit,
     headShortCommit: headCommit?.slice(0, 7),
@@ -2269,9 +2405,9 @@ export async function getGitStatus(workspaceRoot: string): Promise<GitWorkspaceS
 }
 
 export async function listGitBranches(workspaceRoot: string): Promise<GitBranchInfo[]> {
-  const status = await getGitStatus(workspaceRoot);
-  if (!status.isRepository || !status.repositoryRoot) return [];
-  const output = await git(status.repositoryRoot, ["branch", "--format=%(if)%(HEAD)%(then)*%(else) %(end)%(refname:short)|%(objectname)"], { allowFailure: true }) ?? "";
+  const context = await resolveGitRepositoryContext(workspaceRoot);
+  if (!context) return [];
+  const output = await git(context.repositoryRoot, ["branch", "--format=%(if)%(HEAD)%(then)*%(else) %(end)%(refname:short)|%(objectname)"], { allowFailure: true }) ?? "";
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const current = line.startsWith("*");
     const [name, commit] = line.slice(1).split("|");
@@ -2280,9 +2416,9 @@ export async function listGitBranches(workspaceRoot: string): Promise<GitBranchI
 }
 
 export async function listGitTags(workspaceRoot: string): Promise<GitTagInfo[]> {
-  const status = await getGitStatus(workspaceRoot);
-  if (!status.isRepository || !status.repositoryRoot) return [];
-  const output = await git(status.repositoryRoot, ["tag", "--sort=-creatordate", "--format=%(refname:short)|%(objectname)|%(subject)|%(creatordate:iso-strict)"], { allowFailure: true }) ?? "";
+  const context = await resolveGitRepositoryContext(workspaceRoot);
+  if (!context) return [];
+  const output = await git(context.repositoryRoot, ["tag", "--sort=-creatordate", "--format=%(refname:short)|%(objectname)|%(subject)|%(creatordate:iso-strict)"], { allowFailure: true }) ?? "";
   return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const [name, commit, subject, createdAt] = line.split("|");
     return { name, commit, subject, createdAt };
@@ -2405,22 +2541,31 @@ export async function getGitFileDiff(input: GitDiffInput): Promise<GitFileDiff> 
 }
 
 export async function listGitCommitGraph(workspaceRoot: string, limit = 40): Promise<GitCommitGraphEntry[]> {
-  const status = await getGitStatus(workspaceRoot);
-  if (!status.isRepository || !status.repositoryRoot) return [];
+  const context = await resolveGitRepositoryContext(workspaceRoot);
+  if (!context) return [];
   const safeLimit = String(Math.max(1, Math.min(100, Math.floor(limit))));
-  const pathspec = status.workspaceRelativePath ?? ".";
-  const output = await git(status.repositoryRoot, [
-    "log",
-    `-${safeLimit}`,
-    "--date=relative",
-    "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%cr%x1f%D",
-    "--",
-    pathspec
-  ], { allowFailure: true }) ?? "";
-  const commits = await Promise.all(output.split(/\r?\n/).filter(Boolean).map(async (line): Promise<GitCommitGraphEntry> => {
-    const [hash = "", shortHash = "", subject = "", author = "", relativeDate = "", refsRaw = ""] = line.split("\x1f");
+  const [headCommit, outputValue] = await Promise.all([
+    git(context.repositoryRoot, ["rev-parse", "HEAD"], { allowFailure: true }),
+    git(context.repositoryRoot, [
+      "log",
+      `-${safeLimit}`,
+      "--date=relative",
+      "--name-status",
+      "-M",
+      "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%cr%x1f%D",
+      "--",
+      context.workspaceRelativePath
+    ], { allowFailure: true, trim: false })
+  ]);
+  const output = outputValue ?? "";
+  return output.split("\x1e").map((record): GitCommitGraphEntry | null => {
+    const lines = record.replace(/^\s+/, "").split(/\r?\n/);
+    const metadata = lines.shift();
+    if (!metadata) return null;
+    const [hash = "", shortHash = "", subject = "", author = "", relativeDate = "", refsRaw = ""] = metadata.split("\x1f");
+    if (!hash) return null;
     const refs = refsRaw.split(",").map((ref) => ref.trim()).filter(Boolean);
-    const changes = await listGitCommitFileChanges(status.repositoryRoot!, hash, pathspec);
+    const changes = lines.map(parseGitCommitFileChange).filter((change): change is GitCommitFileChange => Boolean(change));
     return {
       hash,
       shortHash,
@@ -2428,12 +2573,11 @@ export async function listGitCommitGraph(workspaceRoot: string, limit = 40): Pro
       author,
       relativeDate,
       refs,
-      current: status.headCommit === hash,
+      current: headCommit === hash,
       changeCount: changes.length,
       changes
     };
-  }));
-  return commits;
+  }).filter((commit): commit is GitCommitGraphEntry => Boolean(commit));
 }
 
 export async function stageGitPath(input: GitPathInput): Promise<GitOperationResult> {

@@ -323,9 +323,21 @@ code { color: var(--text-accent-hover); font-family: "Cascadia Code", monospace;
 .source-diagnostics span { color: var(--text-accent-hover); font-family: var(--font-monospace); font-size: 11px; }
 .source-diagnostics small { overflow: hidden; color: var(--text-muted); font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .scan-empty { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 80px; color: #8f95a2; }
-.problems { margin-top: 48px; border-top: 1px solid #292c34; padding-top: 18px; }
+.problems { margin-top: 32px; border-top: 1px solid var(--background-modifier-border); padding-top: 16px; }
+.problems-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.problems-title h2 { margin: 0; }
+.problems-title small { color: var(--text-faint); font-size: 10px; }
+.problem-list { display: grid; gap: 6px; margin-top: 10px; }
+.problem { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 7px; width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: color-mix(in srgb, var(--background-primary) 76%, transparent); color: var(--text-normal); text-align: left; }
+.problem:hover { border-color: var(--interactive-accent); background: var(--background-modifier-hover); }
+.problem-severity { grid-row: 1 / span 2; align-self: start; padding: 2px 5px; border-radius: 999px; color: var(--background-primary); font-size: 9px; font-weight: 800; }
+.problem-error .problem-severity { background: var(--color-red); }
+.problem-warning .problem-severity { background: var(--color-yellow); }
+.problem-message { overflow: hidden; font-size: 11px; line-height: 1.45; text-overflow: ellipsis; }
+.problem small { grid-column: 2; overflow: hidden; color: var(--text-faint); font: 9px var(--font-monospace); text-overflow: ellipsis; white-space: nowrap; }
+.problems-more { width: 100%; padding: 6px 8px; border: 1px dashed var(--background-modifier-border); border-radius: var(--radius-s); background: transparent; color: var(--text-muted); font-size: 10px; }
+.problems-more:hover { border-color: var(--interactive-accent); color: var(--text-accent-hover); }
 .ok { color: #70bb89; font-size: 12px; }
-.problem { color: #df8a7c; font-size: 11px; line-height: 1.5; }
 .break { word-break: break-all; }
 .inspector { min-height: 0; overflow: auto; border-right: 0; border-left: 1px solid #292c34; transition: padding .16s ease, border-color .16s ease; }
 .inspector-collapsed .inspector { padding: 0; border-left: 0; overflow: hidden; }

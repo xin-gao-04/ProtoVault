@@ -1240,6 +1240,14 @@ enum class PacketKind {
       expect(fileDiff.newLabel).toContain(graph[0]!.shortHash);
       const baseBranch = result.status.currentBranch ?? "master";
 
+      await writeFile(resolve(root, "headers", "status.hpp"), "#pragma once\nstruct Status { int code; };\n", "utf8");
+      await runGit(root, ["add", "headers/status.hpp"]);
+      await runGit(root, ["commit", "-m", "add status header"]);
+      const history = await listGitCommitGraph(root);
+      expect(history.slice(0, 2).map((commit) => commit.subject)).toEqual(["add status header", "add protocol header"]);
+      expect(history[0]?.changes).toContainEqual(expect.objectContaining({ path: "headers/status.hpp", status: "A" }));
+      expect(history[1]?.changes).toContainEqual(expect.objectContaining({ path: "headers/protocol.hpp", status: "A" }));
+
       await writeFile(resolve(root, "headers", "protocol.hpp"), "#pragma once\nstruct Packet { int changed; };\n", "utf8");
       status = await getGitStatus(root);
       const modifiedEntry = status.entries.find((entry) => entry.path === "headers/protocol.hpp");
