@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  clearWorkspaceRuntimeCaches,
   createHeader,
   deleteHeader,
   scanWorkspace,
@@ -110,6 +111,7 @@ struct DerivedPacket { BasePacket base; };
 `, "utf8");
 
       await scanWorkspace(root);
+      clearWorkspaceRuntimeCaches();
       const cachedMessages: string[] = [];
       const cached = await scanWorkspace(root, {
         onProgress: (event) => {
@@ -118,6 +120,7 @@ struct DerivedPacket { BasePacket base; };
       });
       expect(cached.types.map((type) => type.name)).toEqual(expect.arrayContaining(["BasePacket", "DerivedPacket"]));
       expect(cachedMessages.some((message) => message.includes("复用缓存"))).toBe(true);
+      expect(cached.index).toMatchObject({ engine: "sqlite", cacheHits: 2, parsedHeaders: 0, cachedHeaderCount: 2 });
 
       await writeFile(resolve(root, "headers", "base.hpp"), `#pragma once
 struct BasePacket { int value; int sequence; };
@@ -130,6 +133,7 @@ struct BasePacket { int value; int sequence; };
       });
       expect(invalidated.types.find((type) => type.name === "BasePacket")?.fields.map((field) => field.name)).toContain("sequence");
       expect(invalidatedMessages.some((message) => message.includes("复用缓存"))).toBe(false);
+      expect(invalidated.index).toMatchObject({ engine: "sqlite", cacheHits: 0, parsedHeaders: 2, cachedHeaderCount: 2 });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -144,6 +148,7 @@ struct BasePacket { int value; int sequence; };
       const valid = await scanWorkspace(root);
       expect(valid.types.find((type) => type.name === "Packet")?.fields.map((field) => field.name)).toEqual(["id"]);
 
+      clearWorkspaceRuntimeCaches();
       await writeFile(headerPath, "#pragma once\nstruct Packet { int id int sequence; };\n", "utf8");
       const broken = await scanWorkspace(root);
       expect(broken.types.find((type) => type.name === "Packet")?.fields.map((field) => field.name)).toEqual(["id"]);
@@ -153,6 +158,24 @@ struct BasePacket { int value; int sequence; };
       const repaired = await scanWorkspace(root);
       expect(repaired.types.find((type) => type.name === "Packet")?.fields.map((field) => field.name)).toEqual(["id", "sequence"]);
       expect(repaired.diagnostics).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("cancels an obsolete scan before Clang work continues", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-local-abort-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "packet.hpp"), "#pragma once\nstruct Packet { int id; };\n", "utf8");
+      const controller = new AbortController();
+      const scan = scanWorkspace(root, {
+        signal: controller.signal,
+        onProgress: (event) => {
+          if (event.phase === "parse" && event.current === 0) controller.abort();
+        }
+      });
+      await expect(scan).rejects.toMatchObject({ name: "AbortError", message: expect.stringContaining("取消") });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

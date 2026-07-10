@@ -1,6 +1,6 @@
 {
   "name": "@protovault/desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ProtoVault protocol asset management desktop app",
   "author": "ProtoVault Contributors",
   "private": true,
@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "pnpm --filter @protovault/contracts build && electron-vite build",
-    "dist": "pnpm build && powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/prepare-bundled-tools.ps1 && electron-builder --win --x64",
+    "dist": "pnpm build && powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/prepare-bundled-tools.ps1 && electron-builder --win --x64 --config.electronDist=node_modules/electron/dist",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc -p tsconfig.json --noEmit"

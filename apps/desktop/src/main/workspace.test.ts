@@ -434,6 +434,7 @@ struct Status {
         initializer: "0"
       });
       const updatedPacket = afterField.types.find((type) => type.qualifiedName === "protovault::PacketHeader");
+      const flagsId = updatedPacket!.fields.find((field) => field.name === "flags")!.id;
       expect(updatedPacket?.fields.map((field) => [field.type, field.name, field.initializer ?? ""])).toEqual([
         ["std::uint32_t", "id", ""],
         ["std::uint16_t", "flags", "0"]
@@ -448,6 +449,8 @@ struct Status {
         initializer: "1"
       });
       const packetAfterUpdate = afterUpdate.types.find((type) => type.qualifiedName === "protovault::PacketHeader");
+      expect(packetAfterUpdate?.id).toBe(packet?.id);
+      expect(packetAfterUpdate?.fields.find((field) => field.name === "status")?.id).toBe(flagsId);
       expect(packetAfterUpdate?.fields.map((field) => [field.type, field.name, field.initializer ?? ""])).toEqual([
         ["std::uint32_t", "id", ""],
         ["std::uint8_t", "status", "1"]
@@ -488,6 +491,7 @@ struct Status {
       });
       let packet = workspace.types.find((type) => type.qualifiedName === "protovault::SourcePacket");
       expect(packet).toBeTruthy();
+      const sourcePacketId = packet!.id;
 
       workspace = await renameStruct({
         workspaceRoot: root,
@@ -496,11 +500,8 @@ struct Status {
       });
       packet = workspace.types.find((type) => type.qualifiedName === "protovault::RenamedPacket");
       expect(packet).toBeTruthy();
+      expect(packet?.id).toBe(sourcePacketId);
       expect(await readFile(resolve(root, "headers", "source.hpp"), "utf8")).toContain("struct RenamedPacket");
-
-      workspace = await deleteStruct({ workspaceRoot: root, typeId: packet!.id });
-      expect(workspace.types.map((type) => type.qualifiedName)).not.toContain("protovault::RenamedPacket");
-      expect(await readFile(resolve(root, "headers", "source.hpp"), "utf8")).not.toContain("struct RenamedPacket");
 
       workspace = await renameHeader({
         workspaceRoot: root,
@@ -508,6 +509,12 @@ struct Status {
         newRelativePath: "headers/renamed.hpp"
       });
       expect(workspace.files.map((file) => file.relativePath)).toEqual(["headers/renamed.hpp"]);
+      packet = workspace.types.find((type) => type.qualifiedName === "protovault::RenamedPacket");
+      expect(packet?.id).toBe(sourcePacketId);
+
+      workspace = await deleteStruct({ workspaceRoot: root, typeId: packet!.id });
+      expect(workspace.types.map((type) => type.qualifiedName)).not.toContain("protovault::RenamedPacket");
+      expect(await readFile(resolve(root, "headers", "renamed.hpp"), "utf8")).not.toContain("struct RenamedPacket");
 
       workspace = await deleteHeader({
         workspaceRoot: root,
@@ -530,6 +537,7 @@ struct Status {
       });
       let packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::PacketKind");
       expect(packetKind?.kind).toBe("enum");
+      const packetKindId = packetKind!.id;
       expect(packetKind?.values.map((value) => [value.name, value.value])).toEqual([["Unknown", 0]]);
 
       workspace = await addEnumValue({
@@ -539,6 +547,7 @@ struct Status {
         value: 7
       });
       packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::PacketKind");
+      const telemetryId = packetKind!.values.find((value) => value.name === "Telemetry")!.id;
       expect(packetKind?.values.map((value) => [value.name, value.value])).toEqual([["Unknown", 0], ["Telemetry", 7]]);
 
       workspace = await updateEnumValue({
@@ -549,6 +558,7 @@ struct Status {
         value: 8
       });
       packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::PacketKind");
+      expect(packetKind?.values.find((value) => value.name === "Track")?.id).toBe(telemetryId);
       expect(packetKind?.values.map((value) => [value.name, value.value])).toEqual([["Unknown", 0], ["Track", 8]]);
 
       workspace = await deleteEnumValue({
@@ -562,6 +572,7 @@ struct Status {
       workspace = await renameEnum({ workspaceRoot: root, typeId: packetKind!.id, enumName: "MessageKind" });
       packetKind = workspace.types.find((type) => type.qualifiedName === "protovault::MessageKind");
       expect(packetKind).toBeTruthy();
+      expect(packetKind?.id).toBe(packetKindId);
       expect(await readFile(resolve(root, "headers", "enums.hpp"), "utf8")).toContain("enum class MessageKind");
 
       workspace = await deleteEnum({ workspaceRoot: root, typeId: packetKind!.id });
@@ -1160,13 +1171,15 @@ enum class PacketKind {
         fieldName: "flags"
       });
       packet = workspace.types.find((type) => type.qualifiedName === "protovault::Packet")!;
-      await updateField({
+      workspace = await updateField({
         workspaceRoot: root,
         typeId: packet.id,
         fieldId: packet.fields.find((field) => field.name === "id")!.id,
         fieldType: "std::uint64_t",
-        fieldName: "id"
+        fieldName: "sequence"
       });
+      packet = workspace.types.find((type) => type.qualifiedName === "protovault::Packet")!;
+      workspace = await renameStruct({ workspaceRoot: root, typeId: packet.id, structName: "PacketV2" });
       const updatedBinding = (await scanWorkspace(root)).network.bindings.find((binding) => binding.name === "Packet@10Hz")!;
       await updateProtocolBinding({
         workspaceRoot: root,
@@ -1184,7 +1197,9 @@ enum class PacketKind {
       expect(diff.breakingCount).toBeGreaterThan(0);
       expect(diff.changes.map((change) => change.kind)).toEqual(expect.arrayContaining([
         "field-added",
+        "field-renamed",
         "field-type-changed",
+        "type-renamed",
         "protocol-binding-bandwidth-changed"
       ]));
     } finally {

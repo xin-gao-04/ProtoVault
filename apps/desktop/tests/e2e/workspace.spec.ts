@@ -1,5 +1,6 @@
 import { _electron as electron, expect, test } from "@playwright/test";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 test.setTimeout(90_000);
@@ -11,10 +12,17 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
   const networkConfig = resolve(fixtureRoot, ".protocol/network/network.json");
   const originalGeometryHeader = await readFile(geometryHeader, "utf8");
   const originalNetworkConfig = await readFile(networkConfig, "utf8").catch(() => null);
+  const appDataRoot = await mkdtemp(resolve(tmpdir(), "protovault-e2e-workspace-appdata-"));
   const application = await electron.launch({
     args: ["."],
     cwd: desktopRoot,
-    env: { ...process.env, PROTOVAULT_DISABLE_RESTORE: "1", PROTOVAULT_SAMPLE_WORKSPACE: fixtureRoot }
+    env: {
+      ...process.env,
+      APPDATA: appDataRoot,
+      LOCALAPPDATA: resolve(appDataRoot, "Local"),
+      PROTOVAULT_DISABLE_RESTORE: "1",
+      PROTOVAULT_SAMPLE_WORKSPACE: fixtureRoot
+    }
   });
 
   try {
@@ -335,23 +343,29 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     const leftResizer = page.getByRole("separator", { name: "调整左侧树栏宽度" });
     const leftBox = await leftResizer.boundingBox();
     if (!leftBox) throw new Error("Missing left resize handle");
-    await page.mouse.move(leftBox.x + leftBox.width / 2, leftBox.y + 40);
+    const leftStartX = leftBox.x + leftBox.width / 2;
+    const leftDelta = navigatorWidthBefore >= 500 ? -70 : 70;
+    await page.mouse.move(leftStartX, leftBox.y + 40);
     await page.mouse.down();
-    await page.mouse.move(leftBox.x + 70, leftBox.y + 40);
+    await page.mouse.move(leftStartX + leftDelta, leftBox.y + 40);
     await page.mouse.up();
     const navigatorWidthAfter = await page.locator(".navigator").evaluate((element) => element.getBoundingClientRect().width);
-    expect(navigatorWidthAfter).toBeGreaterThan(navigatorWidthBefore + 30);
+    expect(Math.abs(navigatorWidthAfter - navigatorWidthBefore)).toBeGreaterThan(30);
+    expect(Math.sign(navigatorWidthAfter - navigatorWidthBefore)).toBe(Math.sign(leftDelta));
 
     const inspectorWidthBefore = await page.locator(".inspector").evaluate((element) => element.getBoundingClientRect().width);
     const rightResizer = page.getByRole("separator", { name: "调整属性栏宽度" });
     const rightBox = await rightResizer.boundingBox();
     if (!rightBox) throw new Error("Missing right resize handle");
-    await page.mouse.move(rightBox.x + rightBox.width / 2, rightBox.y + 40);
+    const rightStartX = rightBox.x + rightBox.width / 2;
+    const rightDelta = inspectorWidthBefore >= 400 ? 60 : -60;
+    await page.mouse.move(rightStartX, rightBox.y + 40);
     await page.mouse.down();
-    await page.mouse.move(rightBox.x - 60, rightBox.y + 40);
+    await page.mouse.move(rightStartX + rightDelta, rightBox.y + 40);
     await page.mouse.up();
     const inspectorWidthAfter = await page.locator(".inspector").evaluate((element) => element.getBoundingClientRect().width);
-    expect(inspectorWidthAfter).toBeGreaterThan(inspectorWidthBefore + 30);
+    expect(Math.abs(inspectorWidthAfter - inspectorWidthBefore)).toBeGreaterThan(30);
+    expect(Math.sign(inspectorWidthAfter - inspectorWidthBefore)).toBe(-Math.sign(rightDelta));
 
     await page.getByRole("button", { name: "打开 Header radar-workspace/headers/radar/track.hpp" }).click();
     await expect(page.getByRole("button", { name: "预览 track.hpp", exact: true })).toBeVisible();
@@ -442,6 +456,7 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
     await expect(editor.getByRole("row", { name: /^y\s+double/ })).toHaveCount(0);
   } finally {
     await application.close();
+    await rm(appDataRoot, { recursive: true, force: true });
     await writeFile(geometryHeader, originalGeometryHeader, "utf8");
     if (originalNetworkConfig === null) {
       await rm(resolve(fixtureRoot, ".protocol/network"), { recursive: true, force: true });

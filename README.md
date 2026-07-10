@@ -2,14 +2,14 @@
 
 [![CI](https://github.com/xin-gao-04/ProtoVault/actions/workflows/ci.yml/badge.svg)](https://github.com/xin-gao-04/ProtoVault/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-4d8dff)
-![Version](https://img.shields.io/badge/version-0.1.0-8b5cf6)
+![Version](https://img.shields.io/badge/version-0.2.0-8b5cf6)
 ![Status](https://img.shields.io/badge/status-MVP%20preview-f59e0b)
 
 ProtoVault is a Windows-first desktop workbench for managing C++ data protocol assets.
 
 It is not a plain header editor. ProtoVault scans C++ headers, builds a protocol IR, lets you inspect and edit structs/enums/fields, analyzes ABI layout, synchronizes comments and source changes, generates reports, tracks semantic changes with Git baselines, and models protocol traffic on a network data-flow canvas.
 
-> Current state: `v0.1.0` MVP preview. The core workflow is usable, tested, and packaged for Windows. Some production-grade features such as code signing, auto update, SQLite incremental indexing, and full C++ service extraction are still on the roadmap.
+> Current state: `v0.2.0` architecture-hardening preview. The Windows package includes Git and Clang, while protocol identities and Header IR caches persist in a workspace-local SQLite index. Code signing, auto update, and full C++ parser-service extraction remain on the roadmap.
 
 ## Screenshots
 
@@ -133,8 +133,8 @@ The installer build runs `scripts/prepare-bundled-tools.ps1` and copies a local 
 
 Generated artifacts:
 
-- `apps/desktop/release/ProtoVault-0.1.0-Setup-x64.exe`
-- `apps/desktop/release/ProtoVault-0.1.0-Portable-x64.exe`
+- `apps/desktop/release/ProtoVault-0.2.0-Setup-x64.exe`
+- `apps/desktop/release/ProtoVault-0.2.0-Portable-x64.exe`
 
 Release binaries are intentionally ignored by Git. Upload them through GitHub Releases or another distribution channel.
 
@@ -243,7 +243,7 @@ Near-term:
 
 Mid-term:
 
-- SQLite incremental index and persistent AST/cache layer.
+- Background Parser Worker and deeper persistent-index observability.
 - Deeper C++ protocol-core service extraction.
 - Runtime telemetry import for bandwidth/latency/CPU/GPU bottleneck analysis.
 - Richer report export for protocol architecture reviews.

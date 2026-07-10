@@ -121,6 +121,7 @@ interface WatchedWorkspace {
 }
 
 let watchedWorkspace: WatchedWorkspace | null = null;
+const activeWorkspaceScans = new Map<number, AbortController>();
 
 function preferencesPath(): string {
   return join(app.getPath("userData"), "preferences.json");
@@ -236,10 +237,25 @@ function rememberWorkspaceState(workspace: WorkspaceView, sender: WebContents): 
 }
 
 async function scanAndRemember(rootPath: string, sender?: WebContents) {
-  const workspace = await scanWorkspace(rootPath, sender ? { onProgress: scanProgressReporter(sender) } : undefined);
-  await writePreferences({ ...(await readPreferences()), lastWorkspacePath: workspace.rootPath });
-  if (sender) rememberWorkspaceState(workspace, sender);
-  return workspace;
+  if (!sender) return scanWorkspace(rootPath);
+  activeWorkspaceScans.get(sender.id)?.abort();
+  const controller = new AbortController();
+  activeWorkspaceScans.set(sender.id, controller);
+  const abortOnDestroyed = (): void => controller.abort();
+  sender.once("destroyed", abortOnDestroyed);
+  try {
+    const workspace = await scanWorkspace(rootPath, {
+      onProgress: scanProgressReporter(sender),
+      signal: controller.signal
+    });
+    if (controller.signal.aborted) throw Object.assign(new Error("工作区扫描已取消。"), { name: "AbortError" });
+    await writePreferences({ ...(await readPreferences()), lastWorkspacePath: workspace.rootPath });
+    rememberWorkspaceState(workspace, sender);
+    return workspace;
+  } finally {
+    sender.removeListener("destroyed", abortOnDestroyed);
+    if (activeWorkspaceScans.get(sender.id) === controller) activeWorkspaceScans.delete(sender.id);
+  }
 }
 
 async function runWorkspaceMutation<T extends { workspaceRoot: string }>(
@@ -247,6 +263,7 @@ async function runWorkspaceMutation<T extends { workspaceRoot: string }>(
   input: T,
   action: (input: T) => Promise<WorkspaceView>
 ): Promise<WorkspaceView> {
+  activeWorkspaceScans.get(sender.id)?.abort();
   suppressWorkspaceWatcher(input.workspaceRoot);
   const workspace = await action(input);
   suppressWorkspaceWatcher(workspace.rootPath);

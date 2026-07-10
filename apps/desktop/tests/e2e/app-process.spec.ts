@@ -76,7 +76,7 @@ test("app process hides native chrome, scans sample workspace, runs lint, rescan
     const externalChangePanel = page.getByRole("region", { name: "外部修改冲突" });
     await expect(externalChangePanel).toBeVisible({ timeout: 8_000 });
     await expect(externalChangePanel).toContainText("process/process_packet.hpp");
-    await externalChangePanel.getByRole("button", { name: "重新扫描导入" }).click();
+    await externalChangePanel.getByRole("button", { name: "导入磁盘版本" }).click();
     await expect(externalChangePanel).toHaveCount(0);
     await expect(page.getByRole("button", { name: "demo::process::ProcessPacket", exact: true })).toBeVisible({ timeout: 20_000 });
   } finally {

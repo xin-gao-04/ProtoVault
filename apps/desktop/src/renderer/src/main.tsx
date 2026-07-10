@@ -28,15 +28,11 @@ import type {
   WorkspaceTypeView,
   WorkspaceView
 } from "../../shared/workspace";
-import {
-  PROTOVAULT_ASSISTANT_MODULES,
-  type AssistantAskResponse,
-  type AssistantModuleId,
-  type AssistantRuntimeStatus
-} from "../../shared/assistant";
 import { APP_THEMES, graphThemeForAppTheme, type AppThemeId, type GraphThemePreset } from "./themes";
 import { ProblemsPanel } from "./components/ProblemsPanel";
 import "./styles.css";
+
+const AssistantView = React.lazy(() => import("./components/AssistantView"));
 
 type ProtocolTreeNode =
   | { id: string; kind: "folder"; name: string; children: ProtocolTreeNode[] }
@@ -150,8 +146,8 @@ function readWorkspaceLayoutPreferences(): WorkspaceLayoutPreferences {
   try {
     const stored = JSON.parse(window.localStorage.getItem(LAYOUT_STORAGE_KEY) ?? "{}") as Partial<WorkspaceLayoutPreferences>;
     return {
-      navigatorWidth: typeof stored.navigatorWidth === "number" ? clamp(stored.navigatorWidth, 260, 680) : fallback.navigatorWidth,
-      inspectorWidth: typeof stored.inspectorWidth === "number" ? clamp(stored.inspectorWidth, 220, 560) : fallback.inspectorWidth,
+      navigatorWidth: typeof stored.navigatorWidth === "number" ? clamp(stored.navigatorWidth, 280, 560) : fallback.navigatorWidth,
+      inspectorWidth: typeof stored.inspectorWidth === "number" ? clamp(stored.inspectorWidth, 220, 460) : fallback.inspectorWidth,
       navigatorCollapsed: stored.navigatorCollapsed === true,
       inspectorCollapsed: stored.inspectorCollapsed === true,
       toolbarCollapsed: stored.toolbarCollapsed === true
@@ -635,6 +631,26 @@ function App(): React.JSX.Element {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function discardExternalDraftAndRescan(): Promise<void> {
+    const changedPath = externalChange?.changedPath;
+    if (changedPath) {
+      setSourceDrafts((current) => {
+        const next = { ...current };
+        delete next[changedPath];
+        return next;
+      });
+    }
+    await rescanCurrentWorkspace();
+    if (changedPath) {
+      setSourceDrafts((current) => {
+        const next = { ...current };
+        delete next[changedPath];
+        return next;
+      });
+    }
+    setUiNotice("已舍弃本地草稿并导入磁盘版本");
   }
 
   async function runWorkspaceAction(action: () => Promise<void>): Promise<boolean> {
@@ -2102,6 +2118,7 @@ function App(): React.JSX.Element {
           <div className="workspace-dock-summary">
             <span>{workspace?.name ?? "未打开工作区"}</span>
             <small>{workspace ? `${workspace.files.length} Headers · ${workspace.types.length} Types` : "选择目录或加载示例"}</small>
+            {workspace?.index && <small>{workspace.index.engine === "sqlite" ? "SQLite 索引" : "会话索引"} · 命中 {workspace.index.cacheHits} · 新解析 {workspace.index.parsedHeaders}</small>}
             {workspace && <small>{gitStatusLabel(gitStatus, gitTags)}</small>}
           </div>
           <div className="workspace-dock-actions">
@@ -2165,7 +2182,9 @@ function App(): React.JSX.Element {
         {(loading || scanProgress?.phase === "done") && scanProgress && <ScanProgressBar progress={scanProgress} active={loading} />}
         {workspace && externalChange && <ExternalChangePanel
           change={externalChange}
+          hasLocalDraft={Boolean(externalChange.changedPath && sourceDrafts[externalChange.changedPath] !== undefined)}
           onRescan={() => void rescanCurrentWorkspace()}
+          onDiscardDraft={() => void discardExternalDraftAndRescan()}
           onDiff={() => {
             setExternalChange(null);
             void runSemanticDiffReport();
@@ -2219,7 +2238,9 @@ function App(): React.JSX.Element {
           diff={activeGitDiff}
           loading={loading}
         />}
-        {centerViewMode === "manual" && <AssistantView workspace={workspace} onBack={() => setCenterViewMode("workspace")} />}
+        {centerViewMode === "manual" && <React.Suspense fallback={<div className="scan-empty">正在加载 AI 使用助手…</div>}>
+          <AssistantView workspace={workspace} onBack={() => setCenterViewMode("workspace")} />
+        </React.Suspense>}
         {workspace && activeAction && <StructuredActionPanel
           action={activeAction}
           workspace={workspace}
@@ -2375,7 +2396,7 @@ function App(): React.JSX.Element {
               selectedEnumValue={selectedEnumValue}
             />
           : selectedFile ? <dl><dt>文件</dt><dd>{selectedFile.relativePath}</dd><dt>Include</dt><dd>{selectedFile.includes.length}</dd><dt>路径</dt><dd className="break">{selectedFile.path}</dd></dl>
-            : <dl><dt>阶段</dt><dd>P2/P3</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd></dl>}
+            : <dl><dt>阶段</dt><dd>P18</dd><dt>平台</dt><dd>Windows</dd><dt>解析器</dt><dd>{workspace?.scanner ?? "Clang AST"}</dd>{workspace?.index && <><dt>索引</dt><dd>{workspace.index.engine === "sqlite" ? "持久 SQLite" : "内存"}</dd><dt>缓存</dt><dd>{workspace.index.cachedHeaderCount} Headers</dd><dt>身份</dt><dd>{workspace.index.activeIdentityCount} Objects</dd></>}</dl>}
         {workspace && <ProblemsPanel
           diagnostics={workspace.diagnostics}
           workspaceRoot={workspace.rootPath}
@@ -2722,20 +2743,23 @@ function ScanProgressBar({ progress, active }: { progress: WorkspaceScanProgress
   </div>;
 }
 
-function ExternalChangePanel({ change, onRescan, onDiff, onDismiss }: {
+function ExternalChangePanel({ change, hasLocalDraft, onRescan, onDiscardDraft, onDiff, onDismiss }: {
   change: WorkspaceExternalChange;
+  hasLocalDraft: boolean;
   onRescan(): void;
+  onDiscardDraft(): void;
   onDiff(): void;
   onDismiss(): void;
 }): React.JSX.Element {
   return <section className="external-change-panel" aria-label="外部修改冲突">
     <div>
       <strong>检测到外部 Header 修改</strong>
-      <p>{change.relativePath ?? "当前工作区"} 已在 ProtoVault 外部变化。为避免静默覆盖，请先重新导入或查看语义 Diff。</p>
+      <p>{change.relativePath ?? "当前工作区"} 已在 ProtoVault 外部变化。{hasLocalDraft ? "当前 tab 还有未保存草稿，导入磁盘时会继续保留草稿供人工合并。" : "请导入磁盘版本或检查版本影响。"}</p>
     </div>
     <div className="external-change-actions">
-      <button className="inline-action" onClick={onRescan}>重新扫描导入</button>
-      <button className="inline-action" onClick={onDiff}>查看 Diff</button>
+      <button className="inline-action" onClick={onRescan}>{hasLocalDraft ? "导入磁盘并保留草稿" : "导入磁盘版本"}</button>
+      {hasLocalDraft && <button className="inline-action danger" onClick={onDiscardDraft}>舍弃草稿并导入</button>}
+      <button className="inline-action" onClick={onDiff}>查看版本影响</button>
       <button className="inline-action ghost" onClick={onDismiss}>暂不处理</button>
     </div>
   </section>;
@@ -4852,25 +4876,6 @@ function NetworkInspector({ workspace }: { workspace: WorkspaceView }): React.JS
   </div>;
 }
 
-function workspaceSummaryForAssistant(workspace: WorkspaceView | null): string {
-  if (!workspace) return "尚未打开工作区。";
-  const structCount = workspace.types.filter((type) => type.kind === "struct").length;
-  const enumCount = workspace.types.filter((type) => type.kind === "enum").length;
-  const diagnostics = workspace.diagnostics.slice(0, 6).map((diagnostic) => `- ${diagnostic.severity}: ${diagnostic.message}`).join("\n");
-  const topBindings = workspace.network.bindings.slice(0, 6).map((binding) => `- ${binding.name}: ${binding.protocolName ?? binding.typeId} @ ${binding.frequencyHz}Hz`).join("\n");
-  return [
-    `工作区：${workspace.name}`,
-    `Header：${workspace.files.length}`,
-    `Struct：${structCount}`,
-    `Enum：${enumCount}`,
-    `网络节点：${workspace.network.nodes.length}`,
-    `通信链路：${workspace.network.links.length}`,
-    `协议绑定：${workspace.network.bindings.length}`,
-    diagnostics ? `诊断摘要：\n${diagnostics}` : "诊断摘要：无",
-    topBindings ? `协议绑定摘要：\n${topBindings}` : "协议绑定摘要：无"
-  ].join("\n");
-}
-
 function isGitEntryStaged(entry: GitWorkspaceStatus["entries"][number]): boolean {
   return entry.indexStatus.trim() !== "" && entry.indexStatus !== "?";
 }
@@ -5386,173 +5391,6 @@ function GitDiffViewer({ diff }: { diff: GitFileDiff }): React.JSX.Element {
           <code>{row.newText || " "}</code>
         </div>
       </React.Fragment>)}
-    </div>
-  </section>;
-}
-
-function AssistantView({ workspace, onBack }: { workspace: WorkspaceView | null; onBack: () => void }): React.JSX.Element {
-  const [runtimeStatus, setRuntimeStatus] = React.useState<AssistantRuntimeStatus | null>(null);
-  const [selectedModel, setSelectedModel] = React.useState("");
-  const [selectedModuleId, setSelectedModuleId] = React.useState<AssistantModuleId>("overview");
-  const [question, setQuestion] = React.useState("如何完成一次协议字段修改并保存到 Header？");
-  const [answer, setAnswer] = React.useState<AssistantAskResponse | null>(null);
-  const [asking, setAsking] = React.useState(false);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    window.protoVault.assistantStatus()
-      .then((status) => {
-        if (!cancelled) {
-          setRuntimeStatus(status);
-          setSelectedModel((current) => current && status.models.includes(current) ? current : status.selectedModel ?? status.models[0] ?? "");
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setRuntimeStatus({
-            available: false,
-            endpoint: "http://127.0.0.1:11434",
-            models: [],
-            message: error instanceof Error ? error.message : String(error)
-          });
-          setSelectedModel("");
-        }
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  async function ask(): Promise<void> {
-    const nextQuestion = question.trim();
-    if (!nextQuestion) return;
-    setAsking(true);
-    try {
-      const response = await window.protoVault.askAssistant({
-        question: nextQuestion,
-        moduleId: selectedModuleId,
-        model: selectedModel || undefined,
-        workspaceSummary: workspaceSummaryForAssistant(workspace)
-      });
-      setAnswer(response);
-      if (response.model) setSelectedModel(response.model);
-      setRuntimeStatus((current) => current ? { ...current, selectedModel: response.model ?? current.selectedModel } : current);
-    } finally {
-      setAsking(false);
-    }
-  }
-
-  const selectedModule = PROTOVAULT_ASSISTANT_MODULES.find((module) => module.id === selectedModuleId) ?? PROTOVAULT_ASSISTANT_MODULES[0];
-  const modelOptions = runtimeStatus?.models ?? [];
-  const modelSelectValue = modelOptions.includes(selectedModel) ? selectedModel : "";
-  return <section className="manual-view assistant-view" aria-label="AI 使用助手">
-    <div className="manual-hero assistant-hero">
-      <div>
-        <p className="eyebrow">PROTO VAULT LOCAL AI</p>
-        <h2>AI 使用助手</h2>
-        <p>这是替代静态帮助文档的本地问答模块。系统会按问题选择少量功能模块和当前工作区摘要注入 prompt，避免把整份手册塞给模型。</p>
-      </div>
-      <button className="inline-action" onClick={onBack}>返回工作台</button>
-    </div>
-
-    <div className="assistant-layout">
-      <aside className="assistant-modules" aria-label="助手知识模块">
-        <div className="assistant-status">
-          <strong>{runtimeStatus?.available ? "Ollama 已连接" : "Ollama 未连接"}</strong>
-          <label className="assistant-model-select">
-            <span>Ollama 模型</span>
-            <select
-              aria-label="Ollama 模型"
-              value={modelSelectValue}
-              disabled={modelOptions.length === 0 || asking}
-              onChange={(event) => setSelectedModel(event.target.value)}
-            >
-              {modelOptions.length > 0
-                ? <>
-                  {!modelSelectValue && <option value="">请选择模型</option>}
-                  {modelOptions.map((model) => <option key={model} value={model}>{model}{model === "qwen2.5:3b" ? " · 轻量推荐" : ""}</option>)}
-                </>
-                : <option value="">未发现模型</option>}
-            </select>
-          </label>
-          <small>{runtimeStatus?.selectedModel ? `默认：${runtimeStatus.selectedModel}` : runtimeStatus?.message ?? "正在检测 127.0.0.1:11434"}</small>
-          <small>端点：{runtimeStatus?.endpoint ?? "http://127.0.0.1:11434"}</small>
-        </div>
-        {PROTOVAULT_ASSISTANT_MODULES.map((module) => <button
-          key={module.id}
-          className={module.id === selectedModuleId ? "active" : ""}
-          onClick={() => {
-            setSelectedModuleId(module.id);
-            setQuestion(module.summary);
-          }}
-        >
-          <span>{module.title}</span>
-          <small>{module.summary}</small>
-        </button>)}
-      </aside>
-
-      <div className="assistant-chat">
-        <article className="manual-card assistant-card">
-          <h3>{selectedModule.title}</h3>
-          <p>{selectedModule.summary}</p>
-          <details>
-            <summary>查看该模块的 AI 知识片段</summary>
-            <pre>{selectedModule.content.trim()}</pre>
-          </details>
-        </article>
-
-        <article className="manual-card assistant-card">
-          <h3>向 ProtoVault 助手提问</h3>
-          <label>
-            <span>问题</span>
-            <textarea
-              aria-label="向 ProtoVault 助手提问"
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder="例如：如何添加字段并同步注释到 Header？"
-            />
-          </label>
-          <div className="assistant-actions">
-            <select aria-label="问答模块" value={selectedModuleId} onChange={(event) => setSelectedModuleId(event.target.value as AssistantModuleId)}>
-              {PROTOVAULT_ASSISTANT_MODULES.map((module) => <option key={module.id} value={module.id}>{module.title}</option>)}
-            </select>
-            <button className="inline-action" disabled={asking || !question.trim()} onClick={() => void ask()}>{asking ? "思考中…" : "提问"}</button>
-          </div>
-          <p className="assistant-hint">提示：如果 Ollama 未启动，助手会返回离线知识库摘要和启动指引；启动后会自动使用可用模型。</p>
-          <p className="assistant-hint">轻量模型建议使用 qwen2.5:3b；首次加载模型可能较慢，生成回答默认最多等待约 120 秒。</p>
-        </article>
-
-        {answer && <article className="manual-card assistant-answer" aria-label="AI 回答">
-          <h3>{answer.fallback ? "离线知识库回答" : "本地模型回答"}</h3>
-          <pre>{answer.answer}</pre>
-          <footer>
-            <span>模块：{answer.moduleIds.join(", ")}</span>
-            <span>Prompt：{answer.promptSize} 字符</span>
-            <span>{answer.elapsedMs} ms</span>
-            {answer.model && <span>模型：{answer.model}</span>}
-          </footer>
-        </article>}
-
-        <div className="manual-grid assistant-quickref">
-          <article className="manual-card">
-            <h3>全局操作习惯</h3>
-            <ul>
-              <li><kbd>Ctrl</kbd> + <kbd>S</kbd>：保存当前 tab 的源码、结构化编辑或注释改动。</li>
-              <li><kbd>F2</kbd>：编辑当前选中的 Header、类型、字段或枚举项。</li>
-              <li><kbd>Alt</kbd> + <kbd>←</kbd> / <kbd>Alt</kbd> + <kbd>→</kbd>：在上一步 / 下一步界面之间导航。</li>
-            </ul>
-          </article>
-          <article className="manual-card">
-            <h3>链路字段速查</h3>
-            <dl>
-              <dt>延迟预算</dt><dd>用户录入的设计上限，不是当前实测值。</dd>
-              <dt>峰值系数</dt><dd>把平均吞吐放大为突发吞吐估计。</dd>
-            </dl>
-          </article>
-          <article className="manual-card">
-            <h3>当前工作区摘要</h3>
-            <pre>{workspaceSummaryForAssistant(workspace)}</pre>
-          </article>
-        </div>
-      </div>
     </div>
   </section>;
 }

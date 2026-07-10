@@ -166,6 +166,14 @@ export interface WorkspaceView {
   network: WorkspaceNetworkMapView;
   diagnostics: WorkspaceDiagnostic[];
   scanner: string;
+  index?: {
+    engine: "sqlite" | "memory";
+    path?: string;
+    cacheHits: number;
+    parsedHeaders: number;
+    cachedHeaderCount: number;
+    activeIdentityCount: number;
+  };
 }
 
 export interface GitStatusEntry {
@@ -557,12 +565,15 @@ export interface ProtocolBaselineSummary {
 export type SemanticChangeKind =
   | "type-added"
   | "type-removed"
+  | "type-renamed"
   | "field-added"
   | "field-removed"
+  | "field-renamed"
   | "field-type-changed"
   | "field-offset-changed"
   | "enum-value-added"
   | "enum-value-removed"
+  | "enum-value-renamed"
   | "enum-value-number-changed"
   | "type-size-changed"
   | "network-node-added"

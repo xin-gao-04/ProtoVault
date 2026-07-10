@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(ProtoVaultProtocolCore VERSION 0.1.0 LANGUAGES CXX)
+project(ProtoVaultProtocolCore VERSION 0.2.0 LANGUAGES CXX)
 
 if(MSVC AND MSVC_VERSION LESS 1929)
   message(FATAL_ERROR

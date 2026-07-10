@@ -144,12 +144,15 @@ export const protocolSnapshotSchema = z.object({
 export const semanticChangeKindSchema = z.enum([
   "type-added",
   "type-removed",
+  "type-renamed",
   "field-added",
   "field-removed",
+  "field-renamed",
   "field-type-changed",
   "field-offset-changed",
   "enum-value-added",
   "enum-value-removed",
+  "enum-value-renamed",
   "enum-value-number-changed",
   "type-size-changed",
   "network-node-added",
@@ -374,7 +377,15 @@ export const workspaceViewSchema = z.object({
   types: z.array(workspaceTypeViewSchema),
   network: workspaceNetworkMapViewSchema,
   diagnostics: z.array(workspaceDiagnosticViewSchema),
-  scanner: z.string().min(1)
+  scanner: z.string().min(1),
+  index: z.object({
+    engine: z.enum(["sqlite", "memory"]),
+    path: z.string().optional(),
+    cacheHits: z.number().int().nonnegative(),
+    parsedHeaders: z.number().int().nonnegative(),
+    cachedHeaderCount: z.number().int().nonnegative(),
+    activeIdentityCount: z.number().int().nonnegative()
+  }).optional()
 });
 
 export const gitStatusEntrySchema = z.object({

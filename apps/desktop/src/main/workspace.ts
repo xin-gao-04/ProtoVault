@@ -13,6 +13,7 @@ import {
   renderNewHeader,
   renderStructDeclaration
 } from "./header-generator";
+import { WorkspaceIndex } from "./workspace-index";
 import type {
   AddFieldInput,
   AddEnumValueInput,
@@ -181,6 +182,7 @@ type SizeInfo = { size: number; alignment: number; supported: true } | { support
 
 interface ScanWorkspaceOptions {
   onProgress?: (progress: WorkspaceScanProgress) => void;
+  signal?: AbortSignal;
 }
 
 interface AstNode {
@@ -213,6 +215,16 @@ function pathFromLocation(location?: AstLocation): string | undefined {
 
 function hasIncludedFrom(location?: AstLocation): boolean {
   return Boolean(location?.includedFrom ?? location?.spellingLoc?.includedFrom ?? location?.expansionLoc?.includedFrom);
+}
+
+function scanAbortError(): Error {
+  const error = new Error("工作区扫描已取消。");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfScanAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw scanAbortError();
 }
 
 interface WorkspaceDiscovery {
@@ -249,11 +261,13 @@ function includeRootsForHeaders(root: string, headers: string[]): string[] {
   return [...uniqueRoots].sort((a, b) => a.localeCompare(b));
 }
 
-async function discoverWorkspace(root: string): Promise<WorkspaceDiscovery> {
+async function discoverWorkspace(root: string, signal?: AbortSignal): Promise<WorkspaceDiscovery> {
   const directories: string[] = [];
   const headers: string[] = [];
   async function walk(current: string): Promise<void> {
+    throwIfScanAborted(signal);
     for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+      throwIfScanAborted(signal);
       const fullPath = join(current, entry.name);
       if (entry.isDirectory()) {
         if (shouldSkipDirectory(entry.name)) continue;
@@ -1073,7 +1087,8 @@ function quoteCommandArg(value: string): string {
   return /\s/.test(value) ? `"${value.replaceAll("\"", "\\\"")}"` : value;
 }
 
-async function runClangAstDump(clang: string, args: string[], root: string, header: string): Promise<string> {
+async function runClangAstDump(clang: string, args: string[], root: string, header: string, signal?: AbortSignal): Promise<string> {
+  throwIfScanAborted(signal);
   const maxBytes = astDumpMaxBytes();
   const astPath = join(tmpdir(), `protovault-ast-${process.pid}-${Date.now()}-${randomUUID()}.json`);
   const command = [clang, ...args].map(quoteCommandArg).join(" ");
@@ -1087,13 +1102,23 @@ async function runClangAstDump(clang: string, args: string[], root: string, head
       let streamError: unknown;
       const output = createWriteStream(astPath);
       const child = spawn(clang, args, { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      const abortHandler = (): void => {
+        child.kill();
+      };
 
       const finish = (error?: unknown): void => {
         if (settled) return;
         settled = true;
+        signal?.removeEventListener("abort", abortHandler);
         if (error) rejectPromise(error);
         else resolvePromise();
       };
+
+      if (signal?.aborted) {
+        abortHandler();
+        return;
+      }
+      signal?.addEventListener("abort", abortHandler, { once: true });
 
       output.on("error", (error) => {
         streamError = error;
@@ -1118,11 +1143,15 @@ async function runClangAstDump(clang: string, args: string[], root: string, head
       });
 
       child.on("error", (error) => {
-        output.end(() => finish(error));
+        output.end(() => finish(signal?.aborted ? scanAbortError() : error));
       });
 
-      child.on("close", (code, signal) => {
+      child.on("close", (code, terminationSignal) => {
         output.end(() => {
+          if (signal?.aborted) {
+            finish(scanAbortError());
+            return;
+          }
           if (streamError) {
             finish(streamError);
             return;
@@ -1137,7 +1166,7 @@ async function runClangAstDump(clang: string, args: string[], root: string, head
             return;
           }
           if (code !== 0) {
-            finish(new Error(`Command failed: ${command}\n${stderr || `clang exited with code ${code}${signal ? `, signal ${signal}` : ""}`}`));
+            finish(new Error(`Command failed: ${command}\n${stderr || `clang exited with code ${code}${terminationSignal ? `, signal ${terminationSignal}` : ""}`}`));
             return;
           }
           finish();
@@ -1520,18 +1549,19 @@ function applySourceNamespaceHints(types: WorkspaceTypeView[], content: string):
   });
 }
 
-async function scanHeader(clang: string, header: string, root: string, includeRoots: string[], content: string): Promise<WorkspaceTypeView[]> {
+async function scanHeader(clang: string, header: string, root: string, includeRoots: string[], content: string, signal?: AbortSignal): Promise<WorkspaceTypeView[]> {
   const includeArgs = await clangCommonArgs(includeRoots);
   const candidateNames = extractAstDumpCandidateNames(content);
   if (candidateNames.length === 0) return [];
 
   const types: WorkspaceTypeView[] = [];
   for (const candidateName of candidateNames) {
+    throwIfScanAborted(signal);
     const stdout = await runClangAstDump(clang, [
       "-x", "c++-header", "-std=c++20", ...includeArgs,
       "-Xclang", "-ast-dump=json", "-Xclang", `-ast-dump-filter=${candidateName}`,
       "-fsyntax-only", header
-    ], root, header);
+    ], root, header, signal);
     for (const document of parseAstDumpDocuments(stdout)) {
       types.push(...collectTypes(document, root, header));
     }
@@ -1674,6 +1704,7 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
       rootPath: workspace.rootPath
     },
     scannedAt: new Date().toISOString(),
+    index: workspace.index,
     counts: {
       directories: workspace.directories.length,
       headers: workspace.files.length,
@@ -1733,17 +1764,19 @@ async function writeWorkspaceRecord(workspace: WorkspaceView): Promise<string> {
 
 export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOptions): Promise<WorkspaceView> {
   const root = resolve(rootPath);
+  throwIfScanAborted(options?.signal);
   emitProgress(options, { phase: "discover", message: "正在检查工作区目录…", current: 0, total: 1 });
   const stat = await fs.stat(root);
   if (!stat.isDirectory()) throw new Error("请选择工作区文件夹，而不是单个文件。");
 
-  const discovery = await discoverWorkspace(root);
+  const discovery = await discoverWorkspace(root, options?.signal);
   const headers = discovery.headers;
   discardStaleHeaderCache(root, headers);
   const directories = discovery.directories.map((directory) => readDirectoryView(directory, root));
   emitProgress(options, { phase: "read", message: `发现 ${headers.length} 个 Header，正在读取文件…`, current: 0, total: Math.max(headers.length, 1) });
   let readHeaders = 0;
   const files = await mapWithConcurrency(headers, headerReadConcurrency(), async (header) => {
+    throwIfScanAborted(options?.signal);
     const file = await readFileView(header, root);
     readHeaders += 1;
     emitProgress(options, {
@@ -1759,6 +1792,20 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
   const diagnostics: WorkspaceView["diagnostics"] = [];
   let scanner = "Clang AST";
   let types: WorkspaceTypeView[] = [];
+  let cacheHits = 0;
+  let parsedHeaderCount = 0;
+  let indexView: WorkspaceView["index"];
+  let workspaceIndex = await WorkspaceIndex.open(root).catch((error) => {
+    diagnostics.push({ severity: "warning", message: `持久索引不可用，将使用会话缓存：${error instanceof Error ? error.message : String(error)}` });
+    return undefined;
+  });
+  try {
+    workspaceIndex?.deleteMissingHeaders(files.map((file) => file.relativePath));
+  } catch (error) {
+    diagnostics.push({ severity: "warning", message: `持久索引维护失败，将使用会话缓存：${error instanceof Error ? error.message : String(error)}` });
+    workspaceIndex?.close();
+    workspaceIndex = undefined;
+  }
 
   if (headers.length === 0) {
     diagnostics.push({ severity: "warning", message: "未在该工作区中发现 C/C++ Header 文件。" });
@@ -1767,28 +1814,37 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
       const clang = await findClang();
       const includeRoots = includeRootsForHeaders(root, headers);
       const dependencyFingerprints = headerDependencyFingerprints(root, files, clang);
-      scanner = `Clang AST · ${clang}`;
+      scanner = `Clang AST · ${workspaceIndex ? "SQLite Index · " : ""}${clang}`;
       emitProgress(options, { phase: "parse", message: "正在启动 Clang AST 扫描…", current: 0, total: headers.length });
       let parsedHeaders = 0;
-      let cacheHits = 0;
-      const batches = await mapWithConcurrency(headers, clangParseConcurrency(), async (header) => {
+      const validResults = new Array<boolean>(headers.length).fill(false);
+      const batches = await mapWithConcurrency(headers, clangParseConcurrency(), async (header, headerIndex) => {
+        throwIfScanAborted(options?.signal);
         let usedCache = false;
         try {
           const fingerprint = dependencyFingerprints.get(header) ?? contentHash(contentByHeader.get(header) ?? "");
-          const cached = cachedHeaderTypes(header, fingerprint);
+          const relativeHeader = files[headerIndex]?.relativePath ?? normalizeRelativePath(relative(root, header));
+          const cached = cachedHeaderTypes(header, fingerprint) ?? workspaceIndex?.getHeaderTypes(relativeHeader, fingerprint);
           if (cached) {
             usedCache = true;
             cacheHits += 1;
+            validResults[headerIndex] = true;
+            cacheHeaderTypes(header, fingerprint, cached);
             return cached;
           }
-          const parsed = await scanHeader(clang, header, root, includeRoots, contentByHeader.get(header) ?? await fs.readFile(header, "utf8"));
+          const parsed = await scanHeader(clang, header, root, includeRoots, contentByHeader.get(header) ?? await fs.readFile(header, "utf8"), options?.signal);
+          parsedHeaderCount += 1;
+          validResults[headerIndex] = true;
           cacheHeaderTypes(header, fingerprint, parsed);
           return parsed;
         }
         catch (error) {
+          if (error instanceof Error && error.name === "AbortError") throw error;
           diagnostics.push(diagnosticFromError(header, error));
-          const fallback = lastValidHeaderTypes(header);
+          const relativeHeader = files[headerIndex]?.relativePath ?? normalizeRelativePath(relative(root, header));
+          const fallback = lastValidHeaderTypes(header) ?? workspaceIndex?.getLastValidHeaderTypes(relativeHeader);
           if (fallback && fallback.length > 0) {
+            cacheHeaderTypes(header, `last-valid:${contentHash(JSON.stringify(fallback))}`, fallback);
             diagnostics.push({
               severity: "warning",
               file: header,
@@ -1807,17 +1863,57 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
           });
         }
       });
-      const deduplicated = new Map(batches.flat().map((type) => [type.id, type]));
+      const reconciledBatches = batches.map((batch, index) => {
+        const file = files[index];
+        const fingerprint = dependencyFingerprints.get(headers[index]) ?? contentHash(file?.content ?? "");
+        const reconciled = workspaceIndex?.reconcileHeaderIdentities(file.relativePath, batch) ?? batch;
+        if (validResults[index]) {
+          cacheHeaderTypes(headers[index], fingerprint, reconciled);
+          workspaceIndex?.putHeaderTypes(file.relativePath, file.contentHash, fingerprint, reconciled);
+        }
+        return reconciled;
+      });
+      const deduplicated = new Map(reconciledBatches.flat().map((type) => [type.id, type]));
       types = applyMemoryLayouts([...deduplicated.values()].sort((a, b) => a.qualifiedName.localeCompare(b.qualifiedName)));
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
       diagnostics.push(diagnosticFromError(undefined, error));
-      const fallbackTypes = headers.flatMap((header) => lastValidHeaderTypes(header) ?? []);
+      const fallbackTypes = headers.flatMap((header, index) => lastValidHeaderTypes(header) ?? workspaceIndex?.getLastValidHeaderTypes(files[index].relativePath) ?? []);
       if (fallbackTypes.length > 0) {
         types = applyMemoryLayouts([...new Map(fallbackTypes.map((type) => [type.id, type])).values()]);
         diagnostics.push({ severity: "warning", message: `Clang 扫描不可用，当前展示上次有效的 ${types.length} 个协议类型。` });
       }
+    } finally {
+      if (workspaceIndex) {
+        try {
+          const stats = workspaceIndex.stats();
+          indexView = { engine: "sqlite", path: workspaceIndex.path, cacheHits, parsedHeaders: parsedHeaderCount, ...stats };
+        } catch (error) {
+          diagnostics.push({ severity: "warning", message: `索引统计读取失败：${error instanceof Error ? error.message : String(error)}` });
+        }
+      }
+      workspaceIndex?.close();
     }
   }
+  if (headers.length === 0) {
+    if (workspaceIndex) {
+      try {
+        const stats = workspaceIndex.stats();
+        indexView = { engine: "sqlite", path: workspaceIndex.path, cacheHits: 0, parsedHeaders: 0, ...stats };
+      } catch (error) {
+        diagnostics.push({ severity: "warning", message: `索引统计读取失败：${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    workspaceIndex?.close();
+  }
+  indexView ??= {
+    engine: "memory",
+    cacheHits,
+    parsedHeaders: parsedHeaderCount,
+    cachedHeaderCount: headerParseCache.size,
+    activeIdentityCount: types.length + types.reduce((total, type) => total + type.fields.length + type.values.length, 0)
+  };
+  throwIfScanAborted(options?.signal);
 
   let workspace: WorkspaceView = {
     name: basename(root),
@@ -1827,9 +1923,11 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
     types,
     network: enrichNetworkMap(await readNetworkMap(root), types),
     diagnostics,
-    scanner
+    scanner,
+    index: indexView
   };
   emitProgress(options, { phase: "metadata", message: "正在合并 Header 注释与协议元数据…", current: 0, total: 1 });
+  throwIfScanAborted(options?.signal);
   const diskMetadata = await readMetadata(root);
   const sourceNotes = await collectSourceNotes(types);
   const metadata = mergeMetadataWithSourceNotes(diskMetadata, sourceNotes);
@@ -1845,6 +1943,11 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
 
   emitProgress(options, { phase: "done", message: `扫描完成：${files.length} Headers · ${types.length} Types`, current: 1, total: 1 });
   return validateWorkspaceContract(workspace);
+}
+
+export function clearWorkspaceRuntimeCaches(): void {
+  headerParseCache.clear();
+  gitRepositoryContextCache.clear();
 }
 
 export function sampleWorkspacePath(appPath: string): string {
@@ -2960,6 +3063,9 @@ function diffProtocolStates(base: ProtocolStateFile, current: ProtocolStateFile)
       changes.push(semanticChange("type-added", "compatible", `新增类型 ${currentType.qualifiedName}。`, id));
       continue;
     }
+    if (baseType.qualifiedName !== currentType.qualifiedName) {
+      changes.push(semanticChange("type-renamed", "review", `类型从 ${baseType.qualifiedName} 重命名为 ${currentType.qualifiedName}。`, id, baseType.qualifiedName, currentType.qualifiedName));
+    }
     if (baseType.size !== currentType.size) {
       changes.push(semanticChange("type-size-changed", "review", `${currentType.qualifiedName} 大小从 ${baseType.size ?? "未知"} 变为 ${currentType.size ?? "未知"}。`, id, baseType.size, currentType.size));
     }
@@ -2971,6 +3077,9 @@ function diffProtocolStates(base: ProtocolStateFile, current: ProtocolStateFile)
       if (!before) {
         changes.push(semanticChange("field-added", "compatible", `${currentType.qualifiedName} 新增字段 ${field.name}。`, fieldId));
         continue;
+      }
+      if (before.name !== field.name) {
+        changes.push(semanticChange("field-renamed", "review", `${currentType.qualifiedName} 字段从 ${before.name} 重命名为 ${field.name}。`, fieldId, before.name, field.name));
       }
       if (before.type !== field.type) {
         changes.push(semanticChange("field-type-changed", "breaking", `${currentType.qualifiedName}::${field.name} 类型从 ${before.type} 变为 ${field.type}。`, fieldId, before.type, field.type));
@@ -2992,6 +3101,9 @@ function diffProtocolStates(base: ProtocolStateFile, current: ProtocolStateFile)
       if (!before) {
         changes.push(semanticChange("enum-value-added", "compatible", `${currentType.qualifiedName} 新增枚举项 ${value.name}。`, valueId));
         continue;
+      }
+      if (before.name !== value.name) {
+        changes.push(semanticChange("enum-value-renamed", "review", `${currentType.qualifiedName} 枚举项从 ${before.name} 重命名为 ${value.name}。`, valueId, before.name, value.name));
       }
       if (before.value !== value.value) {
         changes.push(semanticChange("enum-value-number-changed", "breaking", `${currentType.qualifiedName}::${value.name} 值从 ${before.value ?? "自动"} 变为 ${value.value ?? "自动"}。`, valueId, before.value, value.value));
@@ -3150,6 +3262,19 @@ export async function renameHeader(input: RenameHeaderInput): Promise<WorkspaceV
   }
   await fs.mkdir(dirname(target), { recursive: true });
   await fs.rename(current, target);
+  let workspaceIndex: WorkspaceIndex | undefined;
+  try {
+    workspaceIndex = await WorkspaceIndex.open(root);
+    workspaceIndex.moveHeaderPath(
+      normalizeRelativePath(relative(root, current)),
+      normalizeRelativePath(relative(root, target))
+    );
+  } catch (error) {
+    await fs.rename(target, current).catch(() => undefined);
+    throw new Error(`Header 身份索引更新失败，重命名已回滚：${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    workspaceIndex?.close();
+  }
   return scanWorkspace(root);
 }
 
