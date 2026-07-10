@@ -98,8 +98,9 @@ const CLANG_COMPAT_DIR = "clang-compat";
 let cachedClangPath: string | undefined;
 let cachedGitPath: string | undefined;
 const HEADER_PARSE_CACHE_LIMIT = 4096;
+const HEADER_PARSER_CACHE_VERSION = "3";
 const GIT_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
-const headerParseCache = new Map<string, { fingerprint: string; types: WorkspaceTypeView[] }>();
+const headerParseCache = new Map<string, { fingerprint: string; types: WorkspaceTypeView[]; diagnostics: WorkspaceDiagnostic[] }>();
 const gitRepositoryContextCache = new Map<string, Promise<GitRepositoryContext | null>>();
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".cache",
@@ -1481,6 +1482,25 @@ function extractAstDumpCandidateNames(content: string): string[] {
   return [...names];
 }
 
+function workspaceTypeDeclarationHeaders(files: WorkspaceFileView[]): Map<string, string> {
+  const declarations = new Map<string, Set<string>>();
+  for (const file of files) {
+    for (const name of extractAstDumpCandidateNames(file.content)) {
+      const paths = declarations.get(name) ?? new Set<string>();
+      paths.add(file.path);
+      declarations.set(name, paths);
+    }
+  }
+  return new Map([...declarations.entries()]
+    .filter(([, paths]) => paths.size === 1)
+    .map(([name, paths]) => [name, [...paths][0]]));
+}
+
+function unknownWorkspaceTypeName(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.match(/unknown type name ['‘]([^'’]+)['’]/)?.[1];
+}
+
 function parseAstDumpDocuments(stdout: string): AstNode[] {
   const text = stdout.trim();
   if (!text) return [];
@@ -1549,19 +1569,45 @@ function applySourceNamespaceHints(types: WorkspaceTypeView[], content: string):
   });
 }
 
-async function scanHeader(clang: string, header: string, root: string, includeRoots: string[], content: string, signal?: AbortSignal): Promise<WorkspaceTypeView[]> {
+async function scanHeader(
+  clang: string,
+  header: string,
+  root: string,
+  includeRoots: string[],
+  content: string,
+  recoveryHeaders: Map<string, string>,
+  onDependencyRecovery?: (missingType: string, dependencyHeader: string) => void,
+  signal?: AbortSignal
+): Promise<WorkspaceTypeView[]> {
   const includeArgs = await clangCommonArgs(includeRoots);
   const candidateNames = extractAstDumpCandidateNames(content);
   if (candidateNames.length === 0) return [];
 
   const types: WorkspaceTypeView[] = [];
+  const forcedIncludes: string[] = [];
   for (const candidateName of candidateNames) {
     throwIfScanAborted(signal);
-    const stdout = await runClangAstDump(clang, [
-      "-x", "c++-header", "-std=c++20", ...includeArgs,
-      "-Xclang", "-ast-dump=json", "-Xclang", `-ast-dump-filter=${candidateName}`,
-      "-fsyntax-only", header
-    ], root, header, signal);
+    let stdout = "";
+    while (true) {
+      try {
+        stdout = await runClangAstDump(clang, [
+          "-x", "c++-header", "-std=c++20", ...includeArgs,
+          ...forcedIncludes.flatMap((dependencyHeader) => ["-include", dependencyHeader]),
+          "-Xclang", "-ast-dump=json", "-Xclang", `-ast-dump-filter=${candidateName}`,
+          "-fsyntax-only", header
+        ], root, header, signal);
+        break;
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        const missingType = unknownWorkspaceTypeName(error);
+        const dependencyHeader = missingType ? recoveryHeaders.get(missingType) : undefined;
+        const alreadyIncluded = dependencyHeader && forcedIncludes.some((path) => resolve(path).toLowerCase() === resolve(dependencyHeader).toLowerCase());
+        const sameHeader = dependencyHeader && resolve(dependencyHeader).toLowerCase() === resolve(header).toLowerCase();
+        if (!missingType || !dependencyHeader || alreadyIncluded || sameHeader || forcedIncludes.length >= 4) throw error;
+        forcedIncludes.push(dependencyHeader);
+        onDependencyRecovery?.(missingType, dependencyHeader);
+      }
+    }
     for (const document of parseAstDumpDocuments(stdout)) {
       types.push(...collectTypes(document, root, header));
     }
@@ -1646,6 +1692,8 @@ function headerDependencyFingerprints(root: string, files: WorkspaceFileView[], 
       for (const dependency of dependencies.get(current) ?? []) stack.push(dependency);
     }
     const fingerprint = createHash("sha256")
+      .update(HEADER_PARSER_CACHE_VERSION)
+      .update("\0")
       .update(clang)
       .update("\0")
       .update([...reachable]
@@ -1657,23 +1705,23 @@ function headerDependencyFingerprints(root: string, files: WorkspaceFileView[], 
   }));
 }
 
-function cachedHeaderTypes(header: string, fingerprint: string): WorkspaceTypeView[] | undefined {
+function cachedHeaderEntry(header: string, fingerprint: string): { types: WorkspaceTypeView[]; diagnostics: WorkspaceDiagnostic[] } | undefined {
   const key = resolve(header).toLowerCase();
   const cached = headerParseCache.get(key);
   if (!cached || cached.fingerprint !== fingerprint) return undefined;
   headerParseCache.delete(key);
   headerParseCache.set(key, cached);
-  return cached.types;
+  return { types: cached.types, diagnostics: cached.diagnostics };
 }
 
 function lastValidHeaderTypes(header: string): WorkspaceTypeView[] | undefined {
   return headerParseCache.get(resolve(header).toLowerCase())?.types;
 }
 
-function cacheHeaderTypes(header: string, fingerprint: string, types: WorkspaceTypeView[]): void {
+function cacheHeaderTypes(header: string, fingerprint: string, types: WorkspaceTypeView[], diagnostics: WorkspaceDiagnostic[] = []): void {
   const key = resolve(header).toLowerCase();
   headerParseCache.delete(key);
-  headerParseCache.set(key, { fingerprint, types });
+  headerParseCache.set(key, { fingerprint, types, diagnostics });
   while (headerParseCache.size > HEADER_PARSE_CACHE_LIMIT) {
     const oldestKey = headerParseCache.keys().next().value as string | undefined;
     if (!oldestKey) break;
@@ -1814,28 +1862,46 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
       const clang = await findClang();
       const includeRoots = includeRootsForHeaders(root, headers);
       const dependencyFingerprints = headerDependencyFingerprints(root, files, clang);
+      const recoveryHeaders = workspaceTypeDeclarationHeaders(files);
       scanner = `Clang AST · ${workspaceIndex ? "SQLite Index · " : ""}${clang}`;
       emitProgress(options, { phase: "parse", message: "正在启动 Clang AST 扫描…", current: 0, total: headers.length });
       let parsedHeaders = 0;
       const validResults = new Array<boolean>(headers.length).fill(false);
+      const headerDiagnostics = Array.from({ length: headers.length }, () => [] as WorkspaceDiagnostic[]);
       const batches = await mapWithConcurrency(headers, clangParseConcurrency(), async (header, headerIndex) => {
         throwIfScanAborted(options?.signal);
         let usedCache = false;
         try {
           const fingerprint = dependencyFingerprints.get(header) ?? contentHash(contentByHeader.get(header) ?? "");
           const relativeHeader = files[headerIndex]?.relativePath ?? normalizeRelativePath(relative(root, header));
-          const cached = cachedHeaderTypes(header, fingerprint) ?? workspaceIndex?.getHeaderTypes(relativeHeader, fingerprint);
+          const cached = cachedHeaderEntry(header, fingerprint) ?? workspaceIndex?.getHeaderEntry(relativeHeader, fingerprint);
           if (cached) {
             usedCache = true;
             cacheHits += 1;
             validResults[headerIndex] = true;
-            cacheHeaderTypes(header, fingerprint, cached);
-            return cached;
+            headerDiagnostics[headerIndex].push(...cached.diagnostics);
+            diagnostics.push(...cached.diagnostics);
+            cacheHeaderTypes(header, fingerprint, cached.types, cached.diagnostics);
+            return cached.types;
           }
-          const parsed = await scanHeader(clang, header, root, includeRoots, contentByHeader.get(header) ?? await fs.readFile(header, "utf8"), options?.signal);
+          const parsed = await scanHeader(
+            clang,
+            header,
+            root,
+            includeRoots,
+            contentByHeader.get(header) ?? await fs.readFile(header, "utf8"),
+            recoveryHeaders,
+            (missingType, dependencyHeader) => headerDiagnostics[headerIndex].push({
+              severity: "warning",
+              file: header,
+              message: `Header 依赖恢复：当前文件未直接提供 ${missingType}，已临时包含 ${normalizeRelativePath(relative(root, dependencyHeader))} 完成只读解析；建议在源文件中补充明确的 #include。`
+            }),
+            options?.signal
+          );
           parsedHeaderCount += 1;
           validResults[headerIndex] = true;
-          cacheHeaderTypes(header, fingerprint, parsed);
+          diagnostics.push(...headerDiagnostics[headerIndex]);
+          cacheHeaderTypes(header, fingerprint, parsed, headerDiagnostics[headerIndex]);
           return parsed;
         }
         catch (error) {
@@ -1868,8 +1934,8 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
         const fingerprint = dependencyFingerprints.get(headers[index]) ?? contentHash(file?.content ?? "");
         const reconciled = workspaceIndex?.reconcileHeaderIdentities(file.relativePath, batch) ?? batch;
         if (validResults[index]) {
-          cacheHeaderTypes(headers[index], fingerprint, reconciled);
-          workspaceIndex?.putHeaderTypes(file.relativePath, file.contentHash, fingerprint, reconciled);
+          cacheHeaderTypes(headers[index], fingerprint, reconciled, headerDiagnostics[index]);
+          workspaceIndex?.putHeaderTypes(file.relativePath, file.contentHash, fingerprint, reconciled, headerDiagnostics[index]);
         }
         return reconciled;
       });

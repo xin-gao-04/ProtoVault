@@ -107,10 +107,13 @@ test("app process persists and restores the last workspace across restarts", asy
     application = await launchDesktop({
       APPDATA: appDataRoot
     });
+    let restoreStderr = "";
+    application.process().stderr?.on("data", (chunk) => { restoreStderr += String(chunk); });
     page = await application.firstWindow();
     await page.waitForLoadState("domcontentloaded");
     await expect(page.getByRole("button", { name: "新增数据结构" })).toBeEnabled({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: "demo::process::ProcessPacket", exact: true })).toBeVisible();
+    expect(restoreStderr).not.toContain("AbortError");
   } finally {
     if (application) await application.close();
     await rm(workspace.root, { recursive: true, force: true });

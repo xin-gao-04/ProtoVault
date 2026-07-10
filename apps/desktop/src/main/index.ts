@@ -314,7 +314,12 @@ app.whenReady().then(() => {
     if (process.env.PROTOVAULT_DISABLE_RESTORE === "1") return null;
     const lastWorkspacePath = (await readPreferences()).lastWorkspacePath;
     if (!lastWorkspacePath) return null;
-    return scanAndRemember(lastWorkspacePath, event.sender);
+    try {
+      return await scanAndRemember(lastWorkspacePath, event.sender);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return null;
+      throw error;
+    }
   });
   ipcMain.handle("protocol:create-header", (event, input: CreateHeaderInput) => runWorkspaceMutation(event.sender, input, createHeader));
   ipcMain.handle("protocol:create-struct", (event, input: CreateStructInput) => runWorkspaceMutation(event.sender, input, createStruct));

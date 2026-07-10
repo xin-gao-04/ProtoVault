@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { workspaceTypeViewSchema } from "@protovault/contracts";
-import type { WorkspaceEnumValueView, WorkspaceFieldView, WorkspaceTypeView } from "../shared/workspace";
+import { workspaceDiagnosticViewSchema, workspaceTypeViewSchema } from "@protovault/contracts";
+import type { WorkspaceDiagnostic, WorkspaceEnumValueView, WorkspaceFieldView, WorkspaceTypeView } from "../shared/workspace";
 
-const INDEX_SCHEMA_VERSION = "1";
+const INDEX_SCHEMA_VERSION = "2";
+
+export interface HeaderCacheEntry {
+  types: WorkspaceTypeView[];
+  diagnostics: WorkspaceDiagnostic[];
+}
 
 type IdentityKind = "struct" | "enum" | "field" | "enum-value";
 
@@ -25,6 +30,16 @@ function parseTypes(value: string): WorkspaceTypeView[] | undefined {
     return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function parseDiagnostics(value: string | undefined): WorkspaceDiagnostic[] {
+  if (!value) return [];
+  try {
+    const parsed = workspaceDiagnosticViewSchema.array().safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
   }
 }
 
@@ -82,6 +97,7 @@ export class WorkspaceIndex {
         content_hash TEXT NOT NULL,
         dependency_fingerprint TEXT NOT NULL,
         types_json TEXT NOT NULL,
+        diagnostics_json TEXT NOT NULL DEFAULT '[]',
         updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS protocol_identity (
@@ -99,6 +115,10 @@ export class WorkspaceIndex {
       CREATE INDEX IF NOT EXISTS identity_file_kind_idx
         ON protocol_identity(file_path, entity_kind, parent_id, active);
     `);
+    const headerColumns = database.prepare("PRAGMA table_info(header_cache)").all() as unknown as Array<{ name: string }>;
+    if (!headerColumns.some((column) => column.name === "diagnostics_json")) {
+      database.exec("ALTER TABLE header_cache ADD COLUMN diagnostics_json TEXT NOT NULL DEFAULT '[]'");
+    }
     database.prepare(`
       INSERT INTO index_metadata(key, value) VALUES ('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -116,11 +136,12 @@ export class WorkspaceIndex {
     return { cachedHeaderCount: Number(cache.count), activeIdentityCount: Number(identities.count) };
   }
 
-  getHeaderTypes(path: string, dependencyFingerprint: string): WorkspaceTypeView[] | undefined {
+  getHeaderEntry(path: string, dependencyFingerprint: string): HeaderCacheEntry | undefined {
     const row = this.database.prepare(`
-      SELECT types_json FROM header_cache WHERE path = ? AND dependency_fingerprint = ?
-    `).get(path, dependencyFingerprint) as { types_json?: string } | undefined;
-    return row?.types_json ? parseTypes(row.types_json) : undefined;
+      SELECT types_json, diagnostics_json FROM header_cache WHERE path = ? AND dependency_fingerprint = ?
+    `).get(path, dependencyFingerprint) as { types_json?: string; diagnostics_json?: string } | undefined;
+    const types = row?.types_json ? parseTypes(row.types_json) : undefined;
+    return types ? { types, diagnostics: parseDiagnostics(row?.diagnostics_json) } : undefined;
   }
 
   getLastValidHeaderTypes(path: string): WorkspaceTypeView[] | undefined {
@@ -128,16 +149,17 @@ export class WorkspaceIndex {
     return row?.types_json ? parseTypes(row.types_json) : undefined;
   }
 
-  putHeaderTypes(path: string, contentHash: string, dependencyFingerprint: string, types: WorkspaceTypeView[]): void {
+  putHeaderTypes(path: string, contentHash: string, dependencyFingerprint: string, types: WorkspaceTypeView[], diagnostics: WorkspaceDiagnostic[] = []): void {
     this.database.prepare(`
-      INSERT INTO header_cache(path, content_hash, dependency_fingerprint, types_json, updated_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO header_cache(path, content_hash, dependency_fingerprint, types_json, diagnostics_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(path) DO UPDATE SET
         content_hash = excluded.content_hash,
         dependency_fingerprint = excluded.dependency_fingerprint,
         types_json = excluded.types_json,
+        diagnostics_json = excluded.diagnostics_json,
         updated_at = excluded.updated_at
-    `).run(path, contentHash, dependencyFingerprint, JSON.stringify(types), new Date().toISOString());
+    `).run(path, contentHash, dependencyFingerprint, JSON.stringify(types), JSON.stringify(diagnostics), new Date().toISOString());
   }
 
   deleteMissingHeaders(activePaths: string[]): void {

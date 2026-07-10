@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test } from "@playwright/test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -457,6 +457,11 @@ test("opens the sample workspace and navigates headers and protocol types", asyn
   } finally {
     await application.close();
     await rm(appDataRoot, { recursive: true, force: true });
+    for (const entry of await readdir(resolve(fixtureRoot, "radar-workspace/headers/common"))) {
+      if (entry.startsWith(".geometry.hpp.") && entry.endsWith(".tmp")) {
+        await rm(resolve(fixtureRoot, "radar-workspace/headers/common", entry), { force: true });
+      }
+    }
     await writeFile(geometryHeader, originalGeometryHeader, "utf8");
     if (originalNetworkConfig === null) {
       await rm(resolve(fixtureRoot, ".protocol/network"), { recursive: true, force: true });

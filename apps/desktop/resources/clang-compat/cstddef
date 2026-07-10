@@ -9,4 +9,7 @@ namespace std {
 using ::ptrdiff_t;
 using ::size_t;
 using nullptr_t = decltype(nullptr);
+#if __cplusplus >= 201703L
+enum class byte : unsigned char {};
+#endif
 }

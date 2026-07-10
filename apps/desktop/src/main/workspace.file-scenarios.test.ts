@@ -181,6 +181,58 @@ struct BasePacket { int value; int sequence; };
     }
   }, 30_000);
 
+  it("parses std::byte when project headers also load the MSVC type traits library", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-local-byte-traits-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "byte_packet.hpp"), `#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <type_traits>
+namespace demo {
+struct BytePacket {
+  std::byte flags;
+  std::uint32_t sequence;
+};
+}
+`, "utf8");
+
+      const workspace = await scanWorkspace(root);
+      expect(workspace.types.find((type) => type.qualifiedName === "demo::BytePacket")?.fields.map((field) => field.type)).toEqual([
+        "std::byte",
+        "std::uint32_t"
+      ]);
+      expect(workspace.diagnostics.map((diagnostic) => diagnostic.message).join("\n")).not.toContain("undeclared identifier 'byte'");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("recovers a non-self-contained Header through a unique workspace type declaration", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "protovault-local-dependency-recovery-"));
+    try {
+      await mkdir(resolve(root, "headers"), { recursive: true });
+      await writeFile(resolve(root, "headers", "shared.hpp"), "#pragma once\nstruct SharedState { int value; };\n", "utf8");
+      await writeFile(resolve(root, "headers", "consumer.hpp"), "#pragma once\nstruct ConsumerState { SharedState state; };\n", "utf8");
+
+      const workspace = await scanWorkspace(root);
+      expect(workspace.types.map((type) => type.name)).toEqual(expect.arrayContaining(["SharedState", "ConsumerState"]));
+      expect(workspace.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          severity: "warning",
+          file: resolve(root, "headers", "consumer.hpp"),
+          message: expect.stringContaining("Header 依赖恢复")
+        })
+      ]));
+      clearWorkspaceRuntimeCaches();
+      const cached = await scanWorkspace(root);
+      expect(cached.index).toMatchObject({ engine: "sqlite", cacheHits: 2, parsedHeaders: 0 });
+      expect(cached.diagnostics.some((diagnostic) => diagnostic.message.includes("Header 依赖恢复"))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("reports broken headers without losing valid local protocol files", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "protovault-local-broken-"));
     try {
