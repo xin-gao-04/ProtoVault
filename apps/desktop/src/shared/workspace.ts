@@ -2,6 +2,8 @@ export interface WorkspaceFieldView {
   id: string;
   name: string;
   type: string;
+  canonicalType?: string;
+  bitField?: boolean;
   initializer?: string;
   note?: string;
   location?: { file: string; line: number; column: number };

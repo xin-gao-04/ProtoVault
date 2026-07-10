@@ -34,7 +34,7 @@
 | P0 工程初始化 | 已完成 | pnpm monorepo、Electron/React、CMake、CI | 桌面端与 C++ 核心可构建、测试可运行 |
 | P1 领域模型与契约 | MVP 契约基线完成 / 待收敛 | IR Schema、版本、错误与 API 请求模型、桌面 WorkspaceView 契约校验 | TS 契约与桌面扫描出口校验通过；Canonical IR 与运行态 WorkspaceView 仍是两套模型，C++ 往返未进入主链路 |
 | P2 工作区管理 | MVP 与持久增量索引完成 | 任意目录打开、多级 Header/空目录发现、`.protocol/workspace.json` 目录记录、Header 文件监听、SQLite Header IR cache | fixture 父目录可打开；重启后 warm scan 复用缓存；include 变化会使依赖闭包失效 |
-| P3 Header 解析 | MVP 与任务取消完成 / 服务隔离待深化 | Clang AST 扫描、类型/字段/枚举、include 归属修正、诊断、持久依赖缓存、AbortSignal 取消与旧任务淘汰 | 示例 fixture 通过；切换/重扫不会被旧任务覆盖；Clang 子进程可终止；复杂宏/模板和独立 C++ Parser Service 仍排除 |
+| P3 Header 解析 | 复杂场景发布门完成 / 服务隔离待深化 | Clang AST 扫描、类型/字段/枚举、别名与匿名 typedef、嵌套声明、报错时部分 AST 恢复、最后有效 IR、明确的不支持语法诊断、持久依赖缓存、AbortSignal 取消 | 复杂解析矩阵与 24 Header 混合压力场景通过；同一 Header 局部损坏时健康声明仍更新，错误声明保留最后有效 IR；真实 `xsf-math` 79 Header 识别 235/235 类型；模板/继承/class/union/方法/位域不静默忽略；独立 C++ Parser Service 仍待收敛 |
 | P4 ABI 布局 | 已完成 MVP | size、offset、alignment、padding、pack、enum underlying type | 与编译器 `sizeof/offsetof` 基准一致 |
 | P5 工作台 UI | 基础纵切完成 | Obsidian 风格合并树、字段、源码、属性、问题面板、三栏拖拽和主题变量兼容 | 示例工作区浏览定位 E2E 已通过 |
 | P6 编辑与生成 | MVP 纵切完成 | 新建 Header、创建 struct/enum、字段/枚举项 CRUD、受控 Header 片段生成、写后重扫 | 基础写入、确定性片段生成和 E2E 通过；完整 IR→Header 生成器仍待深化 |
@@ -48,7 +48,7 @@
 | P14 Git 版本治理 | MVP 纵切完成 | Git 状态、分支/Tag 展示、协议 Baseline Tag、版本 Diff、P14 loop 脚本 | 基线创建要求工作区干净；版本 Diff 可对比 Git Tag 与当前工作树；旧快照入口退出 UI；发布门通过 |
 | P15 本地 AI 使用助手 | MVP 纵切完成 | AI 可读功能知识库、模块检索、Ollama status/ask API、AI 使用助手视图、模型切换、轻量模型默认、离线降级 | 不注入全量手册；按问题选择少量模块；Ollama 可用时可选择本地模型，不可用时返回离线知识库摘要 |
 | P16 Git Source Control | MVP 纵切完成 | 左侧 Source Control、暂存/取消暂存、提交、分支切换/创建、Git Inspector、Working Tree/Index/Commit 文件级 Diff tab、可展开提交 Graph、与基线 Tag/Diff 联动 | 可在前端完成本地 Git 提交流程；点击当前变更或历史提交文件子节点在中间打开对比；提交只允许当前工作区范围内暂存项；push/pull/放弃更改延后 |
-| P17 稳定性与分发 | 初始完成 | 文件/进程场景测试、真实大目录 AST 流式输出、随包 Git/Clang、Setup/Portable | Desktop 36 个单测、Contracts 4 个测试、Electron E2E 3 个测试通过；正式签名和升级通道待实现 |
+| P17 稳定性与分发 | 初始完成 | 文件/进程场景测试、复杂 Header 解析矩阵、真实大目录 AST 流式输出、随包 Git/Clang、Setup/Portable | Desktop 45 个单测、Contracts 4 个测试、Electron E2E 3 个测试通过；正式签名和升级通道待实现 |
 | P18 核心架构硬化 | 核心 Loop 已完成 / 深化项保留 | SQLite 增量索引、稳定 ID、持久最后有效 IR、可取消扫描、Assistant 按需拆包、冲突草稿选择 | 重启缓存、依赖失效、改名身份、取消任务和 E2E 均有测试；Canonical IR/C++ Service、完整三方合并和其余视图拆包继续后续 Loop |
 
 ## 当前技术约束
@@ -70,6 +70,9 @@
 - 递归发现 `.h/.hh/.hpp/.hxx`。
 - 保留空目录，并写入 `.protocol/workspace.json` 目录记录。
 - 使用 Clang JSON AST 提取 namespace、struct、enum、字段、定长数组与源码位置。
+- 支持 `using`/`typedef` 的规范化布局、匿名 typedef struct、嵌套 struct 稳定限定名、多维定长数组、枚举隐式递增值和位域识别。
+- 单个 Header 有编译错误时解析 Clang 已产出的部分 AST：健康声明继续可用，错误声明回退到最后有效 IR，源码仍可编辑修复。
+- 模板、继承、class、union、成员函数、复杂条件编译、宏声明与位域均产生带位置的边界诊断，不会静默伪装成可安全编辑协议。
 - 修正 include 声明归属，避免 `geometry.hpp` 类型错误挂到 `track.hpp`。
 - 显示 Header 源码与 include 数量。
 - 在协议树中切换 struct/enum，并显示字段或枚举值。

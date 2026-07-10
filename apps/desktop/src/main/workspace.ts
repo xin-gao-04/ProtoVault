@@ -98,7 +98,7 @@ const CLANG_COMPAT_DIR = "clang-compat";
 let cachedClangPath: string | undefined;
 let cachedGitPath: string | undefined;
 const HEADER_PARSE_CACHE_LIMIT = 4096;
-const HEADER_PARSER_CACHE_VERSION = "3";
+const HEADER_PARSER_CACHE_VERSION = "5";
 const GIT_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const headerParseCache = new Map<string, { fingerprint: string; types: WorkspaceTypeView[]; diagnostics: WorkspaceDiagnostic[] }>();
 const gitRepositoryContextCache = new Map<string, Promise<GitRepositoryContext | null>>();
@@ -163,6 +163,20 @@ const BASE_TYPE_SIZE: Record<string, { size: number; alignment: number }> = {
   "std::byte": { size: 1, alignment: 1 }
 };
 
+// Clang exposes typedef/using aliases through desugaredQualType. These names are
+// used only as layout fallbacks so direct non-fixed-width fields still remain a
+// lint concern under the MVP protocol policy.
+const CANONICAL_CPP_TYPE_SIZE: Record<string, { size: number; alignment: number }> = {
+  "signed char": { size: 1, alignment: 1 },
+  "unsigned char": { size: 1, alignment: 1 },
+  short: { size: 2, alignment: 2 },
+  "unsigned short": { size: 2, alignment: 2 },
+  int: { size: 4, alignment: 4 },
+  "unsigned int": { size: 4, alignment: 4 },
+  "long long": { size: 8, alignment: 8 },
+  "unsigned long long": { size: 8, alignment: 8 }
+};
+
 const NETWORK_NODE_KINDS = new Set<NetworkNodeKind>([
   "simulator",
   "model",
@@ -191,12 +205,27 @@ interface AstNode {
   kind?: string;
   name?: string;
   completeDefinition?: boolean;
+  isBitfield?: boolean;
   scopedEnumTag?: string;
-  type?: { qualType?: string };
+  type?: { qualType?: string; desugaredQualType?: string };
   value?: string | boolean;
   loc?: AstLocation;
   range?: { begin?: AstLocation };
   inner?: AstNode[];
+}
+
+interface HeaderScanResult {
+  types: WorkspaceTypeView[];
+  hadErrors: boolean;
+}
+
+class ClangAstDumpError extends Error {
+  astOutput = "";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ClangAstDumpError";
+  }
 }
 
 interface AstLocation {
@@ -1167,12 +1196,17 @@ async function runClangAstDump(clang: string, args: string[], root: string, head
             return;
           }
           if (code !== 0) {
-            finish(new Error(`Command failed: ${command}\n${stderr || `clang exited with code ${code}${terminationSignal ? `, signal ${terminationSignal}` : ""}`}`));
+            finish(new ClangAstDumpError(`Command failed: ${command}\n${stderr || `clang exited with code ${code}${terminationSignal ? `, signal ${terminationSignal}` : ""}`}`));
             return;
           }
           finish();
         });
       });
+    }).catch(async (error) => {
+      if (error instanceof ClangAstDumpError && stdoutBytes > 0) {
+        error.astOutput = await fs.readFile(astPath, "utf8").catch(() => "");
+      }
+      throw error;
     });
     return await fs.readFile(astPath, "utf8");
   } finally {
@@ -1221,7 +1255,9 @@ function estimateStructLayout(types: WorkspaceTypeView[], type: WorkspaceTypeVie
   const fields: WorkspaceFieldLayoutView[] = [];
 
   for (const field of type.fields) {
-    const info = estimateFieldTypeSize(types, field.type, visited);
+    const info: SizeInfo = field.bitField
+      ? { supported: false, reason: "位域布局依赖目标编译器 ABI，当前不做跨编译器估算。" }
+      : estimateFieldTypeSize(types, field.type, visited, field.canonicalType);
     if (!info.supported) {
       partial = true;
       fields.push({
@@ -1278,12 +1314,28 @@ function estimateStructLayout(types: WorkspaceTypeView[], type: WorkspaceTypeVie
   };
 }
 
-function estimateFieldTypeSize(types: WorkspaceTypeView[], rawType: string, visited: Set<string>): SizeInfo {
+function estimateFieldTypeSize(
+  types: WorkspaceTypeView[],
+  rawType: string,
+  visited: Set<string>,
+  canonicalType?: string
+): SizeInfo {
   const normalized = normalizeFieldTypeValue(rawType);
   if (!normalized) return { supported: false, reason: "字段类型格式暂不支持。" };
   const scalar = estimateScalarTypeSize(types, normalized.coreType, visited);
-  if (!scalar.supported) return scalar;
-  return { supported: true, size: scalar.size * normalized.arrayLength, alignment: scalar.alignment };
+  if (scalar.supported) {
+    return { supported: true, size: scalar.size * normalized.arrayLength, alignment: scalar.alignment };
+  }
+
+  const canonical = canonicalType ? normalizeFieldTypeValue(canonicalType) : null;
+  if (!canonical) return scalar;
+  const canonicalScalar = CANONICAL_CPP_TYPE_SIZE[canonical.coreType] ?? BASE_TYPE_SIZE[canonical.coreType];
+  if (!canonicalScalar) return scalar;
+  return {
+    supported: true,
+    size: canonicalScalar.size * canonical.arrayLength,
+    alignment: canonicalScalar.alignment
+  };
 }
 
 function estimateScalarTypeSize(types: WorkspaceTypeView[], typeName: string, visited: Set<string>): SizeInfo {
@@ -1315,12 +1367,17 @@ function resolveReferencedType(types: WorkspaceTypeView[], typeName: string): Wo
 }
 
 function normalizeFieldTypeValue(value: string): { coreType: string; arrayLength: number } | null {
-  const trimmed = value.trim();
-  const match = trimmed.match(/^(.*?)(?:\s*\[\s*([1-9][0-9]*)\s*\])?$/);
-  if (!match) return null;
-  const coreType = match[1].trim();
+  let coreType = value.trim();
+  let arrayLength = 1;
+  while (true) {
+    const array = coreType.match(/^(.*?)\s*\[\s*([1-9][0-9]*)\s*\]\s*$/);
+    if (!array) break;
+    coreType = array[1].trim();
+    arrayLength *= Number(array[2]);
+  }
   if (!coreType) return null;
-  return { coreType, arrayLength: match[2] ? Number(match[2]) : 1 };
+  if (/[[\]]/.test(coreType) || !Number.isSafeInteger(arrayLength)) return null;
+  return { coreType, arrayLength };
 }
 
 function applyPackAlignment(alignment: number, pack: number | undefined): number {
@@ -1339,26 +1396,46 @@ function enumValue(node: AstNode): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
+function collectEnumValues(node: AstNode, qualifiedName: string, sourceFile: string): WorkspaceEnumValueView[] {
+  let nextImplicitValue = 0;
+  return (node.inner ?? [])
+    .filter((child) => child.kind === "EnumConstantDecl" && child.name)
+    .map((child) => {
+      const explicitValue = enumValue(child);
+      const value = explicitValue ?? nextImplicitValue;
+      nextImplicitValue = value + 1;
+      return {
+        id: stableId("enum-value", `${qualifiedName}::${child.name}`),
+        name: child.name!,
+        value,
+        location: child.loc?.line ? { file: sourceFile, line: child.loc.line, column: child.loc.col ?? 1 } : undefined
+      };
+    });
+}
+
 function collectTypes(root: AstNode, workspaceRoot: string, defaultFile: string): WorkspaceTypeView[] {
   const types: WorkspaceTypeView[] = [];
   const seen = new Set<string>();
 
-  function visit(node: AstNode, namespaces: string[], inheritedFile?: string): void {
+  function visit(node: AstNode, scopes: string[], inheritedFile?: string): void {
     const ownLocatedFile = pathFromLocation(node.loc) ?? pathFromLocation(node.range?.begin);
     const isIncludedDeclaration = !ownLocatedFile && (hasIncludedFrom(node.loc) || hasIncludedFrom(node.range?.begin));
     const inferredFile = ownLocatedFile ?? (isIncludedDeclaration ? undefined : defaultFile);
     const traversalFile = inferredFile ?? inheritedFile;
     const nodeFile = traversalFile ? resolveSourcePath(traversalFile, workspaceRoot, defaultFile) : undefined;
-    const nextNamespaces = node.kind === "NamespaceDecl" && node.name ? [...namespaces, node.name] : namespaces;
+    const declarationScopes = node.kind === "NamespaceDecl" && node.name ? [...scopes, node.name] : scopes;
+    const childScopes = node.kind === "CXXRecordDecl" && node.completeDefinition && node.name
+      ? [...declarationScopes, node.name]
+      : declarationScopes;
     const isWorkspaceNode = nodeFile ? isInsideWorkspace(nodeFile, workspaceRoot) : false;
 
     if (isWorkspaceNode && node.name && ((node.kind === "CXXRecordDecl" && node.completeDefinition) || node.kind === "EnumDecl")) {
       if (!inferredFile) {
-        for (const child of node.inner ?? []) visit(child, nextNamespaces, traversalFile);
+        for (const child of node.inner ?? []) visit(child, childScopes, traversalFile);
         return;
       }
       const kind = node.kind === "EnumDecl" ? "enum" : "struct";
-      const qualifiedName = [...nextNamespaces, node.name].join("::");
+      const qualifiedName = [...declarationScopes, node.name].join("::");
       const sourceFile = resolveSourcePath(inferredFile, workspaceRoot, defaultFile);
       const id = stableId(kind, qualifiedName);
       if (!seen.has(id)) {
@@ -1374,18 +1451,17 @@ function collectTypes(root: AstNode, workspaceRoot: string, defaultFile: string)
             id: stableId("field", `${qualifiedName}::${child.name}`),
             name: child.name!,
             type: child.type?.qualType ?? "<unknown>",
+            canonicalType: child.type?.desugaredQualType && child.type.desugaredQualType !== child.type.qualType
+              ? child.type.desugaredQualType
+              : undefined,
+            bitField: child.isBitfield || undefined,
             location: child.loc?.line ? { file: sourceFile, line: child.loc.line, column: child.loc.col ?? 1 } : undefined
           })),
-          values: (node.inner ?? []).filter((child) => child.kind === "EnumConstantDecl" && child.name).map((child) => ({
-            id: stableId("enum-value", `${qualifiedName}::${child.name}`),
-            name: child.name!,
-            value: enumValue(child),
-            location: child.loc?.line ? { file: sourceFile, line: child.loc.line, column: child.loc.col ?? 1 } : undefined
-          }))
+          values: node.kind === "EnumDecl" ? collectEnumValues(node, qualifiedName, sourceFile) : []
         });
       }
     }
-    for (const child of node.inner ?? []) visit(child, nextNamespaces, traversalFile);
+    for (const child of node.inner ?? []) visit(child, childScopes, traversalFile);
   }
 
   visit(root, [], defaultFile);
@@ -1451,7 +1527,7 @@ function countOccurrences(value: string, char: string): number {
   return [...value].filter((item) => item === char).length;
 }
 
-function namespaceAtLine(content: string, targetLine: number): string[] {
+function sourceScopesAtLine(content: string, targetLine: number): string[] {
   const lines = stripCommentsPreserveLines(content).split(/\r?\n/);
   const stack: Array<{ name: string; depth: number }> = [];
   let braceDepth = 0;
@@ -1462,6 +1538,11 @@ function namespaceAtLine(content: string, targetLine: number): string[] {
     for (const match of line.matchAll(/\bnamespace\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\{/g)) {
       for (const part of match[1].split("::")) {
         stack.push({ name: part, depth: braceDepth + 1 });
+      }
+    }
+    if (index + 1 < targetLine) {
+      for (const match of line.matchAll(/\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:final\s*)?\{/g)) {
+        stack.push({ name: match[1], depth: braceDepth + 1 });
       }
     }
     if (index + 1 >= targetLine) break;
@@ -1479,7 +1560,83 @@ function extractAstDumpCandidateNames(content: string): string[] {
   for (const match of withoutLineComments.matchAll(/\benum\s+(?:class\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?=[:\{])/g)) {
     names.add(match[1]);
   }
+  for (const match of withoutLineComments.matchAll(/\btypedef\s+struct(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\{[\s\S]*?\}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;/g)) {
+    names.add(match[1]);
+  }
   return [...names];
+}
+
+function lineAtOffset(content: string, offset: number): number {
+  return content.slice(0, offset).split(/\r?\n/).length;
+}
+
+function unsupportedSourcePolicy(content: string, header: string): {
+  diagnostics: WorkspaceDiagnostic[];
+  excludedTypeNames: Set<string>;
+} {
+  const source = stripCommentsPreserveLines(content);
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const excludedTypeNames = new Set<string>();
+  const seen = new Set<string>();
+  const add = (offset: number, message: string, severity: WorkspaceDiagnostic["severity"] = "warning"): void => {
+    const line = lineAtOffset(source, offset);
+    const key = `${line}:${message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    diagnostics.push({ severity, file: header, line, column: 1, message });
+  };
+
+  for (const match of source.matchAll(/\btemplate\s*<[^;{}]*>\s*(?:struct|class)\s+([A-Za-z_][A-Za-z0-9_]*)/gs)) {
+    excludedTypeNames.add(match[1]);
+    add(match.index, `模板类型 ${match[1]} 超出 MVP 可编辑协议范围，已保留在源码视图但不会进入结构化 IR。`);
+  }
+  for (const match of source.matchAll(/\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\s*:[^{;]+\{/g)) {
+    excludedTypeNames.add(match[1]);
+    add(match.index, `继承结构 ${match[1]} 超出 MVP 可编辑协议范围，已保留在源码视图但不会进入结构化 IR。`);
+  }
+  for (const match of source.matchAll(/\bunion\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{/g)) {
+    add(match.index, `union ${match[1]} 暂不支持结构化编辑，已保留在源码视图。`);
+  }
+  const classMatches = [...source.matchAll(/(^|[;}\r\n])\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:final\s*)?(?:[:{])/g)];
+  if (classMatches.length > 0) {
+    const first = classMatches[0];
+    add(first.index, `class ${first[2]}${classMatches.length > 1 ? ` 等 ${classMatches.length} 个 class` : ""} 暂不支持结构化编辑；协议类型请使用 struct，源码仍可直接查看和修复。`);
+  }
+  for (const match of source.matchAll(/\bstruct\s*\{/g)) {
+    if (/\btypedef\s*$/.test(source.slice(Math.max(0, match.index - 40), match.index))) continue;
+    add(match.index, "匿名 struct 暂不支持稳定 ID 与结构化编辑，已保留在源码视图。");
+  }
+  for (const match of source.matchAll(/^\s*#\s*define\b[^\r\n]*(?:\bstruct\b|\benum\b|\bclass\b|\bunion\b)/gm)) {
+    add(match.index, "检测到宏生成的类型声明；宏定义不会进入结构化 IR，请在源码视图中维护。");
+  }
+  for (const match of source.matchAll(/^\s*#\s*if\s+.+$/gm)) {
+    add(match.index, "检测到条件编译表达式；当前仅解析本机 Clang 配置选中的分支，其他分支不会进入结构化 IR。");
+  }
+  return { diagnostics, excludedTypeNames };
+}
+
+function declarationEndLine(content: string, startLine: number): number {
+  const lines = stripCommentsPreserveLines(content).split(/\r?\n/);
+  let depth = 0;
+  let bodyStarted = false;
+  for (let index = Math.max(0, startLine - 1); index < lines.length; index += 1) {
+    for (const char of lines[index]) {
+      if (char === "{") {
+        depth += 1;
+        bodyStarted = true;
+      } else if (char === "}" && bodyStarted) {
+        depth -= 1;
+        if (depth === 0) return index + 1;
+      }
+    }
+  }
+  return startLine;
+}
+
+function diagnosticTouchesType(diagnostic: WorkspaceDiagnostic, type: WorkspaceTypeView, content: string): boolean {
+  if (!diagnostic.line || !type.location?.line) return false;
+  if (diagnostic.file && resolve(diagnostic.file).toLowerCase() !== resolve(type.file).toLowerCase()) return false;
+  return diagnostic.line >= type.location.line && diagnostic.line <= declarationEndLine(content, type.location.line);
 }
 
 function workspaceTypeDeclarationHeaders(files: WorkspaceFileView[]): Map<string, string> {
@@ -1547,12 +1704,68 @@ function parseAstDumpDocuments(stdout: string): AstNode[] {
   return documents;
 }
 
+function collectAstDocumentTypes(
+  documents: AstNode[],
+  workspaceRoot: string,
+  header: string,
+  candidateName: string
+): WorkspaceTypeView[] {
+  const collected = documents.flatMap((document) => collectTypes(document, workspaceRoot, header));
+  if (collected.some((type) => type.name === candidateName)) return collected;
+
+  const typedef = documents.find((document) => document.kind === "TypedefDecl" && document.name === candidateName);
+  const anonymousRecord = documents.find((document) => document.kind === "CXXRecordDecl" && document.completeDefinition && !document.name);
+  if (!typedef || !anonymousRecord) return collected;
+  return [
+    ...collected,
+    ...collectTypes({ ...anonymousRecord, name: candidateName }, workspaceRoot, header)
+  ];
+}
+
+function collectAstUnsupportedDiagnostics(
+  documents: AstNode[],
+  workspaceRoot: string,
+  header: string
+): WorkspaceDiagnostic[] {
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const methodKinds = new Set(["CXXMethodDecl", "CXXConstructorDecl", "CXXDestructorDecl", "CXXConversionDecl"]);
+  const seen = new Set<string>();
+
+  const add = (node: AstNode, message: string): void => {
+    const locatedFile = pathFromLocation(node.loc) ?? pathFromLocation(node.range?.begin) ?? header;
+    const sourceFile = resolveSourcePath(locatedFile, workspaceRoot, header);
+    if (!isInsideWorkspace(sourceFile, workspaceRoot)) return;
+    const diagnostic: WorkspaceDiagnostic = {
+      severity: "warning",
+      file: sourceFile,
+      line: node.loc?.line ?? node.range?.begin?.line,
+      column: node.loc?.col ?? node.range?.begin?.col,
+      message
+    };
+    const key = `${diagnostic.file}:${diagnostic.line ?? ""}:${diagnostic.column ?? ""}:${message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    diagnostics.push(diagnostic);
+  };
+
+  const visit = (node: AstNode): void => {
+    if (node.kind === "FieldDecl" && node.isBitfield && node.name) {
+      add(node, `位域字段 ${node.name} 已识别，但暂不参与可靠的跨编译器布局估算。`);
+    } else if (node.kind && methodKinds.has(node.kind) && node.name) {
+      add(node, `成员函数 ${node.name} 不属于数据协议字段，已从结构化 IR 中忽略。`);
+    }
+    for (const child of node.inner ?? []) visit(child);
+  };
+  documents.forEach(visit);
+  return diagnostics;
+}
+
 function applySourceNamespaceHints(types: WorkspaceTypeView[], content: string): WorkspaceTypeView[] {
   return types.map((type) => {
-    if (type.qualifiedName.includes("::") || !type.location?.line) return type;
-    const namespaces = namespaceAtLine(content, type.location.line);
-    if (namespaces.length === 0) return type;
-    const qualifiedName = [...namespaces, type.name].join("::");
+    if (!type.location?.line) return type;
+    const scopes = sourceScopesAtLine(content, type.location.line);
+    if (scopes.length === 0) return type;
+    const qualifiedName = [...scopes, type.name].join("::");
     return {
       ...type,
       id: stableId(type.kind, qualifiedName),
@@ -1577,14 +1790,26 @@ async function scanHeader(
   content: string,
   recoveryHeaders: Map<string, string>,
   onDependencyRecovery?: (missingType: string, dependencyHeader: string) => void,
+  onDiagnostic?: (diagnostic: WorkspaceDiagnostic) => void,
   signal?: AbortSignal
-): Promise<WorkspaceTypeView[]> {
+): Promise<HeaderScanResult> {
   const includeArgs = await clangCommonArgs(includeRoots);
   const candidateNames = extractAstDumpCandidateNames(content);
-  if (candidateNames.length === 0) return [];
+  const policy = unsupportedSourcePolicy(content, header);
+  const emittedDiagnostics = new Set<string>();
+  const emitDiagnostic = (diagnostic: WorkspaceDiagnostic): void => {
+    const key = `${diagnostic.severity}:${diagnostic.file ?? ""}:${diagnostic.line ?? ""}:${diagnostic.column ?? ""}:${diagnostic.message}`;
+    if (emittedDiagnostics.has(key)) return;
+    emittedDiagnostics.add(key);
+    onDiagnostic?.(diagnostic);
+  };
+  policy.diagnostics.forEach(emitDiagnostic);
+  if (candidateNames.length === 0) return { types: [], hadErrors: false };
 
   const types: WorkspaceTypeView[] = [];
   const forcedIncludes: string[] = [];
+  const astUnsupportedDiagnostics: WorkspaceDiagnostic[] = [];
+  let hadErrors = false;
   for (const candidateName of candidateNames) {
     throwIfScanAborted(signal);
     let stdout = "";
@@ -1603,18 +1828,51 @@ async function scanHeader(
         const dependencyHeader = missingType ? recoveryHeaders.get(missingType) : undefined;
         const alreadyIncluded = dependencyHeader && forcedIncludes.some((path) => resolve(path).toLowerCase() === resolve(dependencyHeader).toLowerCase());
         const sameHeader = dependencyHeader && resolve(dependencyHeader).toLowerCase() === resolve(header).toLowerCase();
-        if (!missingType || !dependencyHeader || alreadyIncluded || sameHeader || forcedIncludes.length >= 4) throw error;
-        forcedIncludes.push(dependencyHeader);
-        onDependencyRecovery?.(missingType, dependencyHeader);
+        if (missingType && dependencyHeader && !alreadyIncluded && !sameHeader && forcedIncludes.length < 4) {
+          forcedIncludes.push(dependencyHeader);
+          onDependencyRecovery?.(missingType, dependencyHeader);
+          continue;
+        }
+        if (!(error instanceof ClangAstDumpError) || !error.astOutput.trim()) throw error;
+
+        hadErrors = true;
+        const compilerDiagnostics = parseClangDiagnostics(error.message, header);
+        const effectiveDiagnostics = compilerDiagnostics.length > 0
+          ? compilerDiagnostics
+          : [diagnosticFromError(header, error)];
+        effectiveDiagnostics.forEach(emitDiagnostic);
+        const documents = parseAstDumpDocuments(error.astOutput);
+        astUnsupportedDiagnostics.push(...collectAstUnsupportedDiagnostics(documents, root, header));
+        const recovered = collectAstDocumentTypes(documents, root, header, candidateName)
+          .filter((type) => !policy.excludedTypeNames.has(type.name))
+          .filter((type) => !effectiveDiagnostics.some((diagnostic) => diagnosticTouchesType(diagnostic, type, content)));
+        types.push(...recovered);
+        stdout = "";
+        break;
       }
     }
-    for (const document of parseAstDumpDocuments(stdout)) {
-      types.push(...collectTypes(document, root, header));
-    }
+    const documents = parseAstDumpDocuments(stdout);
+    astUnsupportedDiagnostics.push(...collectAstUnsupportedDiagnostics(documents, root, header));
+    types.push(...collectAstDocumentTypes(documents, root, header, candidateName)
+      .filter((type) => !policy.excludedTypeNames.has(type.name)));
   }
+  const methodDiagnostics = [...new Map(astUnsupportedDiagnostics
+    .filter((diagnostic) => diagnostic.message.startsWith("成员函数 "))
+    .map((diagnostic) => [`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}:${diagnostic.message}`, diagnostic])).values()];
+  if (methodDiagnostics.length > 0) {
+    const first = methodDiagnostics[0];
+    const firstName = first.message.match(/^成员函数\s+(\S+)/)?.[1] ?? "<unknown>";
+    emitDiagnostic({
+      ...first,
+      message: `成员函数 ${firstName}${methodDiagnostics.length > 1 ? ` 等 ${methodDiagnostics.length} 项` : ""}不属于数据协议字段，已从结构化 IR 中忽略。`
+    });
+  }
+  astUnsupportedDiagnostics
+    .filter((diagnostic) => !diagnostic.message.startsWith("成员函数 "))
+    .forEach(emitDiagnostic);
   const namespacedTypes = applySourceNamespaceHints(types, content);
   const deduplicated = new Map(namespacedTypes.map((type) => [type.id, type]));
-  return applyHeaderLayoutHints([...deduplicated.values()], content);
+  return { types: applyHeaderLayoutHints([...deduplicated.values()], content), hadErrors };
 }
 
 async function validateHeaderContent(root: string, header: string, content: string): Promise<void> {
@@ -1638,7 +1896,7 @@ async function validateHeaderContent(root: string, header: string, content: stri
 
 function diagnosticFromError(file: string | undefined, error: unknown): WorkspaceDiagnostic {
   const message = error instanceof Error ? error.message : String(error);
-  const parsed = parseClangDiagnostic(message, file);
+  const parsed = parseClangDiagnostics(message, file)[0];
   return {
     severity: parsed?.severity ?? "error",
     file: parsed?.file ?? file,
@@ -1648,22 +1906,28 @@ function diagnosticFromError(file: string | undefined, error: unknown): Workspac
   };
 }
 
-function parseClangDiagnostic(message: string, fallbackFile?: string): WorkspaceDiagnostic | null {
+function parseClangDiagnostics(message: string, fallbackFile?: string): WorkspaceDiagnostic[] {
   const normalizedFallback = fallbackFile?.replaceAll("\\", "/");
   const lines = message.split(/\r?\n/);
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const seen = new Set<string>();
   for (const line of lines) {
-    const match = line.match(/^(.+?):(\d+):(\d+):\s*(error|warning):\s*(.+)$/);
+    const match = line.match(/^(.+?):(\d+):(\d+):\s*(fatal error|error|warning):\s*(.+)$/);
     if (!match) continue;
     const file = match[1].replaceAll("\\", "/");
-    return {
+    const diagnostic: WorkspaceDiagnostic = {
       severity: match[4] === "warning" ? "warning" : "error",
       file: normalizedFallback && file.endsWith(basename(normalizedFallback)) ? fallbackFile : match[1],
       line: Number(match[2]),
       column: Number(match[3]),
       message: match[5]
     };
+    const key = `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}:${diagnostic.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    diagnostics.push(diagnostic);
   }
-  return null;
+  return diagnostics;
 }
 
 async function readFileView(path: string, root: string): Promise<WorkspaceFileView> {
@@ -1884,7 +2148,7 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
             cacheHeaderTypes(header, fingerprint, cached.types, cached.diagnostics);
             return cached.types;
           }
-          const parsed = await scanHeader(
+          const scanResult = await scanHeader(
             clang,
             header,
             root,
@@ -1896,13 +2160,28 @@ export async function scanWorkspace(rootPath: string, options?: ScanWorkspaceOpt
               file: header,
               message: `Header 依赖恢复：当前文件未直接提供 ${missingType}，已临时包含 ${normalizeRelativePath(relative(root, dependencyHeader))} 完成只读解析；建议在源文件中补充明确的 #include。`
             }),
+            (diagnostic) => headerDiagnostics[headerIndex].push(diagnostic),
             options?.signal
           );
           parsedHeaderCount += 1;
+          if (scanResult.hadErrors) {
+            const fallback = lastValidHeaderTypes(header) ?? workspaceIndex?.getLastValidHeaderTypes(relativeHeader) ?? [];
+            const merged = new Map(fallback.map((type) => [type.id, type]));
+            for (const type of scanResult.types) merged.set(type.id, type);
+            if (fallback.length > 0) {
+              headerDiagnostics[headerIndex].push({
+                severity: "warning",
+                file: header,
+                message: `当前 Header 存在编译错误：已更新 ${scanResult.types.length} 个健康声明，并为错误声明保留上次有效 IR；修复源码后重新扫描即可完全恢复。`
+              });
+            }
+            diagnostics.push(...headerDiagnostics[headerIndex]);
+            return [...merged.values()];
+          }
           validResults[headerIndex] = true;
           diagnostics.push(...headerDiagnostics[headerIndex]);
-          cacheHeaderTypes(header, fingerprint, parsed, headerDiagnostics[headerIndex]);
-          return parsed;
+          cacheHeaderTypes(header, fingerprint, scanResult.types, headerDiagnostics[headerIndex]);
+          return scanResult.types;
         }
         catch (error) {
           if (error instanceof Error && error.name === "AbortError") throw error;
